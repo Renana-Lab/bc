@@ -1,0 +1,60 @@
+.container {
+    height: 85vh;
+    display: flex;
+    flex-direction: column;
+  }
+  .imageHome {
+    position: relative;
+    width: 100%;
+    height: 55%;
+    background-image: url('https://visualbrands.s3.amazonaws.com/welcome-background.png');
+    background-repeat: no-repeat;
+    background-size: cover;
+    -webkit-box-shadow: 0 0 2vw #888888;
+    box-shadow: 0 0 2vw #888888;
+  }
+  .welcomeText {
+    padding-top: 40vh;
+    text-align: center;
+    font-size: 12vw;
+    color: White;
+    text-shadow: 0.1vw 0.1vw black;
+  }
+  .contentContainer {
+    height: 45%;
+    display: flex;
+    flex-direction: column;
+    background-color: #D8DCF0;
+    padding-top:3rem;
+  }
+  .blueText {
+    height: 30%;
+    font-size: 3.4vw;
+    font-weight: normal;
+    color: #002884;
+    text-align: center;
+    padding-top: 0.5rem;
+  } 
+  .introText {
+    height: 50%;
+    padding-top:2rem;
+    color: #3f50b5;
+    font-size: 1.7vw;
+    text-align: center;
+    line-height: 1.2;
+    font-weight: 500;
+    width: 100%;
+  }
+  .buttonsContainer {
+    display: flex;
+    flex-direction: row;
+    justify-content: space-around;
+    padding-top: 2.5rem;
+    padding-left:30rem;
+    padding-right:30rem;
+    height: 100vh;
+    width: 100%;
+    text-align: center;
+    flex-direction: row;
+    font-weight: normal;
+  }

@@ -1,0 +1,75 @@
+.page {
+    height: 100%;
+    display: flex;
+    flex-direction: row;
+    justify-content: space-between;
+}
+.campaignInfo{
+    margin-top:2rem;
+    border-radius: 2rem;
+    border:2px solid #002884;
+    width:65%;
+    height: 100%;
+    padding:3rem;
+}
+.introductionTitle{
+    color: #002884;
+    font-size: 2.2rem;
+    font-weight: 600;
+    margin-bottom: 3rem;
+}
+.winnerTitle{
+    color: #002884;
+    font-size: 2.2rem;
+    font-weight: 600;
+    margin-bottom: 1rem; 
+    text-align: center;
+}
+.winnerLabel{
+    color: #002884;
+    font-size: 1.4rem;
+    font-weight: 600;  
+}
+.introductionDetail{
+    margin-bottom: 2rem;
+}
+.introductionLabel{
+    color: #002884;
+    font-size: 1.4rem;
+    font-weight: 600;
+}
+.introductionText{
+    color: #3f50b5;
+    font-size: 1.2rem;
+    font-weight: 500;
+}
+.contributeForm{
+    margin-top:2rem;
+    border-radius: 2rem;
+    border:2px solid #002884;
+    width:32%;
+    height: 100%;
+    padding:3rem;
+}
+.centered{
+    text-align: center;
+}
+.revealedData{
+margin-top:1rem;
+}
+.headerCell{
+    color: #3f50b5;
+    font-size: 1rem;
+    font-weight: 600;
+}
+.flex{
+    display: flex;
+    flex-direction: column;
+}
+.title{
+    text-align: center;
+    color: #3f50b5;
+    font-weight: 600;
+
+
+}

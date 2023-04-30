@@ -1,0 +1,42 @@
+.description {
+    display: flex;
+    justify-content: space-between;
+}
+.page {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+.createAuction {
+    display: flex;
+    flex-direction: row;
+    height: 22rem;
+    margin-bottom: 2rem;
+    margin-top: 2rem;
+}
+.image {
+    background: url(cryptoWallet.jpg);
+    border-radius: 4rem;
+}
+.introduction {
+    width: 50%;
+    margin: 0 auto;
+    text-align: center;
+    float: none;
+}
+.introductionText {
+    padding: 2rem;
+    text-align: left;
+    color: #3f50b5;
+    font-size: 1.2rem;
+}
+.introductionTitle {
+    color: #002884;
+    font-size: 2.5rem;
+    font-weight: 600;
+}
+.headerCell {
+    color: #3f50b5;
+    font-size: 1rem;
+    font-weight: 600;
+}
