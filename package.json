@@ -19,7 +19,7 @@
     "react-countdown": "^2.3.5",
     "react-dom": "^18.2.0",
     "react-router-dom": "^6.11.0",
-    "react-scripts": "5.0.1",
+    "react-scripts": "^5.0.1",
     "sass": "^1.62.0",
     "semantic-ui-react": "^2.1.4",
     "web-vitals": "^2.1.4",
