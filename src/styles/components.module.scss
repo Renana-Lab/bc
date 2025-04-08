@@ -1,157 +1,138 @@
+// Variables
+$main-blue: #002884;
+$light-blue: #d8dcf0;
+$white: #ffffff;
+$f0d070: #F0D070;
+$navbar-bg: #2185d0;
+$tooltip-bg: #ffffff;
+$tooltip-color: #3f50b5;
+
+// Mixin for icon styles
+// Default opacity is 0.5; override when needed.
+@mixin icon($path, $opacity: 0.5) {
+  background: url(#{$path}) no-repeat;
+  height: 3rem;
+  width: 3rem;
+  margin-right: 1rem;
+  filter: opacity($opacity) drop-shadow(0 0 0 blue);
+}
+
+// -------------------------
+// Icons
+// -------------------------
 .metamaskIcon {
-    background: url(../images/icons/meta1.png);
-    height: 3rem;
-    width: 3rem;
-    background-repeat: no-repeat;
-    // -webkit-filter: grayscale(100%); /* Safari 6.0 - 9.0 */
-    // filter: grayscale(100%);
-    margin-right: 1rem;
-    filter: opacity(0.4) drop-shadow(0 0 0 blue);
-  
-  }
-  .introductionTitle {
-    color: #002884;
-    font-size: 2.5rem;
-    font-weight: 600;
-  }
-  .tooltip .tooltiptext {
-    visibility: hidden;
-    width: 300px;
-    background-color: white;
-    color: #3f50b5;
-    text-align: center;
-    border-radius: 6px;
-    padding: 5px 0;
-  
-    /* Position the tooltip */
-    position: absolute;
-    z-index: 1;
-  }
-  .tooltip:hover .tooltiptext {
-    visibility: visible;
-  }
-  .tooltiplabe {
-    display: block;
-    // margin: 0 0 0.28571429rem 0;
-    color: #002884;
-    font-size:1.1rem;
-    font-weight: 700;
-    text-transform: none;
-    margin-top: 1rem;
-  }
-  .circleIcon{
-    color: #002884;
-    border:#d8dcf0;
-    background-color: #d8dcf0;
-    cursor:pointer;
-  }
-  .description{
-    font-style: oblique;
-    font-size: 0.9rem;
-  }
-  .progress{
-    color:#d8dcf0!important;
-  
-  }
-  .link{
+  @include icon("../images/icons/meta1.png", 0.4);
+}
+
+.createAuction {
+  @include icon("../images/icons/campaign1.png");
+}
+
+.homePage {
+  @include icon("../images/icons/homepage.png");
+}
+
+.ViewAuctions {
+  @include icon("../images/icons/bid.png");
+}
+
+// -------------------------
+// Typography & Helpers
+// -------------------------
+.introductionTitle {
+  color: $main-blue;
+  font-size: 2.5rem;
+  font-weight: 600;
+}
+
+.tooltiplabe {
+  display: block;
+  color: $main-blue;
+  font-size: 1.1rem;
+  font-weight: 700;
+  margin-top: 1rem;
+}
+
+.description {
+  font-style: oblique;
+  font-size: 0.9rem;
+}
+
+.progress {
+  color: $light-blue !important;
+}
+
+.link {
+  text-decoration: none;
+  color: black !important;
+  &:hover {
     text-decoration: none;
-    color:black!important;
-    :hover{
-      text-decoration: none;
-      color:black!important;
-    }
+    color: black !important;
   }
-  .text{
-    color: White;
-    background-color: #002884;
-  
-  }
-  .container {
-    width: 100% !important;
-    background-color: #d8dcf0;
-    min-height: 100vh;
-    height: auto;
-  }
-  .navbar {
-    background-color: #2185d0 !important;
-  }
-  .createAuction {
-    background: url(../images/icons/campaign1.png);
-    height: 3rem;
-    width: 3rem;
-    background-repeat: no-repeat;
-    margin-right: 1rem;
-    filter: opacity(0.5) drop-shadow(0 0 0 blue);
-  }
-  .homePage {
-    background: url(../images/icons/homepage.png);
-    height: 3rem;
-    width: 3rem;
-    background-repeat: no-repeat;
-    margin-right: 1rem;
-    // filter: drop-shadow(0 0 5px black);
-    filter: opacity(0.5) drop-shadow(0 0 0 blue);
-  
-  
-  }
-  
-  
-  
-  .ViewAuctions {
-    background: url(../images/icons/bid.png);
-    height: 3rem;
-    width: 3rem;
-    background-repeat: no-repeat;
-    margin-right: 1rem;
-    filter: opacity(0.5) drop-shadow(0 0 0 blue);
-  
-  }
-  #navbar {
-    --navbar-height: 64px;
-    position: fixed;
-    height: var(--navbar-height);
-    background-color: var(--navbar-bs-color);
-    left: 0;
-    right: 0;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
-  }
-  
+}
+
+.text {
+  color: $white;
+  background-color: $main-blue;
+}
+
+// -------------------------
+// Containers
+// -------------------------
+.container {
+  width: 100% !important;
+  background-color: $f0d070;
+  min-height: 100vh;
+}
+
+// -------------------------
+// Navbar & Navigation
+// -------------------------
+.navbar {
+  background-color: $navbar-bg !important;
+}
+
+#navbar {
+  --navbar-height: 64px;
+  position: fixed;
+  height: var(--navbar-height);
+  background-color: var(--navbar-bs-color);
+  left: 0;
+  right: 0;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
+
   .navbar-container {
     display: flex;
     justify-content: space-between;
     height: 100%;
     align-items: center;
   }
-  
+
   .homeLink,
   .navbarLink {
     color: var(--navbar-text-color);
-    transition: color 0.2s ease-in-out;
     text-decoration: none;
     display: flex;
     font-weight: 400;
     align-items: center;
     transition: background-color 0.2s ease-in-out, color 0.2s ease-in-out;
+    &:focus,
+    &:hover {
+      color: var(--navbar-text-color-focus);
+    }
   }
-  
-  .homeLink:focus,
-  .homeLink:hover {
-    color: var(--navbar-text-color-focus);
-  }
-  
+
   .navbarLink {
     justify-content: center;
     width: 100%;
     padding: 0.4em 0.8em;
     border-radius: 5px;
+    &:focus,
+    &:hover {
+      background-color: var(--navbar-bg-contrast);
+    }
   }
-  
-  .navbarLink:focus,
-  .navbarLink:hover {
-    color: var(--navbar-text-color-focus);
-    background-color: var(--navbar-bg-contrast);
-  }
-  
+
   .navbarLogo {
     background-color: var(--navbar-text-color-focus);
     border-radius: 50%;
@@ -159,7 +140,7 @@
     height: 30px;
     margin-right: 0.5em;
   }
-  
+
   .navbarToggle {
     cursor: pointer;
     border: none;
@@ -170,205 +151,182 @@
     align-items: center;
     justify-content: center;
     flex-direction: column;
+
+    .iconBar {
+      display: block;
+      width: 25px;
+      height: 4px;
+      margin: 2px;
+      background-color: var(--navbar-text-color);
+      transition: background-color 0.2s ease-in-out, transform 0.2s ease-in-out,
+        opacity 0.2s ease-in-out;
+    }
+
+    &:focus .iconBar,
+    &:hover .iconBar {
+      background-color: var(--navbar-text-color-focus);
+    }
   }
-  
-  .iconBar {
-    display: block;
-    width: 25px;
-    height: 4px;
-    margin: 2px;
-    transition: background-color 0.2s ease-in-out, transform 0.2s ease-in-out,
-      opacity 0.2s ease-in-out;
-    background-color: var(--navbar-text-color);
+
+  &.opened {
+    .navbarToggle {
+      .iconBar {
+        &:first-child,
+        &:last-child {
+          position: absolute;
+          margin: 0;
+          width: 30px;
+        }
+        &:first-child {
+          transform: rotate(45deg);
+        }
+        &:nth-child(2) {
+          opacity: 0;
+        }
+        &:last-child {
+          transform: rotate(-45deg);
+        }
+      }
+    }
+
+    #navbarMenu {
+      background-color: rgba(0, 0, 0, 0.4);
+      opacity: 1;
+      visibility: visible;
+    }
+
+    .navbarLinks {
+      padding: 1em;
+      max-height: none;
+    }
   }
-  
-  .navbarToggle:focus .iconBar,
-  .navbarToggle:hover .iconBar {
-    background-color: var(--navbar-text-color-focus);
-  }
-  
-  #navbar.opened .navbarToggle .iconBar:first-child,
-  #navbar.opened .navbarToggle .iconBar:last-child {
-    position: absolute;
-    margin: 0;
-    width: 30px;
-  }
-  
-  #navbar.opened .navbarToggle .iconBar:first-child {
-    transform: rotate(45deg);
-  }
-  
-  #navbar.opened .navbarToggle .iconBar:nth-child(2) {
-    opacity: 0;
-  }
-  
-  #navbar.opened .navbarToggle .iconBar:last-child {
-    transform: rotate(-45deg);
-  }
-  
-  #navbarMenu {
-    position: fixed;
-    top: var(--navbar-height);
-    bottom: 0;
-    transition: opacity 0.2s ease-in-out, visibility 0.2s ease-in-out,
-      left 0.2s ease-in-out, right 0.2s ease-in-out;
-    opacity: 0;
-    visibility: hidden;
-  }
-  
-  #navbarMenu.sidebar,
-  #navbarMenu.sidebar.left {
+}
+
+#navbarMenu {
+  position: fixed;
+  top: var(--navbar-height);
+  bottom: 0;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.2s ease-in-out, visibility 0.2s ease-in-out,
+    left 0.2s ease-in-out, right 0.2s ease-in-out;
+
+  &.sidebar,
+  &.sidebar.left {
     left: -1000px;
     right: 0;
   }
-  
-  #navbarMenu.sidebar.right {
+  &.sidebar.right {
     right: -1000px;
     left: 0;
   }
-  
-  #navbarMenu.detached,
-  #navbarMenu.attached {
+  &.detached,
+  &.attached {
     left: 0;
     right: 0;
   }
-  
-  #navbar.opened #navbarMenu {
-    background-color: rgba(0, 0, 0, 0.4);
-    opacity: 1;
-    visibility: visible;
+}
+
+.navbarLinks {
+  list-style-type: none;
+  max-height: 0;
+  overflow: hidden;
+  position: absolute;
+  background-color: var(--navbar-bs-color);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+
+  .navbar-item {
+    margin: 0.4em;
+    width: 100%;
   }
-  
-  #navbar.opened #navbarMenu.sidebar.left {
-    left: 0;
-  }
-  
-  #navbar.opened #navbarMenu.sidebar.right {
-    right: 0;
-  }
-  
+}
+
+// Sidebar modifications
+.sidebar {
   .navbarLinks {
-    list-style-type: none;
-    max-height: 0;
-    overflow: hidden;
-    position: absolute;
-    background-color: var(--navbar-bs-color);
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-  }
-  .pageData {
-    width: 80%;
-    margin: 0 auto;
-    height: auto;
-  }
-  
-  #navbar.opened .navbarLinks {
-    padding: 1em;
-    max-height: none;
-  }
-  
-  .sidebar .navbarLinks {
     top: 0;
     bottom: 0;
   }
-  
-  .left.sidebar .navbarLinks {
-    left: 0;
-    right: unset;
-    box-shadow: 5px 20px 20px rgba(0, 0, 0, 0.3);
+  &.left {
+    .navbarLinks {
+      left: 0;
+      right: unset;
+      box-shadow: 5px 20px 20px rgba(0, 0, 0, 0.3);
+    }
   }
-  
-  .right.sidebar .navbarLinks {
-    right: 0;
-    left: unset;
-    box-shadow: -5px 20px 20px rgba(0, 0, 0, 0.3);
+  &.right {
+    .navbarLinks {
+      right: 0;
+      left: unset;
+      box-shadow: -5px 20px 20px rgba(0, 0, 0, 0.3);
+    }
   }
-  
-  .detached .navbarLinks {
+}
+
+.detached {
+  .navbarLinks {
     left: 0;
     right: 0;
     margin: 1.4rem;
     border-radius: 5px;
     box-shadow: 0 0 20px rgba(0, 0, 0, 0.3);
   }
-  
-  .attached .navbarLinks {
+}
+
+.attached {
+  .navbarLinks {
     left: 0;
     right: 0;
     box-shadow: 0 20px 20px rgba(0, 0, 0, 0.3);
   }
-  
-  .navbar-item {
-    margin: 0.4em;
-    width: 100%;
-  }
-  
-  @media screen and (min-width: 700px) {
-    .navbarToggle {
-      display: none;
-    }
-  
-    #navbar #navbarMenu,
-    #navbar.opened #navbarMenu {
-      visibility: visible;
-      opacity: 1;
-      position: static;
-      display: block;
-      height: 100%;
-    }
-  
-    #navbar .navbarLinks,
-    #navbar.opened .navbarLinks {
-      margin: 0;
-      padding: 0;
-      box-shadow: none;
-      position: static;
-      flex-direction: row;
-      list-style-type: none;
-      max-height: max-content;
-      width: 100%;
-      height: 100%;
-    }
-  
-    #navbar .navbarLink:last-child {
-      margin-right: 0;
-    }
-  }
-  
-  #options {
-    display: flex;
-    flex-direction: column;
-  }
-  .tooltip .tooltiptext {
+}
+
+// Page Data container
+.pageData {
+  width: 80%;
+  margin: 0 auto;
+  height: auto;
+}
+
+// -------------------------
+// Options & Misc
+// -------------------------
+#options {
+  display: flex;
+  flex-direction: column;
+}
+
+.pointer {
+  cursor: pointer;
+}
+
+.bigTitle {
+  font-size: 2.2rem;
+}
+
+// -------------------------
+// Tooltip
+// -------------------------
+.tooltip {
+  position: relative;
+
+  .tooltiptext {
     visibility: hidden;
     width: 300px;
-    background-color: white;
-    color: #3f50b5;
+    background-color: $tooltip-bg;
+    color: $tooltip-color;
     text-align: center;
     border-radius: 6px;
     padding: 5px 0;
-  
-    /* Position the tooltip */
     position: absolute;
     z-index: 1;
   }
-  .tooltip:hover .tooltiptext {
-    visibility: visible;
+
+  &:hover {
+    .tooltiptext {
+      visibility: visible;
+    }
   }
-  .tooltiplabe {
-    display: block;
-    // margin: 0 0 0.28571429rem 0;
-    color: #002884;
-    font-size: 0.92857143em;
-    font-weight: 700;
-    text-transform: none;
-    margin-top: 1rem;
-  }
-  .pointer {
-    cursor: pointer;
-  }
-  .bigTitle{
-    font-size: 2.2rem;
-  
-  }
+}

@@ -1,31 +1,43 @@
-import React, { useState } from "react";
-import withStyles from "@material-ui/core/styles/withStyles";
+import React from "react";
+import { ListItem, ListItemText, Drawer } from "@mui/material";
+import { makeStyles } from "@mui/styles";
 import styles1 from "./../styles/components.module.scss";
-// import { Router } from "./../routes";
-// import { Link } from "./../routes";
+import { useNavigate } from "react-router-dom";
 
-import {
-  ListItem,
-  ListItemText,
-  Drawer,
-  Button
-} from "@material-ui/core";
-import InboxIcon from "@material-ui/icons/MoveToInbox";
-import MailIcon from "@material-ui/icons/Mail";
-// import Link from "../routes";
-
-
-const styles = (theme) => ({
+const useStyles = makeStyles({
   list: {
-    width: 250
+    width: 250,
+    marginTop: "40px",
+    display: "flex",
+    flexDirection: "column",
+    gap: "10px",
+    padding: "10px",
   },
-  fullList: {
-    width: "auto"
-  }
+  item: {
+    color: "#101070",
+    display: "flex",
+    alignItems: "center",
+    borderRadius: "12px",
+    transition: "background-color 0.3s ease",
+    cursor: "pointer",
+    "&:hover": {
+      backgroundColor: "#e0e0ff",
+      borderRadius: "20px",
+    },
+
+  },
+  link: {
+    textDecoration: "none",
+    color: "#101070",
+    "&:hover": {
+      textDecoration: "underline",
+    },
+  },
 });
 
 const DrawerComponent = (props) => {
-  const { classes } = props;
+  const nav = useNavigate();
+  const classes = useStyles();
 
   const sideList = () => (
     <div
@@ -34,36 +46,38 @@ const DrawerComponent = (props) => {
       onClick={props.toggleDrawerHandler}
       onKeyDown={props.toggleDrawerHandler}
     >
-           <ListItem button key="Home Page" >
-            <span className={styles1.homePage}></span>
-            {/* <Link route={`/`}> */}
-              <ListItemText>
-              Home
-              </ListItemText>
-            {/* </Link> */}
-          </ListItem>
-     <ListItem button key="Metamask Tutorial">
-            <span className={styles1.metamaskIcon}></span>
-            <ListItemText >
-            <a className={styles1.link} href="https://support.metamask.io/hc/en-us/articles/360015489531-Getting-started-with-MetaMask">Metamask Tutorial</a>    
-              </ListItemText>
-          </ListItem>
-        <ListItem button key="Create an Auction">
-         <span className={styles1.createAuction}></span>
-            {/* <Link route={`/open-auction`}> */}
-              <ListItemText>
-              Start An Auction
-              </ListItemText>
-            {/* </Link> */}
-          </ListItem>
-          <ListItem button key="View Auctions">
-          <span className={styles1.ViewAuctions}></span>
-          {/* <Link route={`/auctions-list`}> */}
-              <ListItemText>
-              View Auctions
-              </ListItemText>
-            {/* </Link> */}
-          </ListItem>
+      <ListItem className={classes.item} button onClick={() => nav("/")}>
+        <span className={styles1.homePage}></span>
+        <ListItemText >Home</ListItemText>
+      </ListItem>
+
+      <ListItem className={classes.item} button onClick={() => nav("/auctions-list")}>
+        <span className={styles1.ViewAuctions}></span>
+        <ListItemText >
+          View Auctions
+        </ListItemText>
+      </ListItem>
+
+      <ListItem className={classes.item} button  onClick={() => nav("/open-auction")}>
+        <span className={styles1.createAuction}></span>
+        <ListItemText>
+          Start An Auction
+        </ListItemText>
+      </ListItem>
+
+      <ListItem className={classes.item} button>
+        <span className={styles1.metamaskIcon}></span>
+        <ListItemText>
+          <a
+            href="https://support.metamask.io/start/getting-started-with-metamask/"
+            className={classes.link}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Metamask Tutorial
+          </a>
+        </ListItemText>
+      </ListItem>
     </div>
   );
 
@@ -74,4 +88,4 @@ const DrawerComponent = (props) => {
   );
 };
 
-export default withStyles(styles)(DrawerComponent);
+export default DrawerComponent;

@@ -1,161 +1,135 @@
-import React, { Component,useState, useCallback } from "react";
-import styles from "./metamask.module.scss";
+import React, { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import Button from "@mui/material/Button";
+import { useMetaMask } from "../../Context/Context.js"; // Import useMetaMask hook
 import Layout from "../../components/Layout";
 import metamaskImg from "./metamask.jpg";
-// import Image from "next/image"; //todo change this to regular image
-import Button from "@mui/material/Button";
-import { useNavigate } from "react-router-dom";
+import styles from "./metamask.module.scss";
+import { toast } from "react-hot-toast"; // Import hot-toast
 
-function MetamaskTutorialPage(){
+function MetamaskTutorialPage() {
   const navigate = useNavigate();
+  const { isMetaMaskInstalled, checkIfConnected } = useMetaMask(); // Access context values
+  const [notConnected, setNotConnected] = useState(true); // Default to true (assumes not connected)
+  const [loading, setLoading] = useState(true);
 
-  const [notConnected, setNotConnected] = useState(false);
-const checkIfConnected = useCallback(
-  async ()=>{
-        let a = await window.ethereum._state.accounts;
-    if (a.length == 0) {
-      setNotConnected(true);
+  useEffect(() => {
+ 
+    const storedNotConnected = localStorage.getItem("notConnected");
+    if (storedNotConnected !== null) {
+      setNotConnected(storedNotConnected === "true");
+      setLoading(false);
     } else {
-      navigate("/auctions-list")
-      // Router.pushRoute("/auctions-list");
+      checkIfConnected().then(() => {
+        const updatedNotConnected = localStorage.getItem("notConnected");
+        setNotConnected(updatedNotConnected === "true");
+        setLoading(false);
+      });
     }
-  }
-  
-) 
-return (
-        <Layout>
-        <div className={styles.metamaskContainer}>
-          <div className={styles.checkMetamask}>
-            <div className={styles.metamaskImage}>
-              {/* <Image
-                className={styles.metamaskimg}
-                src={metamaskImg}
-                height="230"
-                width="345"
-              /> */}
-            </div>
+  }, [isMetaMaskInstalled, checkIfConnected]);
 
-            <div className={styles.metamaskQuestion}>
-              <div className={styles.metamaskTitle}>
-                Are you logged in to Metamask ?
-              </div>
-              <div className={styles.metamaskText}>
-                Before starting buying/selling data, please make sure you are
-                logged in to a metamask account
-              </div>
-              <div className={styles.metamaskText}>
-                If you don't have a metamask account , please follow the
-                metamask tutorial to create one and come back to start using our
-                blockchain data market
-              </div>
-              <div className={styles.metamaskButtons}>
-                <Button
-                  style={{
-                    height: "2.5rem",
-                    padding: "0.8rem",
-                    borderRadius: "1rem",
-                    backgroundColor: "#D8DCF0",
-                    color: "#002884",
-                    fontWeight: "600",
-                    border: "1px solid #002884",
-                  }}
-                  variant="outlined"
-                  onClick={(e) => {
-                    this.checkIfConnected();
-                  }}
+  const handleContinue = () => {
+    if (!loading && !notConnected && isMetaMaskInstalled) {
+      navigate("/auctions-list");
+    } else {
+      toast.error("Hi! There might be a problem connecting your MetaMask account.");
+    }
+  };
+
+  // useEffect(() => {
+
+  //   navigate("/auctions-list");
+
+
+  // }, [!isMetaMaskInstalled,!notConnected]);
+
+
+  return (
+    <Layout>
+      <div className={styles.metamaskContainer}>
+        
+        <span style={{ display: "flex", flexDirection: "row", alignItems: "center", justifyContent:"space-evenly", gap: "2.5rem"}}>
+
+
+          <div className={styles.metamaskImage}>
+            <img
+              className={styles.metamaskimg}
+              src={metamaskImg}
+              height="230"
+              width="345"
+              alt="metamask"
+            />
+          </div>
+
+          <div className={styles.metamaskQuestion}>
+            <div className={styles.metamaskTitle}>Are you logged in to MetaMask?</div>
+            <div className={styles.metamaskText}>
+              Before buying/selling data, please make sure you are logged into a MetaMask account.
+              <br />  
+              If you don’t have a MetaMask account, please follow the tutorial to create one and come back.
+            </div>
+            <div className={styles.metamaskButtons}>
+              <Button
+                style={{
+                  height: "2.5rem",
+                  padding: "0.8rem",
+                  borderRadius: "1rem",
+                  backgroundColor: "#9090D0",
+                  color: "white",
+                  fontWeight: "600",
+                  
+                }}
+                variant="outlined"
+                onClick={async () => {
+                  await checkIfConnected();
+                  const updatedNotConnected = localStorage.getItem("notConnected");
+                  setNotConnected(updatedNotConnected === "true");
+                  handleContinue();
+                }}
+              >
+                Yes, I am connected
+              </Button>
+              <Button
+                style={{
+                  height: "2.5rem",
+                  padding: "0.8rem",
+                  borderRadius: "1rem",
+                  backgroundColor: "#9090D0",
+                  color: "white",
+                  fontWeight: "600",
+                  
+                }}
+                variant="outlined"
+              >
+                <a
+                  style={{ color: "white" }}
+                  href="https://support.metamask.io/start/getting-started-with-metamask/"
+                  target="_blank"
+                  rel="noopener noreferrer"
                 >
-                  Yes, I am connected
-                </Button>
-                <Button
-                  style={{
-                    height: "2.5rem",
-                    padding: "0.8rem",
-                    borderRadius: "1rem",
-                    backgroundColor: "#D8DCF0",
-                    color: "#002884",
-                    fontWeight: "600",
-                    border: "1px solid #002884",
-                  }}
-                  variant="outlined"
-                >
-                  <a
-                    style={{
-                      color: "#002884",
-                    }}
-                    href="https://support.metamask.io/hc/en-us/articles/360015489531-Getting-started-with-MetaMask"
-                  >
-                    No, I don't have a Metamask account
-                  </a>
-                </Button>
-              </div>
+                  No, I don’t have a MetaMask account
+                </a>
+              </Button>
             </div>
           </div>
-          {{notConnected} && (
-            <div>
-              <div className={styles.metamaskTutorial}>
-                <div className={styles.metamaskIntermediaireTitle}>
-                  It seems you aren't connected to a metamask account
-                </div>
-                <div className={styles.metamaskIntermediaireText}>
-                  No worries ! Please follow
-                  <a
-                    href="https://support.metamask.io/hc/en-us/articles/360015489531-Getting-started-with-MetaMask"
-                  >
-                    the metamask tutorial
-                  </a>
-                  to create one or connect to an existing one !
-                  <Button
-                    style={{
-                      marginLeft: "2rem",
-                      height: "2.5rem",
-                      padding: "0.8rem",
-                      borderRadius: "1rem",
-                      backgroundColor: "#D8DCF0",
-                      color: "#002884",
-                      fontWeight: "600",
-                      border: "1px solid #002884",
-                    }}
-                    variant="outlined"
-                  >
-                    <a
-                      style={{
-                        color: "#002884",
-                      }}
-                      href="https://support.metamask.io/hc/en-us/articles/360015489531-Getting-started-with-MetaMask"
-                    >
-                      Metamask tutorial
-                    </a>
-                  </Button>
-                </div>
-              </div>
-            </div>
-          )}
-           {!{notConnected} && (<div className={styles.continue}>
-            <Button
-              style={{
-                float: "right",
-                width: "10rem",
-                height: "2.5rem",
-                borderRadius: "1rem",
-                backgroundColor: "#002884",
-                color: "#D8DCF0",
-                fontWeight: "600",
-                border: "1px solid #002884",
-              }}
-              onClick={(e) => {
-                this.checkIfConnected();
-              }}
-              // disabled={this.props.connectnotConnected}
-              variant="outlined"
-            >
-              Let's start !
-            </Button>
-          </div>)}
-        </div>
-      </Layout>
-)
+          </span>
 
 
+      {/* להכניס סרטון הדרכה */}
+          {/* <div className="metamaskVideo">
+            <iframe
+              width="560"
+              height="315"
+              src="https://www.youtube.com/embed/2f1g0v3m8wE"
+              title="YouTube video player"
+              frameBorder="0"
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+              allowFullScreen
+            ></iframe>
+          </div> */}
+      </div>
+    </Layout>
+  );
 }
 
 export default MetamaskTutorialPage;

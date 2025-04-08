@@ -1,249 +1,216 @@
 import React, { useCallback, useState } from "react";
-import Layout from "./../../components/Layout";
-import factory from "./../../real_ethereum/factory";
-import web3 from "./../../real_ethereum/web3";
-import styles from "./new.module.scss";
-import Button from "@mui/material/Button";
-import FormControl from "@mui/material/FormControl";
-import TextField from "@mui/material/TextField";
 import { useNavigate } from "react-router-dom";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import CircularProgress from "@mui/material/CircularProgress";
+import Layout from "../../components/Layout";
+import factory from "../../real_ethereum/factory";
+import web3 from "../../real_ethereum/web3";
+import styles from "./new.module.scss";
+import {
+  Button,
+  CircularProgress,
+  FormControl,
+  TextField,
+} from "@mui/material";
 import { faQuestionCircle } from "@fortawesome/free-solid-svg-icons";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import toast from "react-hot-toast";
+import  "./new.module.scss";
 
 function NewAuctionPage() {
-  const [displayBidExplanation, setDisplayBidExplanation] = useState(false);
-  const [displayDataForSaleExplanation, setDisplayDataForSaleExplanation] =
-    useState(false);
-  const [
-    displayDataDescriptionExplanation,
-    setDisplayDataDescriptionExplanation,
-  ] = useState(false);
-  const [displayAuctionTimeExplanation, setDisplayAuctionTimeExplanation] =
-    useState(false);
-  const [minimumContribution, setMinimumContribution] = useState("");
-  const [auctionDuration, setAuctionDuration] = useState("");
-  const [createAuctionIsLoading, setCreateAuctionIsLoading] = useState(false);
-  const [dataForSell, setDataForSell] = useState("");
-  const [dataDescription, setDataDescription] = useState("");
-
+  const [formData, setFormData] = useState({
+    minimumContribution: "",
+    auctionDuration: "",
+    dataForSell: "",
+    dataDescription: "",
+  });
+  const [explanation, setExplanation] = useState(null);
+  const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
-  const onSubmit = useCallback(async (event) => {
-    event.preventDefault();
-    setCreateAuctionIsLoading(true);
-    try {
-      const accounts = await web3.eth.getAccounts();
-      await factory.methods
-        .createCampaign(
-          minimumContribution,
-          dataForSell,
-          dataDescription,
-          auctionDuration
-        )
-        .send({
-          from: accounts[0],
-        });
-      navigate("/auctions-list");
-    } catch (err) {}
-    setCreateAuctionIsLoading(false);
-  });
-  const onReveal = useCallback((event) => {
-    if (event.currentTarget.id == "minBid") {
-      setDisplayBidExplanation(true);
-    } else if (event.currentTarget.id == "dataForSale") {
-      setDisplayDataForSaleExplanation(true);
-    } else if (event.currentTarget.id == "dataDescription") {
-      setDisplayDataDescriptionExplanation(true);
-    } else if (event.currentTarget.id == "auctionTime") {
-      setDisplayAuctionTimeExplanation(true);
+
+  const handleChange = (event) => {
+    const { name, value } = event.target;
+    setFormData((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const handleTooltip = (field) => {
+    setExplanation(explanation === field ? null : field);
+  };
+
+  const validateForm = () => {
+    if (
+      !formData.minimumContribution ||
+      isNaN(formData.minimumContribution) ||
+      Number(formData.minimumContribution) <= 0
+    ) {
+      toast.error("⚠️ Minimum contribution must be a positive number.");
+      return false;
     }
-  });
+    if (
+      !formData.auctionDuration ||
+      isNaN(formData.auctionDuration) ||
+      formData.auctionDuration < 1 ||
+      formData.auctionDuration > 30
+    ) {
+      toast.error("⚠️ Auction duration must be between 1 and 30 minutes.");
+      return false;
+    }
+    if (!formData.dataForSell.trim()) {
+      toast.error("⚠️ Data for sale cannot be empty.");
+      return false;
+    }
+    if (!formData.dataDescription.trim()) {
+      toast.error("⚠️ Data description cannot be empty.");
+      return false;
+    }
+    return true;
+  };
+
+  const handleSubmit = useCallback(
+    async (event) => {
+      event.preventDefault();
+      if (!validateForm()) return;
+
+      setLoading(true);
+      const toastId = toast.loading("⏳ Creating auction...");
+
+      try {
+        const accounts = await web3.eth.getAccounts();
+        await factory.methods
+          .createCampaign(
+            formData.minimumContribution,
+            formData.dataForSell,
+            formData.dataDescription,
+            formData.auctionDuration
+          )
+          .send({ from: accounts[0] });
+
+        toast.success("🎉 Auction created successfully!", { id: toastId });
+        navigate("/auctions-list");
+      } catch (err) {
+        console.error("Auction creation failed:", err);
+        toast.error("❌ Auction creation failed. Please try again.", {
+          id: toastId,
+        });
+      }
+      setLoading(false);
+    },
+    [formData, navigate]
+  );
+
+  const renderTooltip = (field, text) => (
+    <div className={styles.tooltip}>
+      <label className={styles.tooltipLabel}>
+        {text}
+        <button
+          onClick={() => handleTooltip(field)}
+          className={styles.circleIcon}
+        >
+          <FontAwesomeIcon icon={faQuestionCircle} />
+        </button>
+      </label>
+      {explanation === field && (
+        <div className={styles.description}>{text}</div>
+      )}
+    </div>
+  );
+
   return (
-    <div className={styles.background}>
-      <Layout>
-        <div className={styles.direction}>
-          <img
+    <Layout>
+      <div className={styles.direction}>
+        {/* <img
             className={styles.Image}
             src="https://www.vancouverfringe.com/wp-content/uploads/2023/02/Silent-Auction-Blog.jpg"
-            alt=""
-          ></img>
-          <FormControl className={styles.form} onSubmit={onSubmit}>
-            <h3 className={styles.introductionTitle}>Create Auction</h3>
-            <div className={styles.tooltip}>
-              <label className={styles.tooltiplabe}>
-                Minimum Bid (in Wei)
-                <button
-                  onClick={onReveal}
-                  id="minBid"
-                  className={styles.circleIcon}
-                >
-                  <FontAwesomeIcon icon={["fas", "question-circle"]} />
-                </button>
-                <div className={styles.description}>
-                  {displayBidExplanation && (
-                    <div>
-                      <div>
-                        Wei is the smallest (base) unit of Ether , you can
-                        convert between Ether units
-                        <a href="https://eth-converter.com/"> here</a>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </label>
-            </div>
-            <TextField
-              sx={{ width: "85%" }}
-              inputProps={{
-                style: {
-                  height: "0.6rem",
-                },
-              }}
-              // labelPosition="right"
-              value={minimumContribution}
-              onChange={
-                (event) => setMinimumContribution(event.target.value)
-                // this.setState({ minimumContribution: event.target.value })
-              }
-            />
-            <div className={styles.tooltip}>
-              <label className={styles.tooltiplabe}>
-                Description of the Data
-                <button
-                  onClick={onReveal}
-                  id="dataDescription"
-                  className={styles.circleIcon}
-                >
-                  <FontAwesomeIcon icon={["fas", "question-circle"]} />
-                </button>
-                <div className={styles.description}>
-                  {displayDataDescriptionExplanation && (
-                    <span>
-                      Describe friendly what the data are about ,so sellers have
-                      more information (e.g. : my age)
-                    </span>
-                  )}
-                </div>
-              </label>
-            </div>
-            <TextField
-              sx={{ width: "85%" }}
-              inputProps={{
-                style: {
-                  height: "0.6rem",
-                },
-              }}
-              value={dataDescription}
-              onChange={(event) => setDataDescription(event.target.value)}
-            />
-            <div className={styles.tooltip}>
-              <label className={styles.tooltiplabe}>
-                Data For Sale
-                <button
-                  onClick={onReveal}
-                  id="dataForSale"
-                  className={styles.circleIcon}
-                >
-                  <FontAwesomeIcon icon={["fas", "question-circle"]} />
-                </button>
-                <div className={styles.description}>
-                  {displayDataForSaleExplanation && (
-                    <span>
-                      Insert here the data that you are interested to sell
-                    </span>
-                  )}
-                </div>
-              </label>
-            </div>
-            <TextField
-              sx={{ width: "85%" }}
-              inputProps={{
-                style: {
-                  height: "0.6rem",
-                },
-              }}
-              value={dataForSell}
-              onChange={(event) => {
-                setDataForSell(event.target.value);
-              }}
-            />
-            <div className={styles.tooltip}>
-              <label className={styles.tooltiplabe}>
-                How much time will your auction take ? (1-30 mins)
-                <button
-                  onClick={onReveal}
-                  id="auctionTime"
-                  className={styles.circleIcon}
-                >
-                  <FontAwesomeIcon icon={["fas", "question-circle"]} />
-                </button>
-                <div className={styles.description}>
-                  {displayAuctionTimeExplanation && (
-                    <span>Specify the length of the auction in minutes</span>
-                  )}
-                </div>
-              </label>
-            </div>
-            <TextField
-              sx={{ width: "85%" }}
-              inputProps={{
-                style: {
-                  height: "0.6rem",
-                },
-              }}
-              type="number"
-              step="1"
-              min="1"
-              max="30"
-              value={auctionDuration}
-              onChange={(event) => setAuctionDuration(event.target.value)}
-            />
-            <div className={styles.newButton}>
-              <Button
-                style={{
-                  marginTop: "2rem",
-                  height: "2.5rem",
-                  padding: "0.8rem",
-                  borderRadius: "1rem",
-                  backgroundColor: "#002884",
-                  color: "#D8DCF0",
-                  fontWeight: "600",
-                  border: "1px solid #002884",
-                  minWidth: "11rem",
-                }}
-                type="submit"
-                onClick={onSubmit}
-              >
-                {!createAuctionIsLoading ? (
-                  <span>Create Auction</span>
-                ) : (
-                  <CircularProgress className={styles.progress} size={20} />
-                )}
-              </Button>
-            </div>
-          </FormControl>
-        </div>
-        <Button
+            alt="Auction Preview"
+          /> */}
+        <FormControl
           style={{
-            marginTop: "6.5rem",
-            float: "left",
-            width: "20rem",
-            height: "2.5rem",
-            borderRadius: "1rem",
-            backgroundColor: "#002884",
-            color: "#D8DCF0",
-            fontWeight: "600",
-            border: "1px solid #002884",
+            padding: "20px 0px 20px 120px",
+            marginTop: "2rem",
+            display: "flex",
+            flexDirection: "column",
           }}
-          onClick={() => {
-            navigate("/auctions-list");
+          className={styles.form}
+          onSubmit={handleSubmit}
+        >
+          <h3 className={styles.introductionTitle}>Create Auction</h3>
+          {renderTooltip("minBid", "Minimum Bid (in Wei)")}
+          <TextField
+            sx={{ width: "85%" }}
+            name="minimumContribution"
+            value={formData.minimumContribution}
+            onChange={handleChange}
+          />
+
+          {renderTooltip("dataDescription", "Description of the Data")}
+          <TextField
+            sx={{ width: "85%" }}
+            name="dataDescription"
+            value={formData.dataDescription}
+            onChange={handleChange}
+          />
+
+          {renderTooltip("dataForSale", "Data For Sale")}
+          <TextField
+            sx={{ width: "85%" }}
+            name="dataForSell"
+            value={formData.dataForSell}
+            onChange={handleChange}
+          />
+
+          {renderTooltip("auctionTime", "Auction Duration (1-30 mins)")}
+          <TextField
+            sx={{ width: "85%" }}
+            type="number"
+            name="auctionDuration"
+            min="1"
+            max="30"
+            value={formData.auctionDuration}
+            onChange={handleChange}
+          />
+
+          <div
+            style={{
+              width: "85%",
+              display: "flex",
+              justifyContent: "flex-end",
+              marginTop: "2rem",
+            }}
+          >
+            <Button
+              style={{
+                backgroundColor: "#9090D0",
+                color: "white",
+                borderRadius: "20px",
+                padding: "10px 20px",
+                width: "300px",
+              }}
+              type="submit"
+              variant="contained"
+              onClick={handleSubmit}
+              disabled={loading}
+            >
+              {loading ? <CircularProgress size={20} /> : "Create Auction"}
+            </Button>
+          </div>
+        </FormControl>
+      </div>
+
+      <div style={{ textAlign: "center", marginTop: "2rem" }}>
+        <Button
+          variant="contained"
+          style={{
+            backgroundColor: "#103090",
+            color: "white",
+            borderRadius: "20px",
+            padding: "10px 20px",
+            width: "650px",
           }}
-          variant="outlined"
+          onClick={() => navigate("/auctions-list")}
         >
           Return To Auctions Main Screen
         </Button>
-      </Layout>
-    </div>
+      </div>
+    </Layout>
   );
 }
+
 export default NewAuctionPage;

@@ -1,76 +1,76 @@
-.background {
-    background-color: #d8dcf0;
+.progress {
+  color: #d8dcf0 !important;
 }
-.progress{
-    color:#d8dcf0!important;
-}
-
 
 .direction {
-    display: flex;
-    justify-content: space-between;
-    height:65vh;
+  display: flex;
+  justify-content: center;
+  height: 100%;
 }
 .Image {
-    margin-top: 2rem;
-    max-width: 100%;
-    max-height: 100%;
-    width: 30%;
-    height: auto;
-    filter: brightness(85%);
-    border-radius: 2rem;
+  margin-top: 2rem;
+  max-width: 100%;
+  max-height: 100%;
+  width: 30%;
+  height: auto;
+  filter: brightness(85%);
+  border-radius: 2rem;
 }
 .form {
-    margin-top: 2rem;
-    width: 60%;
-    height: auto;
+    text-align: left;
+  width: 800px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  height: auto;
+  gap: 10px;
+  background-color: white;
+  box-shadow: rgba(100, 100, 111, 0.2) 0px 7px 29px 0px;
+  border-radius: 20px;
 }
 .introductionTitle {
-    color: #002884;
-    font-size: 2.5rem;
-    font-weight: 600;
+  color: #002884;
+  font-size: 2.5rem;
+  font-weight: 600;
 }
 .tooltip .tooltiptext {
-    visibility: hidden;
-    width: 300px;
-    background-color: white;
-    color: #3f50b5;
-    text-align: center;
-    border-radius: 6px;
-    padding: 5px 0;
-  
-    /* Position the tooltip */
-    position: absolute;
-    z-index: 1;
+  visibility: hidden;
+  width: 300px;
+  background-color: white;
+  color: #3f50b5;
+  text-align: center;
+  border-radius: 6px;
+  padding: 5px 0;
+
+  /* Position the tooltip */
+  position: absolute;
+  z-index: 1;
 }
 .tooltip:hover .tooltiptext {
-    visibility: visible;
+  visibility: visible;
 }
 .tooltiplabe {
-    display: block;
-    // margin: 0 0 0.28571429rem 0;
-    color: #002884;
-    font-size:1.1rem;
-    font-weight: 700;
-    text-transform: none;
-    margin-top: 1rem;
-}
-.newButton {
-    text-align: right;
-    margin-right: 7.5rem;
+  display: block;
+  // margin: 0 0 0.28571429rem 0;
+  color: #002884;
+  font-size: 1.1rem;
+  font-weight: 700;
+  text-transform: none;
+  margin-top: 1rem;
 }
 
-.return{
-    padding:6rem;
-    height:10vh;
+.return {
+  padding: 6rem;
+  height: 10vh;
 }
-.circleIcon{
-    color: #002884;
-    border:#d8dcf0;
-    background-color: #d8dcf0;
-    cursor:pointer;
+.circleIcon {
+  color: #002884;
+  border: #d8dcf0;
+  background-color: #d8dcf0;
+  cursor: pointer;
 }
-.description{
-    font-style: oblique;
-    font-size: 0.9rem;
+.description {
+  font-style: oblique;
+  font-size: 0.9rem;
 }
+

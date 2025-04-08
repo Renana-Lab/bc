@@ -46,7 +46,7 @@ class ContributeForm extends Component {
       this.setState({
         errorMessage: "You cannnot contribute to a closed auction !",
       });
-    } else if (connectedAccount.toLowerCase() == manager.toLowerCase()) {
+    } else if (connectedAccount.toLowerCase() === manager.toLowerCase()) {
       this.setState({ error: true });
       this.setState({
         errorMessage: "You cannnot contribute to your own auction !",

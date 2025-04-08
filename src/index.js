@@ -1,17 +1,16 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import './index.css';
-import App ,{APPWithRouter} from './App';
+import App, { APPWithRouter } from './App';  // Import both default and named export
 import reportWebVitals from './reportWebVitals';
 import { BrowserRouter } from 'react-router-dom';
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(
   <React.StrictMode>
-  <BrowserRouter>
-  <APPWithRouter>
-  </APPWithRouter>
-  </BrowserRouter>
+    <BrowserRouter>
+      <APPWithRouter /> {/* Correctly use APPWithRouter */}
+    </BrowserRouter>
   </React.StrictMode>
 );
 
