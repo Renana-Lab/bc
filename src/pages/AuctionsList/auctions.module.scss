@@ -1,4 +1,9 @@
 
+.components_pageData__bLzbG {
+  margin: 0 auto;
+  height: auto;
+}
+
 .description {
   display: flex;
   justify-content: space-between;
@@ -12,20 +17,23 @@
 }
 .createAuction {
   display: flex;
+  justify-content: center;
   flex-direction: row;
+  width: 100%;
 }
 .image {
   background: url(cryptoWallet.jpg);
   border-radius: 4rem;
 }
 .introduction {
-  width: 50%;
   margin: 0 auto;
+  // border: 1px solid #101070;
   text-align: center;
   float: none;
 }
 .introductionText {
-  padding: 2rem;
+  margin-bottom: 2rem;
+  width: 100%;
   text-align: left;
   color: #3f50b5;
   font-size: 1.2rem;

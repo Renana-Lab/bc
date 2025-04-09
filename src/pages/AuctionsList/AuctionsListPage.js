@@ -8,7 +8,7 @@ import {
   TableRow,
   Button,
   Paper,
-  CircularProgress, // Import loading spinner
+  CircularProgress,
 } from "@mui/material";
 import { useNavigate } from "react-router-dom";
 import Countdown from "react-countdown";
@@ -17,11 +17,12 @@ import Campaign from "../../real_ethereum/campaign";
 import web3 from "../../real_ethereum/web3";
 import Layout from "../../components/Layout";
 import styles from "./auctions.module.scss";
+import picSrc from "./Illustration_Start.png";
 
 function AuctionsListPage() {
   const navigate = useNavigate();
   const [auctionsList, setAuctionsList] = useState([]);
-  const [loading, setLoading] = useState(true); // Track loading state
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const fetchNetworkId = async () => {
@@ -76,23 +77,45 @@ function AuctionsListPage() {
   };
 
   return (
-    <Layout >
+    <Layout>
       <div className={styles.page}>
         <div className={styles.createAuction}>
           <div className={styles.introduction}>
             <div className={styles.introductionText}>
-              <p className={styles.introductionTitle}>
-                Welcome to the Blockchain Data Market Platform
-              </p>
-              <p>Scroll down to see all the open and closed auctions.</p>
-              <p>Do you want to put your data for auction?</p> <br />
-              <Button
-              variant="contained"
-              style={{backgroundColor:'rgb(16, 48, 144)', color:'white',borderRadius:'20px',padding:'10px 20px'}}
-                onClick={() => navigate("/open-auction")}
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "row",
+                  gap: "100px",
+                  justifyContent: "center",
+                  alignItems: "center",
+                  width: "1100px",
+                }}
               >
-                Start an auction
-              </Button>
+                <img src={picSrc} height="320" width="360" alt="metamask" />
+                <div>
+                  <p className={styles.introductionTitle}>
+                    Welcome to the Blockchain Data Market Platform
+                  </p>
+                  <p style={{ fontSize: "larger" }}>
+                    Scroll down to see all the open and closed auctions.
+                    <br />
+                    Do you want to put your data for auction?
+                  </p>
+                  <Button
+                    variant="contained"
+                    style={{
+                      backgroundColor: "rgb(16, 48, 144)",
+                      color: "white",
+                      borderRadius: "20px",
+                      padding: "10px 20px",
+                    }}
+                    onClick={() => navigate("/open-auction")}
+                  >
+                    Start an auction
+                  </Button>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -103,21 +126,43 @@ function AuctionsListPage() {
             <p>Loading auctions...</p>
           </div>
         ) : (
-          <TableContainer component={Paper} style={{margin:'0 auto', padding: "30px", borderRadius: "20px",width:"max-content"}}>
+          <TableContainer
+            component={Paper}
+            style={{
+              margin: "0 auto",
+              padding: "30px",
+              borderRadius: "20px",
+              width: "max-content",
+            }}
+          >
             <Table aria-label="auctions table">
               <TableHead>
                 <TableRow>
-                  <TableCell style={{color:'#101070',fontWeight:'bold'}}>Address</TableCell>
-                  <TableCell align="center" style={{color:'#101070',fontWeight:'bold'}}>
+                  <TableCell style={{ color: "#101070", fontWeight: "bold" }}>
+                    Address
+                  </TableCell>
+                  <TableCell
+                    align="center"
+                    style={{ color: "#101070", fontWeight: "bold" }}
+                  >
                     Data Description
                   </TableCell>
-                  <TableCell align="center" style={{color:'#101070',fontWeight:'bold'}}>
+                  <TableCell
+                    align="center"
+                    style={{ color: "#101070", fontWeight: "bold" }}
+                  >
                     Auction Status
                   </TableCell>
-                  <TableCell align="center" style={{color:'#101070',fontWeight:'bold'}}>
+                  <TableCell
+                    align="center"
+                    style={{ color: "#101070", fontWeight: "bold" }}
+                  >
                     Highest Bid
                   </TableCell>
-                  <TableCell align="center" style={{color:'#101070',fontWeight:'bold'}}>
+                  <TableCell
+                    align="center"
+                    style={{ color: "#101070", fontWeight: "bold" }}
+                  >
                     Number Of Bidders
                   </TableCell>
                   <TableCell align="right"></TableCell>
@@ -130,13 +175,19 @@ function AuctionsListPage() {
                   .map((auction, index) => (
                     <TableRow
                       key={index}
-                      style={{backgroundColor:'#E9E9F6',marginBottom:'4rem'}}
+                      style={{
+                        backgroundColor: "#E9E9F6",
+                        marginBottom: "4rem",
+                      }}
                     >
                       <TableCell>{auction.address}</TableCell>
                       <TableCell align="center">
                         {auction.dataDescription}
                       </TableCell>
-                      <TableCell align="center" style={{color:'#D07030D0',fontWeight:'bold'}}>
+                      <TableCell
+                        align="center"
+                        style={{ color: "#D07030D0", fontWeight: "bold" }}
+                      >
                         {getTimeLeft(auction.endTime)}
                       </TableCell>
                       <TableCell align="center">{auction.highestBid}</TableCell>
@@ -146,7 +197,12 @@ function AuctionsListPage() {
                       <TableCell align="center">
                         <Button
                           variant="contained"
-                          style={{backgroundColor:'#9090D0', color:'white',borderRadius:'20px',padding:'10px 20px'}}
+                          style={{
+                            backgroundColor: "#9090D0",
+                            color: "white",
+                            borderRadius: "20px",
+                            padding: "10px 20px",
+                          }}
                           onClick={() =>
                             navigate(`/auction/${auction.address}`)
                           }

@@ -13,6 +13,7 @@ import {
 import { faQuestionCircle } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import toast from "react-hot-toast";
+import picSrc from "./Illustration_Create.png"
 import  "./new.module.scss";
 
 function NewAuctionPage() {
@@ -93,7 +94,7 @@ function NewAuctionPage() {
       }
       setLoading(false);
     },
-    [formData, navigate]
+    [formData]
   );
 
   const renderTooltip = (field, text) => (
@@ -116,14 +117,14 @@ function NewAuctionPage() {
   return (
     <Layout>
       <div className={styles.direction}>
-        {/* <img
+        <img
             className={styles.Image}
-            src="https://www.vancouverfringe.com/wp-content/uploads/2023/02/Silent-Auction-Blog.jpg"
+            src={picSrc}
             alt="Auction Preview"
-          /> */}
+          />
         <FormControl
           style={{
-            padding: "20px 0px 20px 120px",
+            padding: "20px 0px 20px 220px",
             marginTop: "2rem",
             display: "flex",
             flexDirection: "column",
@@ -194,7 +195,7 @@ function NewAuctionPage() {
         </FormControl>
       </div>
 
-      <div style={{ textAlign: "center", marginTop: "2rem" }}>
+      <div style={{ textAlign: "center", marginTop: "2rem", paddingBottom: "2rem" }}>
         <Button
           variant="contained"
           style={{

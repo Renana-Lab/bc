@@ -3,8 +3,17 @@ import { useNavigate } from "react-router-dom";
 import Button from "@mui/material/Button";
 import { useMetaMask } from "../../Context/Context.js"; // Import useMetaMask hook
 import Layout from "../../components/Layout";
-import metamaskImg from "./metamask.jpg";
+import metamaskImg from "./Illustration_Metamask.png";
 import styles from "./metamask.module.scss";
+import vidSrc from "./vid.mp4";
+import {
+  Accordion,
+  AccordionSummary,
+  AccordionDetails,
+  Typography,
+} from "@mui/material";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
+
 import { toast } from "react-hot-toast"; // Import hot-toast
 
 function MetamaskTutorialPage() {
@@ -12,9 +21,9 @@ function MetamaskTutorialPage() {
   const { isMetaMaskInstalled, checkIfConnected } = useMetaMask(); // Access context values
   const [notConnected, setNotConnected] = useState(true); // Default to true (assumes not connected)
   const [loading, setLoading] = useState(true);
+  const [showGuide, setShowGuide] = useState(false);
 
   useEffect(() => {
- 
     const storedNotConnected = localStorage.getItem("notConnected");
     if (storedNotConnected !== null) {
       setNotConnected(storedNotConnected === "true");
@@ -32,57 +41,59 @@ function MetamaskTutorialPage() {
     if (!loading && !notConnected && isMetaMaskInstalled) {
       navigate("/auctions-list");
     } else {
-      toast.error("Hi! There might be a problem connecting your MetaMask account.");
+      toast.error(
+        "Hi! There might be a problem connecting your MetaMask account."
+      );
     }
   };
-
-  // useEffect(() => {
-
-  //   navigate("/auctions-list");
-
-
-  // }, [!isMetaMaskInstalled,!notConnected]);
-
 
   return (
     <Layout>
       <div className={styles.metamaskContainer}>
-        
-        <span style={{ display: "flex", flexDirection: "row", alignItems: "center", justifyContent:"space-evenly", gap: "2.5rem"}}>
-
-
-          <div className={styles.metamaskImage}>
-            <img
-              className={styles.metamaskimg}
-              src={metamaskImg}
-              height="230"
-              width="345"
-              alt="metamask"
-            />
-          </div>
+        <span
+          style={{
+            display: "flex",
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: "2.5rem",
+          }}
+        >
+          <img
+            className={styles.metamaskimg}
+            src={metamaskImg}
+            height="250px"
+            width="200px"
+            alt="metamask"
+          />
 
           <div className={styles.metamaskQuestion}>
-            <div className={styles.metamaskTitle}>Are you logged in to MetaMask?</div>
+            <div className={styles.metamaskTitle}>
+              Are you logged in to MetaMask?
+            </div>
             <div className={styles.metamaskText}>
-              Before buying/selling data, please make sure you are logged into a MetaMask account.
-              <br />  
-              If you don’t have a MetaMask account, please follow the tutorial to create one and come back.
+              Before starting buying/selling data, please make sure you are
+              logged into a Metamask account.
+              <br />
+              If you don’t have a Metamask account, please follow the Metamask
+              tutorial to create one and come back to start using our Blockchain
+              data market.
             </div>
             <div className={styles.metamaskButtons}>
               <Button
                 style={{
                   height: "2.5rem",
                   padding: "0.8rem",
-                  borderRadius: "1rem",
+                  borderRadius: "30px",
                   backgroundColor: "#9090D0",
                   color: "white",
                   fontWeight: "600",
-                  
                 }}
-                variant="outlined"
+                variant="contained"
                 onClick={async () => {
                   await checkIfConnected();
-                  const updatedNotConnected = localStorage.getItem("notConnected");
+                  const updatedNotConnected =
+                    localStorage.getItem("notConnected");
                   setNotConnected(updatedNotConnected === "true");
                   handleContinue();
                 }}
@@ -90,19 +101,21 @@ function MetamaskTutorialPage() {
                 Yes, I am connected
               </Button>
               <Button
+                onClick={() => {
+                  setShowGuide(true);
+                }}
                 style={{
                   height: "2.5rem",
                   padding: "0.8rem",
-                  borderRadius: "1rem",
+                  borderRadius: "30px",
                   backgroundColor: "#9090D0",
                   color: "white",
                   fontWeight: "600",
-                  
                 }}
-                variant="outlined"
+                variant="contained"
               >
                 <a
-                  style={{ color: "white" }}
+                  style={{ color: "white", textDecoration: "none" }}
                   href="https://support.metamask.io/start/getting-started-with-metamask/"
                   target="_blank"
                   rel="noopener noreferrer"
@@ -112,21 +125,57 @@ function MetamaskTutorialPage() {
               </Button>
             </div>
           </div>
-          </span>
+        </span>
 
+        {showGuide && (
+  <div className={styles.metamaskVideo}>
+    <Accordion >
+      <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+        <Typography variant="h6">Step 1: Download the MetaMask extension</Typography>
+      </AccordionSummary>
+      <AccordionDetails>
+        <Button
+        rel="noopener noreferrer"
+          href="https://chromewebstore.google.com/detail/metamask/nkbihfbeogaeaoehlefnkodbefgpgknn"
+          sx={{
+            backgroundColor: "#9090D0",
+            color: "white",
+            borderRadius: "20px",
+            textTransform: "none"
+          }}
+          variant="contained"
+        >
+          Download from Chrome Web Store
+        </Button>
+      </AccordionDetails>
+    </Accordion>
 
-      {/* להכניס סרטון הדרכה */}
-          {/* <div className="metamaskVideo">
-            <iframe
-              width="560"
-              height="315"
-              src="https://www.youtube.com/embed/2f1g0v3m8wE"
-              title="YouTube video player"
-              frameBorder="0"
-              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-              allowFullScreen
-            ></iframe>
-          </div> */}
+    <Accordion>
+      <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+        <Typography variant="h6">Step 2: Connect your Google account to MetaMask</Typography>
+      </AccordionSummary>
+      <AccordionDetails>
+        <Typography>
+          Follow the instructions on MetaMask to connect your Google account after installing the extension.
+        </Typography>
+      </AccordionDetails>
+    </Accordion>
+
+    <Accordion>
+      <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+        <Typography variant="h6">Step 3: Add currency to your wallet</Typography>
+      </AccordionSummary>
+      <AccordionDetails>
+        <Typography paragraph>
+          After downloading the MetaMask extension from the web store:
+        </Typography>
+        <video width="940" height="515" controls muted>
+          <source src={vidSrc} type="video/mp4" />
+        </video>
+      </AccordionDetails>
+    </Accordion>
+  </div>
+)}
       </div>
     </Layout>
   );

@@ -8,17 +8,17 @@
   height: 100%;
 }
 .Image {
-  margin-top: 2rem;
-  max-width: 100%;
-  max-height: 100%;
-  width: 30%;
-  height: auto;
+  position: absolute;
+  z-index: 9;
+  margin-top: 6rem;
+  transform: translateX(-25rem);
+  width: 22rem;
+  height: 18rem;
   filter: brightness(85%);
-  border-radius: 2rem;
 }
 .form {
-    text-align: left;
-  width: 800px;
+  text-align: left;
+  width: 35rem;
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -59,10 +59,6 @@
   margin-top: 1rem;
 }
 
-.return {
-  padding: 6rem;
-  height: 10vh;
-}
 .circleIcon {
   color: #002884;
   border: #d8dcf0;
@@ -73,4 +69,3 @@
   font-style: oblique;
   font-size: 0.9rem;
 }
-

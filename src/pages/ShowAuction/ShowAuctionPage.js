@@ -1,41 +1,51 @@
-import * as moment from "moment";
+import moment from "moment";
 import React, { useState, useEffect } from "react";
+import { useParams, useNavigate } from "react-router-dom";
 import Layout from "./../../components/Layout";
 import Campaign from "./../../real_ethereum/campaign";
 import ContributeForm from "./../../components/ContributeForm";
 import showPageStyles from "./show.module.scss";
 import Countdown from "react-countdown";
-import Button from "@mui/material/Button";
-import Dialog from "@mui/material/Dialog";
-import DialogActions from "@mui/material/DialogActions";
-import DialogContent from "@mui/material/DialogContent";
-import DialogContentText from "@mui/material/DialogContentText";
-import DialogTitle from "@mui/material/DialogTitle";
-import Table from "@mui/material/Table";
-import TableBody from "@mui/material/TableBody";
-import TableCell from "@mui/material/TableCell";
-import TableContainer from "@mui/material/TableContainer";
-import TableHead from "@mui/material/TableHead";
-import TableRow from "@mui/material/TableRow";
-import Paper from "@mui/material/Paper";
-import { useParams, useNavigate } from "react-router-dom";
+import {
+  Box,
+  Button,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  Paper,
+} from "@mui/material";
+import GavelIcon from "@mui/icons-material/Gavel";
+import ListOutlinedIcon from "@mui/icons-material/ListOutlined";
+import KeyboardReturnOutlinedIcon from "@mui/icons-material/KeyboardReturnOutlined";
+import CloseIcon from "@mui/icons-material/Close";
+import picSrc from "./medal.png";
 
 function ShowAuctionPage() {
-  const [displayBiddingDialog, setDisplayBiddingDialog] = useState(false);
-  const [dialogOpen, setDialogOpen] = useState(false);
+  const [state, setState] = useState({
+    displayBiddingDialog: false,
+    dialogOpen: false,
+    minimumContribution: 0,
+    approversCount: 0,
+    manager: "",
+    highestBid: 0,
+    dataForSell: "",
+    dataDescription: "",
+    endTime: 0,
+    highestBidder: "",
+    connectedAccount: "",
+    transactions: [],
+    contributors: [],
+    auction: null,
+  });
 
-  const [minimumContribution, setMinimumContribution] = useState(0);
-  const [approversCount, setApproversCount] = useState(0);
-  const [manager, setManager] = useState("");
-  const [highestBid, setHighestBid] = useState(0);
-  const [dataForSell, setDataForSell] = useState("");
-  const [dataDescription, setDataDescription] = useState("");
-  const [endTime, setEndTime] = useState(0);
-  const [highestBidder, setHighestBidder] = useState("");
-  const [connectedAccount, setConnectedAccount] = useState("");
-  const [transactions, setTransactions] = useState([]);
-  const [contributors, setContributors] = useState([]);
-  const [auction, setAuction] = useState(null);
   const { address } = useParams();
   const navigate = useNavigate();
 
@@ -44,449 +54,314 @@ function ShowAuctionPage() {
       const accounts = await window.ethereum.request({
         method: "eth_accounts",
       });
-      const connectedAccount = accounts[0];
-
       const auction = Campaign(address);
-      setAuction(auction);
-      const auctionDetails = await auction.methods.getSummary().call();
-      const bids = await auction.methods.getTransactions().call();
-      const contributors = await auction.methods.getAddresses().call();
-      let transactions = [];
-      for (let i = 0; i < bids.length; i++) {
-        let obj = {
-          bidder: bids[i].sellerAddress,
-          bid: bids[i].value,
-          time: moment.unix(Number(bids[i].time)).format("DD-MM-YYYY HH:mm:ss"),
-        };
-        transactions.push(obj);
-      }
-      setMinimumContribution(auctionDetails[0]);
-      setApproversCount(auctionDetails[2]);
-      setManager(auctionDetails[3]);
-      setHighestBid(auctionDetails[4]);
-      setDataForSell(auctionDetails[5]);
-      setDataDescription(auctionDetails[6]);
-      setEndTime(auctionDetails[7]);
-      setHighestBidder(auctionDetails[8]);
-      setConnectedAccount(connectedAccount);
-      setTransactions(transactions);
-      setContributors(contributors);
+      const [details, bids, contributors] = await Promise.all([
+        auction.methods.getSummary().call(),
+        auction.methods.getTransactions().call(),
+        auction.methods.getAddresses().call(),
+      ]);
+
+      const transactions = bids.map((bid) => ({
+        bidder: bid.sellerAddress,
+        bid: bid.value,
+        time: moment.unix(Number(bid.time)).format("DD-MM-YYYY HH:mm:ss"),
+      }));
+
+      setState({
+        ...state,
+        auction,
+        connectedAccount: accounts[0],
+        minimumContribution: details[0],
+        approversCount: details[2],
+        manager: details[3],
+        highestBid: details[4],
+        dataForSell: details[5],
+        dataDescription: details[6],
+        endTime: details[7],
+        highestBidder: details[8],
+        transactions,
+        contributors,
+      });
     };
     fetchData();
   }, [address]);
-  const handleClickOpen = () => {
-    setDialogOpen(true);
+
+  const buttonStyle = {
+    width: "15rem",
+    height: "2.5rem",
+    borderRadius: "1rem",
+    backgroundColor: "#103090",
+    color: "#D8DCF0",
+    fontWeight: "600",
+    border: "1px solid #002884",
   };
-  const handleClose = () => {
-    setDialogOpen(false);
-  };
-  const showData = (event) => {
-    setDisplayBiddingDialog(true);
-  };
+
   const refundApprovers = async () => {
-    if (!auction.methods.getStatus().call()) {
-      for (let i = 0; i < contributors.length; i++) {
-        if (contributors[i].toLowerCase() !== highestBidder.toLowerCase()) {
-          let connectedAccount = contributors[i];
-          await auction.methods.withdrawBid(connectedAccount).send({
-            from: manager,
-          });
-        }
-      }
+    const isActive = await state.auction.methods.getStatus().call();
+    if (!isActive) {
+      const refundPromises = state.contributors
+        .filter(
+          (contributor) =>
+            contributor.toLowerCase() !== state.highestBidder.toLowerCase()
+        )
+        .map((contributor) =>
+          state.auction.methods
+            .withdrawBid(contributor)
+            .send({ from: state.manager })
+        );
+      await Promise.all(refundPromises);
     } else {
-      alert("You already refund contribute accounts");
+      alert("You already refunded contributing accounts");
     }
   };
-  return Number({ endTime } + "000") > Date.now() ? (
-    // if auction is still running
-    <Layout>
-      <div className={showPageStyles.page}>
-        <div className={showPageStyles.campaignInfo}>
-          <div>
-            <p className={showPageStyles.introductionTitle}>
-              Auction # {address}
-            </p>
-            <p className={showPageStyles.introductionDetail}>
-              <span className={showPageStyles.introductionLabel}>
-                Data description :{" "}
-              </span>
-              <span className={showPageStyles.introductionText}>
-                {dataDescription}
-              </span>
-            </p>
-            <p className={showPageStyles.introductionDetail}>
-              <span className={showPageStyles.introductionLabel}>
-                Seller address :{" "}
-              </span>
-              <span className={showPageStyles.introductionText}>{manager}</span>
-            </p>
-            <p className={showPageStyles.introductionDetail}>
-              <span className={showPageStyles.introductionLabel}>
-                Time left :{" "}
-              </span>
-              <span className={showPageStyles.introductionText}>
-                {" "}
-                <Countdown date={Number(endTime + "000")} />
-              </span>
-            </p>
-            <p className={showPageStyles.introductionDetail}>
-              <span className={showPageStyles.introductionLabel}>
-                Minimum bid (wei) required :{" "}
-              </span>
-              <span className={showPageStyles.introductionText}>
-                {minimumContribution}
-              </span>
-            </p>
-            <p className={showPageStyles.introductionDetail}>
-              <span className={showPageStyles.introductionLabel}>
-                Highest bid (wei) recorded :{" "}
-              </span>
-              <span className={showPageStyles.introductionText}>
-                {highestBid}
-              </span>
-            </p>
-            <p className={showPageStyles.introductionDetail}>
-              <span className={showPageStyles.introductionLabel}>
-                Number of bidders :{" "}
-              </span>
-              <span className={showPageStyles.introductionText}>
-                {approversCount}
-              </span>
-            </p>
-          </div>
-        </div>
-        {/* If not manager is connected */}
-        {manager.toLowerCase() !== connectedAccount.toLowerCase() && (
-          <div className={showPageStyles.contributeForm}>
-            <ContributeForm address={address} />
-          </div>
+
+  const renderAuctionInfo = () => (
+    <Box>
+      <div className={showPageStyles.campaignInfo}>
+        <p className={showPageStyles.introductionTitle}>Auction # {address}</p>
+        <hr />
+        <p className={showPageStyles.introductionDetail}>
+          <span className={showPageStyles.introductionLabel}>
+            Data description:{" "}
+          </span>
+          <span className={showPageStyles.introductionText}>
+            {state.dataDescription}
+          </span>
+        </p>
+        <p className={showPageStyles.introductionDetail}>
+          <span className={showPageStyles.introductionLabel}>
+            Seller address:{" "}
+          </span>
+          <span className={showPageStyles.introductionText}>
+            {state.manager}
+          </span>
+        </p>
+        {isAuctionActive && (
+          <p className={showPageStyles.introductionDetail}>
+            <span className={showPageStyles.introductionLabel}>
+              Time left:{" "}
+            </span>
+            <span className={showPageStyles.introductionText}>
+              <Countdown date={Number(state.endTime + "000")} />
+            </span>
+          </p>
         )}
+        <p className={showPageStyles.introductionDetail}>
+          <span className={showPageStyles.introductionLabel}>
+            Minimum bid (wei) required:{" "}
+          </span>
+          <span className={showPageStyles.introductionText}>
+            {state.minimumContribution}
+          </span>
+        </p>
+        <p className={showPageStyles.introductionDetail}>
+          <span className={showPageStyles.introductionLabel}>
+            Highest bid (wei) recorded:{" "}
+          </span>
+          <span className={showPageStyles.introductionText}>
+            {state.highestBid}
+          </span>
+        </p>
+        <p className={showPageStyles.introductionDetail}>
+          <span className={showPageStyles.introductionLabel}>
+            Number of bidders:{" "}
+          </span>
+          <span className={showPageStyles.introductionText}>
+            {state.approversCount}
+          </span>
+        </p>
       </div>
-      {/* <Link route={`/auctions-list`}> */}
+
+      {!isAuctionActive && isManager && (
+        <Button
+          startIcon={<ListOutlinedIcon />}
+          variant="contained" // Changed to contained
+          style={{ ...buttonStyle, marginTop: "2rem", width: "24rem" }}
+          onClick={() => setState({ ...state, dialogOpen: true })}
+        >
+          Display Bidding History
+        </Button>
+      )}
+      <br />
       <Button
-      onClick={() => window.location.href = "/auctions-list"}
+        startIcon={
+          isAuctionActive ? <GavelIcon /> : <KeyboardReturnOutlinedIcon />
+        }
+        onClick={() => navigate("/auctions-list")}
         style={{
-          marginTop: "6.5rem",
-          float: "left",
-          width: "15rem",
-          height: "2.5rem",
-          borderRadius: "1rem",
-          backgroundColor: "#002884",
-          color: "#D8DCF0",
-          fontWeight: "600",
-          border: "1px solid #002884",
+          ...buttonStyle,
+          marginTop: isAuctionActive ? "6.5rem" : "2rem",
+          width: isAuctionActive ? "15rem" : "24rem",
         }}
-        variant="outlined"
+        variant="contained" // Changed to contained
       >
-        Return To Auctions
+        {isAuctionActive
+          ? "Return To Auctions"
+          : "Return To Auctions Main Screen"}
       </Button>
-      {/* </Link> */}
-    </Layout>
-  ) : // if connected as highest bidder AND auction is closed
-  highestBidder.toLowerCase() === connectedAccount.toLowerCase() ? (
+    </Box>
+  );
+
+  const isAuctionActive = Number(state.endTime + "000") > Date.now();
+  const isManager =
+    state.manager.toLowerCase() === state.connectedAccount.toLowerCase();
+  const isHighestBidder =
+    state.highestBidder.toLowerCase() === state.connectedAccount.toLowerCase();
+
+  return (
     <Layout>
       <div className={showPageStyles.page}>
-        <div className={showPageStyles.campaignInfo}>
-          <div>
-            <p className={showPageStyles.introductionTitle}>
-              Auction # {address}
-            </p>
-            <p className={showPageStyles.introductionDetail}>
-              <span className={showPageStyles.introductionLabel}>
-                Data description :{" "}
-              </span>
-              <span className={showPageStyles.introductionText}>
-                {dataDescription}
-              </span>
-            </p>
-            <p className={showPageStyles.introductionDetail}>
-              <span className={showPageStyles.introductionLabel}>
-                Seller address :{" "}
-              </span>
-              <span className={showPageStyles.introductionText}>{manager}</span>
-            </p>
-            <p className={showPageStyles.introductionDetail}>
-              <span className={showPageStyles.introductionLabel}>
-                Minimum bid (wei) required :{" "}
-              </span>
-              <span className={showPageStyles.introductionText}>
-                {minimumContribution}
-              </span>
-            </p>
-            <p className={showPageStyles.introductionDetail}>
-              <span className={showPageStyles.introductionLabel}>
-                Highest bid (wei) recorded :{" "}
-              </span>
-              <span className={showPageStyles.introductionText}>
-                {highestBid}
-              </span>
-            </p>
-            <p className={showPageStyles.introductionDetail}>
-              <span className={showPageStyles.introductionLabel}>
-                Number of bidders :{" "}
-              </span>
-              <span className={showPageStyles.introductionText}>
-                {approversCount}
-              </span>
-            </p>
-          </div>
-        </div>
-        <div className={showPageStyles.contributeForm}>
-          <div className={showPageStyles.centered}>
-            <div className={showPageStyles.winnerTitle}>Congrats !</div>
-            <div className={showPageStyles.winnerLabel}>
-              You won the auction and have now access to the data
+        {renderAuctionInfo()}
+        {isAuctionActive ? (
+          !isManager && (
+            <div className={showPageStyles.contributeForm}>
+              <ContributeForm address={address} />
             </div>
-            {!{ displayBiddingDialog } && (
-              <Button
-                onClick={showData}
-                style={{
-                  marginTop: "1rem",
-                  marginBottom: "1rem",
-                  width: "15rem",
-                  height: "2.5rem",
-                  borderRadius: "1rem",
-                  backgroundColor: "#002884",
-                  color: "#D8DCF0",
-                  fontWeight: "600",
-                  border: "1px solid #002884",
-                }}
-                variant="outlined"
-              >
-                View Data
-              </Button>
+          )
+        ) : isHighestBidder ? (
+          <div className={showPageStyles.contributeForm}>
+            <div className={showPageStyles.centered}>
+              <img alt="medal" width={"80px"} src={picSrc} />
+              <div className={showPageStyles.winnerTitle}>Congrats!</div>
+              <div className={showPageStyles.winnerLabel}>
+                You won the auction and have now access to the data
+              </div>
+              {!state.displayBiddingDialog && (
+                <Button
+                  onClick={() =>
+                    setState({ ...state, displayBiddingDialog: true })
+                  }
+                  style={{
+                    ...buttonStyle,
+                    marginTop: "1rem",
+                    marginBottom: "1rem",
+                  }}
+                  variant="outlined"
+                >
+                  View Data
+                </Button>
+              )}
+            </div>
+            {state.displayBiddingDialog && (
+              <div className={showPageStyles.revealedData}>
+                <p className={showPageStyles.introductionDetail}>
+                  <span className={showPageStyles.introductionLabel}>
+                    Data Description:{" "}
+                  </span>
+                  <span className={showPageStyles.introductionText}>
+                    {state.dataDescription}
+                  </span>
+                </p>
+                <p className={showPageStyles.introductionDetail}>
+                  <span className={showPageStyles.introductionLabel}>
+                    Data acquired:{" "}
+                  </span>
+                  <span className={showPageStyles.introductionText}>
+                    {state.dataForSell}
+                  </span>
+                </p>
+              </div>
             )}
           </div>
-          {{ displayBiddingDialog } && (
-            <div className={showPageStyles.revealedData}>
-              {" "}
-              <p className={showPageStyles.introductionDetail}>
-                <span className={showPageStyles.introductionLabel}>
-                  Data Description :{" "}
-                </span>
-                <span className={showPageStyles.introductionText}>
-                  {dataDescription}
-                </span>
-              </p>
-              <p className={showPageStyles.introductionDetail}>
-                <span className={showPageStyles.introductionLabel}>
-                  Data acquired :{" "}
-                </span>
-                <span className={showPageStyles.introductionText}>
-                  {dataForSell}
-                </span>
-              </p>
-            </div>
-          )}
-        </div>
-      </div>
-      {/* <Link route={`/auctions-list`}> */}
-      <Button
-        style={{
-          marginTop: "5rem",
-          float: "left",
-          width: "15rem",
-          height: "2.5rem",
-          borderRadius: "1rem",
-          backgroundColor: "#002884",
-          color: "#D8DCF0",
-          fontWeight: "600",
-          border: "1px solid #002884",
-        }}
-        variant="outlined"
-      >
-        Return To Auctions
-      </Button>
-      {/* </Link> */}
-    </Layout>
-  ) : (
-    // if not connected as highest bidder AND auction is closed
-    <Layout>
-      <div className={showPageStyles.page}>
-        <div className={showPageStyles.campaignInfo}>
-          <div>
-            <p className={showPageStyles.introductionTitle}>
-              Auction # {address}
-            </p>
-            <p className={showPageStyles.introductionDetail}>
-              <span className={showPageStyles.introductionLabel}>
-                Data description :{" "}
-              </span>
-              <span className={showPageStyles.introductionText}>
-                {dataDescription}
-              </span>
-            </p>
-            <p className={showPageStyles.introductionDetail}>
-              <span className={showPageStyles.introductionLabel}>
-                Seller address :{" "}
-              </span>
-              <span className={showPageStyles.introductionText}>{manager}</span>
-            </p>
-            <p className={showPageStyles.introductionDetail}>
-              <span className={showPageStyles.introductionLabel}>
-                Minimum id (wei) required :{" "}
-              </span>
-              <span className={showPageStyles.introductionText}>
-                {minimumContribution}
-              </span>
-            </p>
-            <p className={showPageStyles.introductionDetail}>
-              <span className={showPageStyles.introductionLabel}>
-                Highest id (wei) recorded :{" "}
-              </span>
-              <span className={showPageStyles.introductionText}>
-                {highestBid}
-              </span>
-            </p>
-            <p className={showPageStyles.introductionDetail}>
-              <span className={showPageStyles.introductionLabel}>
-                Number of bidders :{" "}
-              </span>
-              <span className={showPageStyles.introductionText}>
-                {approversCount}
-              </span>
-            </p>
-          </div>
-        </div>
-      </div>
-      <div className={showPageStyles.flex}>
-        {/* in case we are logged as manager we have access to bidding history */}
-        {manager.toLowerCase() === connectedAccount.toLowerCase() && (
-          <div>
-            <Button
-              variant="outlined"
-              style={{
-                marginTop: "4rem",
-                float: "left",
-                width: "20rem",
-                height: "2.5rem",
-                borderRadius: "1rem",
-                backgroundColor: "#002884",
-                color: "#D8DCF0",
-                fontWeight: "600",
-                border: "1px solid #002884",
-              }}
-              onClick={handleClickOpen}
-            >
-              Display Bidding history
-            </Button>
-            <Dialog
-              open={dialogOpen}
-              onClose={handleClose}
-              aria-labelledby="alert-dialog-title"
-              aria-describedby="alert-dialog-description"
-            >
-              <DialogTitle id="alert-dialog-title">
-                <p className={showPageStyles.title}>Bidding History</p>
-                <p className={showPageStyles.title}>Auction # {address} </p>
-              </DialogTitle>
-              <DialogContent>
-                <DialogContentText id="alert-dialog-description">
-                  {transactions.length ? (
-                    <TableContainer component={Paper}>
-                      <Table sx={{ minWidth: 400 }} aria-label="simple table">
-                        <TableHead>
-                          <TableRow>
-                            <TableCell className={showPageStyles.headerCell}>
-                              Bidder Address
-                            </TableCell>
-                            <TableCell
-                              className={showPageStyles.headerCell}
-                              align="center"
-                            >
-                              Bid Amount
-                            </TableCell>
-                            <TableCell
-                              className={showPageStyles.headerCell}
-                              align="center"
-                            >
-                              Bid Time
-                            </TableCell>
-                            <TableCell align="right"></TableCell>
-                          </TableRow>
-                        </TableHead>
-                        <TableBody>
-                          {transactions.map((row, index) => (
-                            <TableRow
-                              className={index % 2 === 0 ? "even" : "odd"}
-                              key={index}
-                              sx={{
-                                "&:last-child td, &:last-child th": {
-                                  border: 0,
-                                },
-                              }}
-                            >
-                              <TableCell align="center">{row.bidder}</TableCell>
-                              <TableCell align="center">{row.bid}</TableCell>
-                              <TableCell align="center">{row.time}</TableCell>
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                    </TableContainer>
-                  ) : (
-                    <span>No one contributed to this auction !</span>
-                  )}
-                </DialogContentText>
-              </DialogContent>
-              <DialogActions>
-                <Button
-                  onClick={handleClose}
-                  style={{
-                    marginRight: "1rem",
-                    width: "8rem",
-                    height: "2.5rem",
-                    borderRadius: "1rem",
-                    backgroundColor: "#002884",
-                    color: "#D8DCF0",
-                    fontWeight: "600",
-                    border: "1px solid #002884",
-                  }}
-                  autoFocus
-                >
-                  Close
-                </Button>
-                <Button
-                  onClick={refundApprovers}
-                  disabled={!transactions.length}
-                  style={{
-                    marginRight: "1rem",
-                    width: "12rem",
-                    height: "2.5rem",
-                    borderRadius: "1rem",
-                    backgroundColor: "#002884",
-                    color: "#D8DCF0",
-                    fontWeight: "600",
-                    border: "1px solid #002884",
-                  }}
-                  autoFocus
-                >
-                  Refund Approvers
-                </Button>
-              </DialogActions>
-            </Dialog>
-          </div>
-        )}
-        {/* <Link route={`/auctions-list`}> */}
-        <Button onClick={() =>navigate(`/auctions-list`)}
+        ) : null}
+
+        <div
           style={{
-            marginTop: "2rem",
-            float: "left",
-            width: "20rem",
-            height: "2.5rem",
-            borderRadius: "1rem",
-            backgroundColor: "#002884",
-            color: "#D8DCF0",
-            fontWeight: "600",
-            border: "1px solid #002884",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "flex-start",
           }}
-          variant="outlined"
-        >
-          Return To Auctions Main Screen
-        </Button>
-        {/* </Link> */}
+        ></div>
       </div>
+      {!isAuctionActive && isManager && (
+        <Dialog
+          fullWidth
+          open={state.dialogOpen}
+          onClose={() => setState({ ...state, dialogOpen: false })}
+        >
+          <DialogTitle>
+            <Box
+              display="flex"
+              justifyContent="flex-start"
+              flexDirection={"row-reverse"}
+              alignItems="center"
+              textAlign={"center"}
+              gap={"140px"}
+            >
+              <Button onClick={() => setState({ ...state, dialogOpen: false })}>
+                <CloseIcon
+                  sx={{
+                    color: "black",
+                    background: "#9090D0",
+                    borderRadius: "20px",
+                    padding: "4px",
+                  }}
+                />
+              </Button>
+              <p className={showPageStyles.title}>Bidding History</p>
+            </Box>
+            <p className={showPageStyles.subTitle}>Auction # {address}</p>
+          </DialogTitle>
+          <DialogContent>
+            <DialogContentText>
+              {state.transactions.length ? (
+                <TableContainer component={Paper}>
+                  <Table sx={{ minWidth: 400 }} aria-label="simple table">
+                    <TableHead>
+                      <TableRow>
+                        <TableCell className={showPageStyles.headerCell}>
+                          Bidder Address
+                        </TableCell>
+                        <TableCell
+                          className={showPageStyles.headerCell}
+                          align="center"
+                        >
+                          Bid Amount
+                        </TableCell>
+                        <TableCell
+                          className={showPageStyles.headerCell}
+                          align="center"
+                        >
+                          Bid Time
+                        </TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {state.transactions.map((row, index) => (
+                        <TableRow
+                          key={index}
+                          sx={{
+                            "&:last-child td, &:last-child th": { border: 0 },
+                          }}
+                        >
+                          <TableCell align="center">{row.bidder}</TableCell>
+                          <TableCell align="center">{row.bid}</TableCell>
+                          <TableCell align="center">{row.time}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              ) : (
+                <span>No one contributed to this auction!</span>
+              )}
+            </DialogContentText>
+          </DialogContent>
+          <DialogActions>
+            <Button
+              variant="contained"
+              onClick={refundApprovers}
+              disabled={!state.transactions.length}
+              style={{ ...buttonStyle, marginRight: "1rem", width: "12rem" }}
+              autoFocus
+            >
+              Refund Approvers
+            </Button>
+          </DialogActions>
+        </Dialog>
+      )}
     </Layout>
   );
 }
+
 export default ShowAuctionPage;
