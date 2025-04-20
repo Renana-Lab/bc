@@ -3,11 +3,11 @@ import { Routes, Route, useNavigate } from "react-router-dom";
 import HomePage from "./pages/Home/HomePage.js";
 import NewAuctionPage from "./pages/NewAuction/NewAuctionPage.js";
 import AuctionsListPage from "./pages/AuctionsList/AuctionsListPage.js";
-import MetamaskTutorialPage from "./pages/Metamask/MetamaskTutorialPage.js";
+import MetamaskTutorialPage from "./pages/MetamaskLogin/MetamaskTutorialPage.js";
+import MetamaskGuidePage from "./pages/MetamaskGuide/MetamaskGuidePage.js";
 import ShowAuctionPage from "./pages/ShowAuction/ShowAuctionPage.js";
 import { MetaMaskProvider } from './Context/Context.js';  // Import MetaMaskProvider
 import { Toaster } from 'react-hot-toast';
-
 
 function App() {
 
@@ -16,7 +16,8 @@ function App() {
     <MetaMaskProvider>
         <Routes>
           <Route path="/" element={<HomePage />} />
-          <Route path="/metamask-tutorial" element={<MetamaskTutorialPage />} />
+          <Route path="/metamask-login" element={<MetamaskTutorialPage />} />
+          <Route path="/metamask-guide" element={<MetamaskGuidePage />} />
           <Route path="/open-auction" element={<NewAuctionPage />} />
           <Route path="/auctions-list" element={<AuctionsListPage />} />
           <Route path="/auction/:address" element={<ShowAuctionPage />} />

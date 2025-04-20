@@ -1,0 +1,47 @@
+.metamaskContainer {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  height: 100%;
+  margin: 0 auto;
+  padding: 40px;
+  gap: 30px;
+}
+
+
+.metamaskimg {
+  border-radius: 2rem;
+}
+.metamaskQuestion {
+  height: 100%;
+}
+.metamaskTitle {
+  color: #002884;
+  font-size: 2.5rem;
+  font-weight: 600;
+  padding-bottom: 1.5rem;
+}
+.metamaskText {
+  text-align: left;
+  color: #3f50b5;
+  font-size: 1.2rem;
+  padding-top: 0.8rem;
+}
+.metamaskButtons {
+  color: #002884;
+  padding-right: 5rem;
+  padding-top: 3rem;
+  display: flex;
+  justify-content: flex-start;
+  gap:40px;
+}
+
+.metamaskVideo {
+  padding: .5rem 1rem 1rem 1rem;
+  border-radius: 20px;
+  background: #9090D0;
+  box-shadow: rgba(100, 100, 111, 0.2) 0px 7px 29px 0px;
+  margin: 0 auto;
+  color: white;
+}

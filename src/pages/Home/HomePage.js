@@ -28,7 +28,7 @@ function HomePage() {
             />
             <div className={styles.introText}>
               <h2 style={{ margin: "0" }}>Welcome</h2>
-              <h3 style={{ margin: "0" }}>to our data marketplace.</h3>
+              <h3 style={{ margin: "0" }}>to our data marketplace</h3>
               <br />
               <p style={{ margin: "0", fontSize: "1.2rem" }}>
                 This is a blockchain based research platform, for running <br />
@@ -53,7 +53,7 @@ function HomePage() {
             }}
             variant="outlined"
             onClick={() => {
-              navigate("metamask-tutorial");
+              navigate("metamask-login");
             }}
           >
             Continue
