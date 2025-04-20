@@ -3,45 +3,102 @@
   flex-direction: column;
   justify-content: center;
   align-items: center;
-  height: 100%;
+  min-height: 100vh;
   margin: 0 auto;
-  padding: 40px;
-  gap: 30px;
+  padding: 2rem;
+  max-width: 1200px;
+  gap: 2rem;
 }
 
+.hero {
+  text-align: center;
+  padding: 2rem 0;
+}
 
-.metamaskimg {
-  border-radius: 2rem;
-}
-.metamaskQuestion {
-  height: 100%;
-}
 .metamaskTitle {
   color: #002884;
   font-size: 2.5rem;
-  font-weight: 600;
-  padding-bottom: 1.5rem;
+  font-weight: 700;
+  margin-bottom: 1rem;
 }
+
 .metamaskText {
-  text-align: left;
   color: #3f50b5;
   font-size: 1.2rem;
-  padding-top: 0.8rem;
+  line-height: 1.6;
+  text-align: center;
 }
-.metamaskButtons {
-  color: #002884;
-  padding-right: 5rem;
-  padding-top: 3rem;
-  display: flex;
-  justify-content: flex-start;
-  gap:40px;
+
+.backButton {
+  background-color: transparent !important;
+  color: #002884 !important;
+  border: 1px solid #002884;
+  border-radius: 20px;
+  padding: 0.5rem 1.5rem;
+  margin-top: 1rem;
+  text-transform: none;
+  font-weight: 600;
+  &:hover {
+    background-color: #e9e9f6 !important;
+  }
 }
 
 .metamaskVideo {
-  padding: .5rem 1rem 1rem 1rem;
+  background: #ffffff;
   border-radius: 20px;
-  background: #9090D0;
-  box-shadow: rgba(100, 100, 111, 0.2) 0px 7px 29px 0px;
-  margin: 0 auto;
+  box-shadow: 0 8px 30px rgba(100, 100, 111, 0.2);
+  padding: 1.5rem;
+  width: 100%;
+  max-width: 960px;
+}
+
+.stepNumber {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  background-color: #9090d0;
   color: white;
+  border-radius: 50%;
+  margin-right: 0.5rem;
+  font-weight: 600;
+}
+
+.actionButton {
+  background-color: #9090d0 !important;
+  color: white !important;
+  border-radius: 20px !important;
+  padding: 0.5rem 1.5rem !important;
+  margin: 1rem 0 !important;
+  text-transform: none !important;
+  font-weight: 600 !important;
+  &:hover {
+    background-color: #7b7bc0 !important;
+  }
+}
+
+.video {
+  width: 100%;
+  max-width: 940px;
+  height: auto;
+  border-radius: 10px;
+  margin: 1rem 0;
+}
+
+.footer {
+  text-align: center;
+  padding: 2rem 0;
+}
+
+@media (max-width: 768px) {
+  .metamaskContainer {
+    padding: 1rem;
+  }
+  .metamaskTitle {
+    font-size: 2rem;
+  }
+  .metamaskText {
+    font-size: 1rem;
+  }
 }
