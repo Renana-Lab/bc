@@ -50,6 +50,13 @@ function ShowAuctionPage() {
   const navigate = useNavigate();
 
   useEffect(() => {
+    if (!window.ethereum) {
+      navigate("/"); // Redirect away if no MetaMask
+      return;
+    }
+  });
+
+  useEffect(() => {
     const fetchData = async () => {
       const accounts = await window.ethereum.request({
         method: "eth_accounts",

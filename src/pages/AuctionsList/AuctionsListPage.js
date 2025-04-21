@@ -20,9 +20,18 @@ import styles from "./auctions.module.scss";
 import picSrc from "./Illustration_Start.png";
 
 function AuctionsListPage() {
+
+
   const navigate = useNavigate();
   const [auctionsList, setAuctionsList] = useState([]);
   const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!window.ethereum) {
+      navigate("/"); // Redirect away if no MetaMask
+      return;
+    }
+  }, );
 
   useEffect(() => {
     const fetchNetworkId = async () => {
@@ -34,7 +43,7 @@ function AuctionsListPage() {
       }
     };
     fetchNetworkId();
-  }, []);
+  }, );
 
   useEffect(() => {
     const fetchAuctionsList = async () => {
