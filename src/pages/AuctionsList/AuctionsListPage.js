@@ -175,9 +175,14 @@ function AuctionsListPage() {
                   .map((auction, index) => (
                     <TableRow
                       key={index}
-                      style={{
+                      onClick={() => navigate(`/auction/${auction.address}`)}
+                      sx={{
                         backgroundColor: "#E9E9F6",
                         marginBottom: "4rem",
+                        "&:hover": {
+                          backgroundColor: "#D0D0F0", // 👈 Change this to whatever hover color you want
+                          cursor: "pointer", // Optional: make it feel interactive
+                        },
                       }}
                     >
                       <TableCell>{auction.address}</TableCell>

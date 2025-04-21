@@ -29,42 +29,57 @@ function NewAuctionPage() {
 
   const handleChange = (event) => {
     const { name, value } = event.target;
+  
+    // For numeric fields, allow only positive integers
+    if (name === "minimumContribution" || name === "auctionDuration") {
+      if (!/^\d*$/.test(value)) return; // Reject non-digit input
+    }
+  
     setFormData((prev) => ({ ...prev, [name]: value }));
   };
+  
 
   const handleTooltip = (field) => {
     setExplanation(explanation === field ? null : field);
   };
 
   const validateForm = () => {
+    const isInt = (val) => Number.isInteger(Number(val));
+  
     if (
       !formData.minimumContribution ||
       isNaN(formData.minimumContribution) ||
-      Number(formData.minimumContribution) <= 0
+      Number(formData.minimumContribution) <= 0 ||
+      !isInt(formData.minimumContribution)
     ) {
-      toast.error("⚠️ Minimum contribution must be a positive number.");
+      toast.error("⚠️ Minimum contribution must be a positive whole number.");
       return false;
     }
+  
     if (
       !formData.auctionDuration ||
       isNaN(formData.auctionDuration) ||
       formData.auctionDuration < 1 ||
-      formData.auctionDuration > 30
+      formData.auctionDuration > 30 ||
+      !isInt(formData.auctionDuration)
     ) {
-      toast.error("⚠️ Auction duration must be between 1 and 30 minutes.");
+      toast.error("⚠️ Auction duration must be a whole number between 1 and 30.");
       return false;
     }
+  
     if (!formData.dataForSell.trim()) {
       toast.error("⚠️ Data for sale cannot be empty.");
       return false;
     }
+  
     if (!formData.dataDescription.trim()) {
       toast.error("⚠️ Data description cannot be empty.");
       return false;
     }
+  
     return true;
   };
-
+  
   const handleSubmit = useCallback(
     async (event) => {
       event.preventDefault();
