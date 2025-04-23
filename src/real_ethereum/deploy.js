@@ -30,7 +30,7 @@ const deploy = async () => {
     // Deploy contract
     const result = await new web3.eth.Contract(compiledFactory.abi)
       .deploy({ data: compiledFactory.evm.bytecode.object })
-      .send({ gas: gasEstimate + 10000, from: accounts[0] });
+      .send({ gas: gasEstimate + 30000, from: accounts[0] });
 
     console.log(
       "✅ Contract successfully deployed at:",
