@@ -1,53 +1,38 @@
+$primary-blue: #002884;
+$secondary-blue: #3f50b5;
+$deep-blue: #101070;
+$accent-yellow: #f0b030;
+$shadow: rgba(100, 100, 111, 0.2) 0px 7px 29px 0px;
+$border-radius: 2rem;
+
+@mixin text-style($color, $size, $weight: 600) {
+  color: $color;
+  font-size: $size;
+  font-weight: $weight;
+}
+
 .page {
   height: 100%;
   display: flex;
-  flex-direction: row;
   justify-content: center;
   gap: 20px;
 }
-.campaignInfo {
-  background: white;
-  margin-top: 2rem;
-  box-shadow: rgba(100, 100, 111, 0.2) 0px 7px 29px 0px;
-  border-radius: 2rem;
-  width: 50rem;
-  padding: 1.5rem;
-}
-.introductionTitle {
-  color: #002884;
-  font-size: 2rem;
-  font-weight: 600;
-}
-.winnerTitle {
-  color: #002884;
-  font-size: 2.2rem;
-  font-weight: 600;
-  margin-bottom: 1rem;
-  text-align: left;
-}
-.winnerLabel {
-  color: #002884;
-  font-size: 1.4rem;
-  font-weight: 600;
-}
-.introductionDetail {
-  margin-bottom: 2rem;
-}
-.introductionLabel {
-  color: #002884;
-  font-size: 1.3rem;
-  font-weight: 600;
-}
-.introductionText {
-  color: #3f50b5;
-  font-size: 1.1rem;
-  font-weight: 500;
-}
+
+.campaignInfo,
 .contributeForm {
-  background: #F0B030;
+  border-radius: $border-radius;
+  box-shadow: $shadow;
   margin-top: 2rem;
-  border-radius: 2rem;
-  box-shadow: rgba(100, 100, 111, 0.2) 0px 7px 10px 0px;
+  padding: 1.5rem;
+  background: white;
+}
+
+.campaignInfo {
+  width: 50rem;
+}
+
+.contributeForm {
+  background: $accent-yellow;
   width: 25rem;
   margin-left: 20px;
   padding: 3rem;
@@ -56,30 +41,56 @@
   flex-direction: column;
   justify-content: flex-start;
 }
+
+.introductionTitle {
+  @include text-style($primary-blue, 2rem);
+}
+
+.winnerTitle {
+  @include text-style($primary-blue, 2.2rem);
+  margin-bottom: 1rem;
+  text-align: left;
+}
+
+.winnerLabel {
+  @include text-style($primary-blue, 1.4rem);
+}
+
+.introductionDetail {
+  margin-bottom: 2rem;
+}
+
+.introductionLabel {
+  @include text-style($primary-blue, 1.3rem);
+}
+
+.introductionText {
+  @include text-style($secondary-blue, 1.1rem, 500);
+}
+
 .centered {
   text-align: left;
 }
+
 .revealedData {
   margin-top: 1rem;
 }
+
 .headerCell {
-  color: #3f50b5;
-  font-size: 1rem;
-  font-weight: 600;
+  @include text-style($secondary-blue, 1rem);
 }
+
 .flex {
   display: flex;
   flex-direction: column;
 }
+
 .title {
+  @include text-style($secondary-blue, 1.4rem);
   text-align: center;
-  color: #3f50b5;
-  font-weight: 600;
 }
 
 .subTitle {
+  @include text-style($deep-blue, 0.9rem, 500);
   text-align: center;
-  color: #101070;
-  font-size: smaller;
-  font-weight: 500;
 }

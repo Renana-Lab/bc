@@ -24,7 +24,6 @@ const useStyles = makeStyles({
       backgroundColor: "#e0e0ff",
       borderRadius: "20px",
     },
-
   },
   link: {
     textDecoration: "none",
@@ -48,21 +47,25 @@ const DrawerComponent = (props) => {
     >
       <ListItem className={classes.item} button onClick={() => nav("/")}>
         <span className={styles1.homePage}></span>
-        <ListItemText >Home</ListItemText>
+        <ListItemText>Back to Login</ListItemText>
       </ListItem>
 
-      <ListItem className={classes.item} button onClick={() => nav("/auctions-list")}>
+      <ListItem
+        className={classes.item}
+        button
+        onClick={() => nav("/auctions-list")}
+      >
         <span className={styles1.ViewAuctions}></span>
-        <ListItemText >
-          View Auctions
-        </ListItemText>
+        <ListItemText>View Auctions</ListItemText>
       </ListItem>
 
-      <ListItem className={classes.item} button  onClick={() => nav("/open-auction")}>
+      <ListItem
+        className={classes.item}
+        button
+        onClick={() => nav("/open-auction")}
+      >
         <span className={styles1.createAuction}></span>
-        <ListItemText>
-          Start An Auction
-        </ListItemText>
+        <ListItemText>Start An Auction</ListItemText>
       </ListItem>
 
       <ListItem className={classes.item} button>
