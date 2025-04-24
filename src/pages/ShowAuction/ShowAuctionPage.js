@@ -183,13 +183,13 @@ function ShowAuctionPage() {
       <div className={showPageStyles.page}>
         {renderAuctionInfo()}
 
-        {isAuctionActive && !isManager && (
+        {isAuctionActive && !isManager ? (
           <div className={showPageStyles.contributeForm}>
             <ContributeForm address={address} />
           </div>
-        )}
+        ):null}
 
-        {!isAuctionActive && isHighestBidder && (
+        {!isAuctionActive && isHighestBidder ? (
           <div className={showPageStyles.contributeForm}>
             <div className={showPageStyles.centered}>
               <img alt="medal" width={"80px"} src={picSrc} />
@@ -220,10 +220,10 @@ function ShowAuctionPage() {
               </div>
             )}
           </div>
-        )}
+        ):null}
       </div>
 
-      {!isAuctionActive && isManager && (
+      {!isAuctionActive && isManager ? (
         <Dialog fullWidth open={state.dialogOpen} onClose={() => setState(prev => ({ ...prev, dialogOpen: false }))}>
           <DialogTitle>
             <Box display="flex" justifyContent="flex-start" flexDirection="row-reverse" alignItems="center" gap="140px">
@@ -274,7 +274,7 @@ function ShowAuctionPage() {
             </Button>
           </DialogActions>
         </Dialog>
-      )}
+      ):null}
     </Layout>
   );
 }

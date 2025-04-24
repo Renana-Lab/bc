@@ -154,6 +154,7 @@ function NewAuctionPage() {
           <h3 className={styles.introductionTitle}>Create Auction</h3>
           {renderTooltip("minBid", "Minimum Bid (in Wei)")}
           <TextField
+            type="number"
             sx={{ width: "85%" }}
             name="minimumContribution"
             value={formData.minimumContribution}

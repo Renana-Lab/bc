@@ -9,6 +9,7 @@ import web3 from "../real_ethereum/web3";
 import styles from "./../styles/components.module.scss";
 import CircularProgress from "@mui/material/CircularProgress";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { Typography } from "@mui/material";
 
 class ContributeForm extends Component {
   state = {
@@ -72,22 +73,26 @@ class ContributeForm extends Component {
           <label className={styles.tooltiplabe}>
             Minimum Bid (in Wei)
             <button onClick={this.onReveal} className={styles.circleIcon}>
-              <FontAwesomeIcon icon={["fas", "question-circle"]} />
+              ?
             </button>
             <div className={styles.description}>
               {this.state.weiInfoClicked && (
                 <div>
                   <div>
-                    Wei is the smallest (base) unit of Ether , you can convert
-                    between Ether units
-                    <a href="https://eth-converter.com/"> here</a>
+                    <Typography fontStyle={'italic'}>
+                      Wei is the smallest (base) unit of Ether , you can convert
+                      between Ether units
+                      <a href="https://eth-converter.com/"> here.</a>
+                    </Typography>
                   </div>
                 </div>
               )}
             </div>
           </label>
         </div>
+        <label>min 1000</label>
         <TextField
+        type="number"
           style={{
             borderRadius: ".5rem",
             backgroundColor: "#D8DCF0",
