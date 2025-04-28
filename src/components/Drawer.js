@@ -81,6 +81,14 @@ const DrawerComponent = (props) => {
           </a>
         </ListItemText>
       </ListItem>
+
+      <ListItem
+        className={classes.item}
+        button
+        onClick={() => nav("/manage-budget")}
+      >
+        <ListItemText>ADMIN ZONE</ListItemText>
+      </ListItem>
     </div>
   );
 

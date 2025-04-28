@@ -5,11 +5,10 @@ import Button from "@mui/material/Button";
 import Alert from "@mui/material/Alert";
 import Campaign from "../real_ethereum/campaign";
 import web3 from "../real_ethereum/web3";
-// import { Router } from "../routes";
 import styles from "./../styles/components.module.scss";
 import CircularProgress from "@mui/material/CircularProgress";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { Typography } from "@mui/material";
+import toast from "react-hot-toast";
 
 class ContributeForm extends Component {
   state = {
@@ -19,11 +18,13 @@ class ContributeForm extends Component {
     error: false,
     weiInfoClicked: false,
   };
+
   onSubmit = async (event) => {
-    this.setState({ transactionIsLoading: true });
-    this.setState({ error: false });
     event.preventDefault();
-    const campaign = Campaign(this.props.address);
+    this.setState({ transactionIsLoading: true, error: false, errorMessage: "" });
+
+    const { address, remainingBudget, onSuccessfulBid } = this.props;
+    const campaign = Campaign(address);
     const summary = await campaign.methods.getSummary().call();
     const minimumContribution = summary[0];
     const endTime = summary[7];
@@ -31,41 +32,77 @@ class ContributeForm extends Component {
     const accounts = await window.ethereum.request({ method: "eth_accounts" });
     const connectedAccount = accounts[0];
     const monney = await campaign.methods.getBid(connectedAccount).call();
-    let val = 0;
-    val = monney;
-    if (
-      Number(val) + Number(this.state.bidAmount) <
-      Number(minimumContribution)
-    ) {
-      this.setState({ error: true });
+    let val = Number(monney);
+
+    // Budget check
+    const bidValue = Number(this.state.bidAmount);
+    if (bidValue <= 0) {
       this.setState({
-        errorMessage:
-          "You can only contribute more than the minimum required !",
+        error: true,
+        errorMessage: "Bid amount must be greater than 0",
+        transactionIsLoading: false,
       });
-    } else if (Number(endTime + "000") < Date.now()) {
-      this.setState({ error: true });
-      this.setState({
-        errorMessage: "You cannnot contribute to a closed auction !",
-      });
-    } else if (connectedAccount.toLowerCase() === manager.toLowerCase()) {
-      this.setState({ error: true });
-      this.setState({
-        errorMessage: "You cannnot contribute to your own auction !",
-      });
+      return;
     }
-    try {
-      const accounts = await web3.eth.getAccounts();
-      await campaign.methods.contribute().send({
-        from: accounts[0],
-        value: this.state.bidAmount,
+    if (bidValue > remainingBudget) {
+      this.setState({
+        error: true,
+        errorMessage: `Bid exceeds your remaining budget of ${remainingBudget} wei`,
+        transactionIsLoading: false,
       });
-      // Router.replaceRoute(`/auction/${this.props.address}`);
-    } catch (err) {}
-    this.setState({ transactionIsLoading: false });
+      return;
+    }
+
+    // Existing validation checks
+    if (val + bidValue < Number(minimumContribution)) {
+      this.setState({
+        error: true,
+        errorMessage: "You can only contribute more than the minimum required!",
+        transactionIsLoading: false,
+      });
+      return;
+    }
+    if (Number(endTime + "000") < Date.now()) {
+      this.setState({
+        error: true,
+        errorMessage: "You cannot contribute to a closed auction!",
+        transactionIsLoading: false,
+      });
+      return;
+    }
+    if (connectedAccount.toLowerCase() === manager.toLowerCase()) {
+      this.setState({
+        error: true,
+        errorMessage: "You cannot contribute to your own auction!",
+        transactionIsLoading: false,
+      });
+      return;
+    }
+
+    try {
+      await campaign.methods.contribute().send({
+        from: connectedAccount,
+        value: bidValue,
+      });
+
+      // Show a success toast
+      toast.success("Bid placed successfully!");
+
+      // Update spending and refresh via callback
+      onSuccessfulBid(bidValue);
+
+      // Clear the input field only on success
+      this.setState({ bidAmount: "", transactionIsLoading: false });
+    } catch (err) {
+      toast.error("Error placing bid: " + err.message);
+      this.setState({ transactionIsLoading: false, error: true, errorMessage: err.message });
+    }
   };
+
   onReveal = (event) => {
     this.setState({ weiInfoClicked: true });
   };
+
   render() {
     return (
       <FormControl>
@@ -79,8 +116,8 @@ class ContributeForm extends Component {
               {this.state.weiInfoClicked && (
                 <div>
                   <div>
-                    <Typography fontStyle={'italic'}>
-                      Wei is the smallest (base) unit of Ether , you can convert
+                    <Typography fontStyle="italic">
+                      Wei is the smallest (base) unit of Ether, you can convert
                       between Ether units
                       <a href="https://eth-converter.com/"> here.</a>
                     </Typography>
@@ -90,9 +127,8 @@ class ContributeForm extends Component {
             </div>
           </label>
         </div>
-        <label>min 1000</label>
         <TextField
-        type="number"
+          type="number"
           style={{
             borderRadius: ".5rem",
             backgroundColor: "#D8DCF0",
@@ -104,7 +140,9 @@ class ContributeForm extends Component {
           onChange={(event) => this.setState({ bidAmount: event.target.value })}
         />
         {this.state.error && (
-          <Alert severity="error">{this.state.errorMessage}</Alert>
+          <Alert severity="error" sx={{ marginTop: "1rem" }}>
+            {this.state.errorMessage}
+          </Alert>
         )}
         <Button
           style={{
@@ -119,6 +157,7 @@ class ContributeForm extends Component {
             minWidth: "11rem",
           }}
           onClick={this.onSubmit}
+          disabled={this.state.transactionIsLoading}
         >
           {!this.state.transactionIsLoading ? (
             <span>Submit your bid</span>

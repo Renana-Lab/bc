@@ -111,7 +111,7 @@ function NewAuctionPage() {
         navigate("/auctions-list");
       } catch (err) {
         console.error("Auction creation failed:", err);
-        toast.error("❌ Auction creation failed. Please try again.", {
+        toast.error("Auction creation failed. Please try again.", {
           id: toastId,
         });
       }

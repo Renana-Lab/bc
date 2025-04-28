@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useLocation } from "react-router-dom";
 import moment from "moment";
 import Layout from "../../components/Layout";
 import Campaign from "../../real_ethereum/campaign";
@@ -7,18 +7,31 @@ import ContributeForm from "../../components/ContributeForm";
 import Countdown from "react-countdown";
 import toast from "react-hot-toast";
 import {
-  Box, Button, Dialog, DialogActions, DialogContent,
-  DialogContentText, DialogTitle, Table, TableBody,
-  TableCell, TableContainer, TableHead, TableRow, Paper
+  Box,
+  Button,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  Paper,
+  Typography,
 } from "@mui/material";
 import {
   Gavel as GavelIcon,
   ListOutlined as ListIcon,
   KeyboardReturnOutlined as ReturnIcon,
-  Close as CloseIcon
+  Close as CloseIcon,
 } from "@mui/icons-material";
 import showPageStyles from "./show.module.scss";
 import picSrc from "./medal.png";
+import { getRemainingBudget, addUserSpending, reduceUserSpending } from "../AuctionsList/AuctionsListPage";
 
 const buttonStyle = {
   height: "2.5rem",
@@ -45,46 +58,47 @@ function ShowAuctionPage() {
     highestBidder: "",
     transactions: [],
     contributors: [],
+    refundsProcessed: false, // Track if refunds have been processed
   });
 
   const { address } = useParams();
   const navigate = useNavigate();
+  const { state: navState } = useLocation();
+  const [remainingBudget, setRemainingBudget] = useState(navState?.remainingBudget || 0);
 
-  // Derived values
-  const isAuctionActive = useMemo(() => Number(state.endTime + "000") > Date.now(), [state.endTime]);
-  const isManager = useMemo(() =>
-    state.manager?.toLowerCase() === state.connectedAccount?.toLowerCase(), [state.manager, state.connectedAccount]
-  );
-  const isHighestBidder = useMemo(() =>
-    state.highestBidder?.toLowerCase() === state.connectedAccount?.toLowerCase(), [state.highestBidder, state.connectedAccount]
+  const isAuctionActive = useMemo(
+    () => Number(state.endTime + "000") > Date.now(),
+    [state.endTime]
   );
 
-  // Handle refunds
-  const refundApprovers = useCallback(async () => {
-    const isActive = await state.auction.methods.getStatus().call();
-    if (isActive) return toast.error("You already refunded contributing accounts");
+  const isManager = useMemo(
+    () => state.manager?.toLowerCase() === state.connectedAccount?.toLowerCase(),
+    [state.manager, state.connectedAccount]
+  );
 
-    const refundPromises = state.contributors
-      .filter((addr) => addr.toLowerCase() !== state.highestBidder.toLowerCase())
-      .map((addr) => state.auction.methods.withdrawBid(addr).send({ from: state.manager }));
+  const isHighestBidder = useMemo(
+    () => state.highestBidder?.toLowerCase() === state.connectedAccount?.toLowerCase(),
+    [state.highestBidder, state.connectedAccount]
+  );
 
-    await Promise.all(refundPromises);
-  }, [state]);
+  const hasUserBid = useMemo(
+    () => state.contributors.some(addr => addr.toLowerCase() === state.connectedAccount?.toLowerCase()),
+    [state.contributors, state.connectedAccount]
+  );
 
-  // Initial fetch
-  useEffect(() => {
+  const fetchAuctionData = useCallback(async () => {
     if (!window.ethereum) return navigate("/");
 
-    const fetchData = async () => {
+    try {
       const [accounts, auctionInstance] = await Promise.all([
         window.ethereum.request({ method: "eth_accounts" }),
-        Campaign(address)
+        Campaign(address),
       ]);
 
       const [summary, rawTransactions, contributors] = await Promise.all([
         auctionInstance.methods.getSummary().call(),
         auctionInstance.methods.getTransactions().call(),
-        auctionInstance.methods.getAddresses().call()
+        auctionInstance.methods.getAddresses().call(),
       ]);
 
       const transactions = rawTransactions.map(({ sellerAddress, value, time }) => ({
@@ -92,6 +106,18 @@ function ShowAuctionPage() {
         bid: value,
         time: moment.unix(Number(time)).format("DD-MM-YYYY HH:mm:ss"),
       }));
+
+      // Check if refunds have been processed by checking if non-winners have a balance of 0
+      let refundsProcessed = true;
+      for (const contributor of contributors) {
+        if (contributor.toLowerCase() !== summary[8].toLowerCase()) { // Not the highest bidder
+          const balance = await auctionInstance.methods.getBid(contributor).call();
+          if (Number(balance) > 0) {
+            refundsProcessed = false;
+            break;
+          }
+        }
+      }
 
       setState(prev => ({
         ...prev,
@@ -106,14 +132,64 @@ function ShowAuctionPage() {
         endTime: summary[7],
         highestBidder: summary[8],
         transactions,
-        contributors
+        contributors,
+        refundsProcessed,
       }));
-    };
 
-    fetchData();
+      // Update remaining budget after fetching account data
+      setRemainingBudget(getRemainingBudget(accounts[0].toLowerCase()));
+    } catch (err) {
+      console.error(err);
+      toast.error("Error fetching auction data");
+    }
   }, [address, navigate]);
 
-  // UI Renders
+  useEffect(() => {
+    fetchAuctionData();
+    const interval = setInterval(fetchAuctionData, 10000); // Refresh every 10 seconds
+    return () => clearInterval(interval);
+  }, [fetchAuctionData]);
+
+  const refundApprovers = useCallback(async () => {
+    try {
+      const isActive = await state.auction.methods.getStatus().call();
+      if (isActive) {
+        toast.error("Auction still active, cannot refund yet.");
+        return;
+      }
+
+      const refundPromises = state.contributors
+        .filter(addr => addr.toLowerCase() !== state.highestBidder.toLowerCase())
+        .map(async (addr) => {
+          const bidAmount = await state.auction.methods.getBid(addr).call();
+          if (Number(bidAmount) > 0) { // Only refund if they have a balance
+            await state.auction.methods.withdrawBid(addr).send({ from: state.manager });
+            // Update userSpendingStore
+            reduceUserSpending(addr.toLowerCase(), Number(bidAmount));
+            // If the refunded user is the connected account, update their budget
+            if (addr.toLowerCase() === state.connectedAccount.toLowerCase()) {
+              setRemainingBudget(getRemainingBudget(state.connectedAccount.toLowerCase()));
+            }
+          }
+        });
+
+      await Promise.all(refundPromises);
+      toast.success("Refunds processed for non-winning bidders!");
+      setState(prev => ({ ...prev, refundsProcessed: true }));
+      fetchAuctionData();
+    } catch (err) {
+      console.error(err);
+      toast.error("Error processing refunds: " + err.message);
+    }
+  }, [state]);
+
+  const handleSuccessfulBid = (bidAmount) => {
+    addUserSpending(state.connectedAccount.toLowerCase(), bidAmount);
+    const updatedBudget = getRemainingBudget(state.connectedAccount.toLowerCase());
+    setRemainingBudget(updatedBudget);
+    fetchAuctionData();
+  };
+
   const renderAuctionInfo = () => (
     <Box>
       <div className={showPageStyles.campaignInfo}>
@@ -164,12 +240,12 @@ function ShowAuctionPage() {
 
       <Button
         startIcon={isAuctionActive ? <GavelIcon /> : <ReturnIcon />}
-        onClick={() => navigate("/auctions-list")}
+        onClick={() => navigate("/auctions-list", { state: { remainingBudget } })}
         style={{
           ...buttonStyle,
           marginTop: isAuctionActive ? "6.5rem" : "2rem",
           width: isAuctionActive ? "15rem" : "24rem",
-          marginBottom: "2rem"
+          marginBottom: "2rem",
         }}
         variant="contained"
       >
@@ -183,16 +259,23 @@ function ShowAuctionPage() {
       <div className={showPageStyles.page}>
         {renderAuctionInfo()}
 
-        {isAuctionActive && !isManager ? (
+        {isAuctionActive && !isManager && (
           <div className={showPageStyles.contributeForm}>
-            <ContributeForm address={address} />
+            <Typography variant="h6" textAlign="center" sx={{ marginBottom: "1rem" }}>
+              Remaining Budget: {remainingBudget === Infinity ? "Unlimited" : `${remainingBudget} wei`}
+            </Typography>
+            <ContributeForm
+              address={address}
+              remainingBudget={remainingBudget}
+              onSuccessfulBid={handleSuccessfulBid}
+            />
           </div>
-        ):null}
+        )}
 
-        {!isAuctionActive && isHighestBidder ? (
+        {!isAuctionActive && isHighestBidder && (
           <div className={showPageStyles.contributeForm}>
             <div className={showPageStyles.centered}>
-              <img alt="medal" width={"80px"} src={picSrc} />
+              <img alt="medal" width="80px" src={picSrc} />
               <div className={showPageStyles.winnerTitle}>Congrats!</div>
               <div className={showPageStyles.winnerLabel}>
                 You won the auction and have now access to the data
@@ -220,11 +303,25 @@ function ShowAuctionPage() {
               </div>
             )}
           </div>
-        ):null}
+        )}
+
+        {!isAuctionActive && !isManager && hasUserBid && !isHighestBidder && (
+          <div className={showPageStyles.contributeForm}>
+            <Typography variant="h6" textAlign="center" sx={{ marginBottom: "1rem" }}>
+              {state.refundsProcessed
+                ? "You did not win the auction. Your bid has been refunded."
+                : "You did not win the auction. Awaiting refund from the manager."}
+            </Typography>
+          </div>
+        )}
       </div>
 
-      {!isAuctionActive && isManager ? (
-        <Dialog fullWidth open={state.dialogOpen} onClose={() => setState(prev => ({ ...prev, dialogOpen: false }))}>
+      {!isAuctionActive && isManager && (
+        <Dialog
+          fullWidth
+          open={state.dialogOpen}
+          onClose={() => setState(prev => ({ ...prev, dialogOpen: false }))}
+        >
           <DialogTitle>
             <Box display="flex" justifyContent="flex-start" flexDirection="row-reverse" alignItems="center" gap="140px">
               <Button onClick={() => setState(prev => ({ ...prev, dialogOpen: false }))}>
@@ -234,6 +331,7 @@ function ShowAuctionPage() {
             </Box>
             <p className={showPageStyles.subTitle}>Auction # {address}</p>
           </DialogTitle>
+
           <DialogContent>
             <DialogContentText>
               {state.transactions.length ? (
@@ -262,19 +360,20 @@ function ShowAuctionPage() {
               )}
             </DialogContentText>
           </DialogContent>
+
           <DialogActions>
             <Button
               variant="contained"
-              disabled={!state.transactions.length}
+              disabled={!state.transactions.length || state.refundsProcessed}
               style={{ ...buttonStyle, marginRight: "1rem", width: "12rem" }}
               onClick={refundApprovers}
               autoFocus
             >
-              Refund Approvers
+              {state.refundsProcessed ? "Refunds Processed" : "Refund Approvers"}
             </Button>
           </DialogActions>
         </Dialog>
-      ):null}
+      )}
     </Layout>
   );
 }

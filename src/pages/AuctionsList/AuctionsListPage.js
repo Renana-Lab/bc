@@ -9,8 +9,10 @@ import {
   Button,
   Paper,
   CircularProgress,
+  Typography,
+  Box,
 } from "@mui/material";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import Countdown from "react-countdown";
 import factory from "../../real_ethereum/factory";
 import Campaign from "../../real_ethereum/campaign";
@@ -18,63 +20,110 @@ import web3 from "../../real_ethereum/web3";
 import Layout from "../../components/Layout";
 import styles from "./auctions.module.scss";
 import picSrc from "./Illustration_Start.png";
+import { getDefaultBudget } from "../ManageBudget/ManageBudgetPage";
+
+// Initialize userSpendingStore from localStorage
+const userSpendingStore = JSON.parse(localStorage.getItem("userSpendingStore")) || {};
+
+export const getRemainingBudget = (userAddress) => {
+  const defaultBudget = getDefaultBudget();
+  if (defaultBudget === 0) return Infinity;
+  const spent = userSpendingStore[userAddress]?.totalSpent || 0;
+  return defaultBudget - spent;
+};
+
+export const addUserSpending = (userAddress, amount) => {
+  if (!userSpendingStore[userAddress]) {
+    userSpendingStore[userAddress] = { totalSpent: 0 };
+  }
+  userSpendingStore[userAddress].totalSpent += Number(amount);
+  localStorage.setItem("userSpendingStore", JSON.stringify(userSpendingStore));
+};
+
+export const reduceUserSpending = (userAddress, amount) => {
+  if (userSpendingStore[userAddress]) {
+    userSpendingStore[userAddress].totalSpent = Math.max(0, userSpendingStore[userAddress].totalSpent - Number(amount));
+    localStorage.setItem("userSpendingStore", JSON.stringify(userSpendingStore));
+  }
+};
 
 function AuctionsListPage() {
-
-
   const navigate = useNavigate();
+  const { state: navState } = useLocation();
   const [auctionsList, setAuctionsList] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [currentUser, setCurrentUser] = useState(null);
+  const [remainingBudget, setRemainingBudget] = useState(
+    navState?.remainingBudget || (getDefaultBudget() === 0 ? Infinity : getDefaultBudget())
+  );
+
+  const fetchNetworkId = async () => {
+    try {
+      const id = await web3.eth.net.getId();
+      console.log("✅ Connected Network ID:", id);
+    } catch (error) {
+      console.error("❌ Error fetching network ID:", error);
+    }
+  };
+
+  const fetchAuctionsList = async () => {
+    try {
+      const auctions = await factory.methods.getDeployedCampaigns().call();
+      const auctionData = await Promise.all(
+        auctions.map(async (address) => {
+          const auction = Campaign(address);
+          const details = await auction.methods.getSummary().call();
+          const contributors = await auction.methods.getAddresses().call();
+          let isRefunded = false;
+          const currentUserAddress = window.ethereum?.selectedAddress?.toLowerCase();
+          if (
+            contributors.includes(currentUserAddress) &&
+            details[8].toLowerCase() !== currentUserAddress &&
+            Number(details[7] + "000") < Date.now()
+          ) {
+            const balance = await auction.methods.getBid(currentUserAddress).call();
+            isRefunded = Number(balance) === 0;
+          }
+          return {
+            address,
+            contributors,
+            contributorsCount: contributors.length || 0,
+            dataForSell: details[5],
+            dataDescription: details[6],
+            endTime: Number(details[7] + "000"),
+            highestBidder: details[8],
+            highestBid: details[4],
+            isRefunded,
+          };
+        })
+      );
+      setAuctionsList(auctionData);
+    } catch (error) {
+      console.error("❌ Error fetching auctions:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
     if (!window.ethereum) {
-      navigate("/"); // Redirect away if no MetaMask
-      return;
+      navigate("/");
+    } else {
+      const userAddress = window.ethereum.selectedAddress?.toLowerCase();
+      setCurrentUser(userAddress);
+      setRemainingBudget(getRemainingBudget(userAddress));
+
+      fetchNetworkId();
+      fetchAuctionsList();
+
+      const interval = setInterval(() => {
+        fetchAuctionsList();
+        setRemainingBudget(getRemainingBudget(userAddress));
+        console.log("⏰ Fetching auctions list...");
+      }, 10000);
+
+      return () => clearInterval(interval);
     }
-  }, );
-
-  useEffect(() => {
-    const fetchNetworkId = async () => {
-      try {
-        const id = await web3.eth.net.getId();
-        console.log("✅ Connected Network ID:", id);
-      } catch (error) {
-        console.error("❌ Error fetching network ID:", error);
-      }
-    };
-    fetchNetworkId();
-  }, );
-
-  useEffect(() => {
-    const fetchAuctionsList = async () => {
-      try {
-        const auctions = await factory.methods.getDeployedCampaigns().call();
-        const auctionData = await Promise.all(
-          auctions.map(async (address) => {
-            const auction = Campaign(address);
-            const details = await auction.methods.getSummary().call();
-            const contributors = await auction.methods.getAddresses().call();
-            return {
-              address,
-              contributorsCount: contributors.length || 0,
-              dataForSell: details[5],
-              endTime: Number(details[7] + "000"),
-              highestBidder: details[8],
-              timeLeft: Number(details[7] + "000") < Date.now(),
-              dataDescription: details[6],
-              highestBid: details[4],
-            };
-          })
-        );
-        setAuctionsList(auctionData);
-      } catch (error) {
-        console.error("❌ Error fetching auctions:", error);
-      } finally {
-        setLoading(false); // Stop loading
-      }
-    };
-
-    fetchAuctionsList();
   }, []);
 
   const getTimeLeft = (endTime) => {
@@ -83,6 +132,38 @@ function AuctionsListPage() {
     ) : (
       <Countdown date={endTime} />
     );
+  };
+
+  const isAuctionOpen = (endTime) => {
+    return Number(endTime) > Date.now();
+  };
+
+  const hasUserWonAuction = (auction) => {
+    const currentUserAddress = window.ethereum?.selectedAddress?.toLowerCase();
+    const auctionEnded = Number(auction.endTime) < Date.now();
+    const isHighestBidder = auction.highestBidder?.toLowerCase() === currentUserAddress;
+    return auctionEnded && isHighestBidder;
+  };
+
+  const isUserInAuction = (auction) => {
+    const currentUserAddress = window.ethereum?.selectedAddress?.toLowerCase();
+    return auction.contributors?.some(
+      (address) => address.toLowerCase() === currentUserAddress
+    );
+  };
+
+  const getRowStyles = (hasWon, isOpen, isRefunded) => ({
+    backgroundColor: hasWon ? "#90EE90" : isOpen ? "#BBDEFB" : isRefunded ? "#FFD700" : "#E9E9F6",
+    marginBottom: "1rem",
+    "&:hover": {
+      backgroundColor: hasWon ? "#77DD77" : isOpen ? "#A3CFFA" : isRefunded ? "#FFC107" : "#D0D0F0",
+      cursor: "pointer",
+    },
+  });
+
+  const handleRowClick = (address, e) => {
+    e.stopPropagation();
+    navigate(`/auction/${address}`, { state: { remainingBudget } });
   };
 
   return (
@@ -129,9 +210,15 @@ function AuctionsListPage() {
           </div>
         </div>
 
+        <Box textAlign="center" sx={{ margin: "1rem 0" }}>
+          <Typography variant="h6">
+            Your Remaining Budget: {remainingBudget === Infinity ? "Unlimited" : `${remainingBudget} wei`}
+          </Typography>
+        </Box>
+
         {loading ? (
           <div className={styles.loadingContainer}>
-            <CircularProgress size={50} /> {/* Loading spinner */}
+            <CircularProgress size={50} />
             <p>Loading auctions...</p>
           </div>
         ) : (
@@ -147,57 +234,41 @@ function AuctionsListPage() {
             <Table aria-label="auctions table">
               <TableHead>
                 <TableRow>
-                  <TableCell style={{ color: "#101070", fontWeight: "bold" }}>
-                    Address
-                  </TableCell>
-                  <TableCell
-                    align="center"
-                    style={{ color: "#101070", fontWeight: "bold" }}
-                  >
-                    Data Description
-                  </TableCell>
-                  <TableCell
-                    align="center"
-                    style={{ color: "#101070", fontWeight: "bold" }}
-                  >
-                    Auction Status
-                  </TableCell>
-                  <TableCell
-                    align="center"
-                    style={{ color: "#101070", fontWeight: "bold" }}
-                  >
-                    Highest Bid
-                  </TableCell>
-                  <TableCell
-                    align="center"
-                    style={{ color: "#101070", fontWeight: "bold" }}
-                  >
-                    Number Of Bidders
-                  </TableCell>
-                  <TableCell align="right"></TableCell>
+                  {[
+                    "Address",
+                    "Data Description",
+                    "Auction Status",
+                    "Highest Bid",
+                    "Number Of Bidders",
+                    "Refund Status",
+                    "",
+                  ].map((title, idx) => (
+                    <TableCell
+                      key={idx}
+                      align={idx > 0 ? "center" : "left"}
+                      style={{ color: "#101070", fontWeight: "bold" }}
+                    >
+                      {title}
+                    </TableCell>
+                  ))}
                 </TableRow>
               </TableHead>
               <TableBody>
-                {auctionsList
-                  .slice()
-                  .reverse()
-                  .map((auction, index) => (
+                {auctionsList.slice().reverse().map((auction, index) => {
+                  const userWon = hasUserWonAuction(auction);
+                  const userParticipated = isUserInAuction(auction);
+                  const auctionOpen = isAuctionOpen(auction.endTime);
+                  const refundStatus = userParticipated && !userWon && !auctionOpen
+                    ? (auction.isRefunded ? "Refunded" : "Awaiting Refund")
+                    : "-";
+                  return (
                     <TableRow
                       key={index}
-                      onClick={() => navigate(`/auction/${auction.address}`)}
-                      sx={{
-                        backgroundColor: "#E9E9F6",
-                        marginBottom: "4rem",
-                        "&:hover": {
-                          backgroundColor: "#D0D0F0", // 👈 Change this to whatever hover color you want
-                          cursor: "pointer", // Optional: make it feel interactive
-                        },
-                      }}
+                      onClick={() => navigate(`/auction/${auction.address}`, { state: { remainingBudget } })}
+                      sx={getRowStyles(userWon, auctionOpen, auction.isRefunded)}
                     >
                       <TableCell>{auction.address}</TableCell>
-                      <TableCell align="center">
-                        {auction.dataDescription}
-                      </TableCell>
+                      <TableCell align="center">{auction.dataDescription}</TableCell>
                       <TableCell
                         align="center"
                         style={{ color: "#D07030D0", fontWeight: "bold" }}
@@ -205,27 +276,27 @@ function AuctionsListPage() {
                         {getTimeLeft(auction.endTime)}
                       </TableCell>
                       <TableCell align="center">{auction.highestBid}</TableCell>
-                      <TableCell align="center">
-                        {auction.contributorsCount}
-                      </TableCell>
+                      <TableCell align="center">{auction.contributorsCount}</TableCell>
+                      <TableCell align="center">{refundStatus}</TableCell>
                       <TableCell align="center">
                         <Button
                           variant="contained"
                           style={{
-                            backgroundColor: "#9090D0",
+                            backgroundColor: userWon ? "#2e7d32" : auction.isRefunded ? "#FFD700" : "#9090D0",
                             color: "white",
                             borderRadius: "20px",
-                            padding: "10px 20px",
+                            padding: "6px 16px",
+                            textTransform: "uppercase",
+                            fontSize: "0.875rem",
                           }}
-                          onClick={() =>
-                            navigate(`/auction/${auction.address}`)
-                          }
+                          onClick={(e) => handleRowClick(auction.address, e)}
                         >
-                          View Auction
+                          {userWon ? "View Data" : "View Auction"}
                         </Button>
                       </TableCell>
                     </TableRow>
-                  ))}
+                  );
+                })}
               </TableBody>
             </Table>
           </TableContainer>

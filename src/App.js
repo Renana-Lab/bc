@@ -5,6 +5,7 @@ import NewAuctionPage from "./pages/NewAuction/NewAuctionPage.js";
 import AuctionsListPage from "./pages/AuctionsList/AuctionsListPage.js";
 import MetamaskTutorialPage from "./pages/MetamaskLogin/MetamaskTutorialPage.js";
 import MetamaskGuidePage from "./pages/MetamaskGuide/MetamaskGuidePage.js";
+import ManageBudgetPage from "./pages/ManageBudget/ManageBudgetPage.js";
 import ShowAuctionPage from "./pages/ShowAuction/ShowAuctionPage.js";
 import { MetaMaskProvider } from "./Context/Context.js";
 import { Toaster } from "react-hot-toast";
@@ -127,6 +128,7 @@ function App() {
             <Route path="/open-auction" element={<NewAuctionPage />} />
             <Route path="/auctions-list" element={<AuctionsListPage />} />
             <Route path="/auction/:address" element={<ShowAuctionPage />} />
+            <Route path="/manage-budget" element={<ManageBudgetPage />} />
           </Routes>
           <Toaster />
         </>
