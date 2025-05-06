@@ -181,7 +181,7 @@ function ShowAuctionPage() {
       console.error(err);
       toast.error("Error processing refunds: " + err.message);
     }
-  }, [state]);
+  }, [state, fetchAuctionData]);
 
   const handleSuccessfulBid = (bidAmount) => {
     addUserSpending(state.connectedAccount.toLowerCase(), bidAmount);

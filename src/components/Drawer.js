@@ -83,11 +83,14 @@ const DrawerComponent = (props) => {
       </ListItem>
 
       <ListItem
+      sx={{marginTop: "230%", textAlign: "center"}}
         className={classes.item}
+        dense
         button
         onClick={() => nav("/manage-budget")}
       >
-        <ListItemText>ADMIN ZONE</ListItemText>
+        
+        <ListItemText> - - ADMIN ZONE - - </ListItemText>
       </ListItem>
     </div>
   );

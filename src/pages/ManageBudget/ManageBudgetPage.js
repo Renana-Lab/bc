@@ -1,42 +1,43 @@
-import { Button, TextField, Typography } from "@mui/material";
+import { Button, TextField, Typography, Box } from "@mui/material";
 import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import Layout from "../../components/Layout";
-import Box from "@mui/material/Box";
 import toast from "react-hot-toast";
 
-// Initialize globalBudgetStore from localStorage
-const globalBudgetStore = JSON.parse(localStorage.getItem("globalBudgetStore")) || {
-  defaultBudget: 2000, // Default budget for all users (in wei)
+const LOCAL_STORAGE_KEY = "globalBudgetStore";
+const DEFAULT_BUDGET = 2000; // in wei
+const ADMIN_SECRET = "1234"; // ⚠️ Warning: in production, NEVER store secrets like this on the frontend
+
+const getStoredBudget = () => {
+  const stored = localStorage.getItem(LOCAL_STORAGE_KEY);
+  return stored ? JSON.parse(stored).defaultBudget : DEFAULT_BUDGET;
 };
 
-// Function to get the default budget
-export const getDefaultBudget = () => globalBudgetStore.defaultBudget;
+const saveBudget = (budget) => {
+  localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify({ defaultBudget: budget }));
+};
+
+export const getDefaultBudget = () => getStoredBudget();
 
 const ManageBudgetPage = () => {
-  const [budget, setBudget] = useState(globalBudgetStore.defaultBudget);
+  const navigate = useNavigate();
+  const [budget, setBudget] = useState(getStoredBudget());
   const [isAdmin, setIsAdmin] = useState(false);
   const [pass, setPass] = useState("");
   const [error, setError] = useState("");
-  const secKey = "1234"; // Example secret key (replace with a secure method in production)
 
-  const handlePass = (event) => {
-    const newPass = event.target.value;
-    setPass(newPass);
-    handleAuth(newPass);
-  };
-
-  const handleAuth = (passValue) => {
-    if (passValue === secKey) {
+  const authenticate = () => {
+    if (pass === ADMIN_SECRET) {
       setIsAdmin(true);
       setError("");
+      toast.success("Admin access granted");
     } else {
-      setIsAdmin(false);
       setError("Incorrect admin key");
     }
   };
 
-  const handleBudgetChange = (event) => {
-    const value = Number(event.target.value);
+  const handleBudgetChange = (e) => {
+    const value = Number(e.target.value);
     if (value >= 0) {
       setBudget(value);
       setError("");
@@ -45,15 +46,13 @@ const ManageBudgetPage = () => {
     }
   };
 
-  const handleSetBudget = () => {
+  const handleSaveBudget = () => {
     if (budget >= 0) {
-      globalBudgetStore.defaultBudget = budget;
-      // Save to localStorage
-      localStorage.setItem("globalBudgetStore", JSON.stringify(globalBudgetStore));
-      setError("");
+      saveBudget(budget);
+      navigate("/auctions-list");
       toast.success(
         budget === 0
-          ? "Budget set to unlimited spending for all users"
+          ? "Unlimited spending enabled for all users"
           : `Budget set to ${budget} wei for all users`
       );
     } else {
@@ -62,102 +61,100 @@ const ManageBudgetPage = () => {
   };
 
   const handleResetBudget = () => {
-    setBudget(2000);
-    globalBudgetStore.defaultBudget = 2000;
-    // Save to localStorage
-    localStorage.setItem("globalBudgetStore", JSON.stringify(globalBudgetStore));
-    setError("");
+    saveBudget(DEFAULT_BUDGET);
+    setBudget(DEFAULT_BUDGET);
+    navigate("/auctions-list");
     toast.success("Budget reset to 2000 wei for all users");
   };
 
+  const handleKeyDown = (e) => {
+    if (e.key === "Enter") {
+      authenticate();
+    }
+  };
+
   useEffect(() => {
-    const handleKeyPress = (event) => {
-      if (event.code === "Space") {
-        handleAuth(pass);
-      }
-    };
-    window.addEventListener("keydown", handleKeyPress);
-    return () => window.removeEventListener("keydown", handleKeyPress);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
   }, [pass]);
 
   return (
     <Layout>
+      <button onClick={alert(1)}></button>
       <Box
-        className="manage-budget-page"
         display="flex"
-        justifyContent="center"
         flexDirection="column"
+        alignItems="center"
         sx={{
-          margin: "200px auto 0 auto",
-          background: "white",
-          padding: "2rem",
-          borderRadius: "20px",
-          width: "40rem",
-          boxShadow: "0px 0px 25px rgba(0, 0, 0, 0.2)",
+          marginTop: 16,
+          backgroundColor: "background.paper",
+          padding: 4,
+          borderRadius: 4,
+          boxShadow: 3,
+          width: "100%",
+          maxWidth: 480,
+          mx: "auto",
         }}
       >
         {isAdmin ? (
           <>
-            <Typography variant="h3" textAlign="center">
-              Set Budget
+            <Typography variant="h4" gutterBottom>
+              Set Global Budget
             </Typography>
             <TextField
-              onChange={handleBudgetChange}
+              label="Budget (wei)"
               type="number"
-              label="Budget (in wei)"
-              variant="outlined"
               value={budget}
-              sx={{ marginTop: "1rem" }}
+              onChange={handleBudgetChange}
+              fullWidth
+              sx={{ mt: 2 }}
             />
-            <Typography
-              variant="caption"
-              textAlign="center"
-              sx={{ marginTop: "0.5rem", display: "block" }}
-            >
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
               Set to 0 for unlimited spending
             </Typography>
             {error && (
-              <Typography color="error" textAlign="center" sx={{ marginTop: "0.5rem" }}>
+              <Typography color="error" sx={{ mt: 1 }}>
                 {error}
               </Typography>
             )}
-            <Box
-              display="flex"
-              justifyContent="center"
-              gap="1rem"
-              sx={{ marginTop: "1rem" }}
-            >
-              <Button variant="contained" onClick={handleSetBudget}>
-                Set
+            <Box display="flex" gap={2} sx={{ mt: 3 }}>
+              <Button variant="contained" color="success" onClick={handleSaveBudget} fullWidth>
+                Save
               </Button>
-              <Button variant="outlined" onClick={handleResetBudget}>
+              <Button variant="outlined" color="secondary" onClick={handleResetBudget} fullWidth>
                 Reset
               </Button>
             </Box>
           </>
         ) : (
           <>
-            <Typography variant="h5" textAlign="center">
-             Admin Zone
-            </Typography>
-            <br />
-            <Typography variant="h6" textAlign="center">
-              Enter Key to Unlock
+            <Typography variant="h5" gutterBottom>
+              Admin Access Required
             </Typography>
             <TextField
-              onChange={handlePass}
               label="Admin Key"
-              variant="outlined"
+              type="password"
               value={pass}
-              sx={{ marginTop: "1rem" }}
+              onChange={(e) => setPass(e.target.value)}
+              fullWidth
+              sx={{ mt: 2 }}
             />
+            <Button
+              variant="contained"
+              color="primary"
+              fullWidth
+              sx={{ mt: 3 }}
+              onClick={authenticate}
+            >
+              Unlock
+            </Button>
             {error && (
-              <Typography color="error" textAlign="center" sx={{ marginTop: "0.5rem" }}>
+              <Typography color="error" sx={{ mt: 2 }}>
                 {error}
               </Typography>
             )}
-            <Typography variant="caption" textAlign="center" sx={{ marginTop: "0.5rem" }}>
-              Press the "Space" key to unlock the admin panel
+            <Typography variant="caption" color="text.secondary" sx={{ mt: 2 }}>
+              Press Enter after typing your key
             </Typography>
           </>
         )}

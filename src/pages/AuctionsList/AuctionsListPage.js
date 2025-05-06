@@ -210,11 +210,11 @@ function AuctionsListPage() {
           </div>
         </div>
 
-        <Box textAlign="center" sx={{ margin: "1rem 0" }}>
-          <Typography variant="h6">
+        {/* <Box textAlign="center" sx={{ margin: "1rem 0" }}>
+          <Typography variant="h5" fontStyle={'italic'} fontFamily={'inherit'} >
             Your Remaining Budget: {remainingBudget === Infinity ? "Unlimited" : `${remainingBudget} wei`}
           </Typography>
-        </Box>
+        </Box> */}
 
         {loading ? (
           <div className={styles.loadingContainer}>
@@ -225,17 +225,16 @@ function AuctionsListPage() {
           <TableContainer
             component={Paper}
             style={{
-              margin: "0 auto",
-              padding: "30px",
+              padding: "5px 20px",
               borderRadius: "20px",
-              width: "max-content",
+              width: "100%",
             }}
           >
             <Table aria-label="auctions table">
               <TableHead>
                 <TableRow>
                   {[
-                    "Address",
+                    "Address",  
                     "Data Description",
                     "Auction Status",
                     "Highest Bid",
@@ -285,9 +284,10 @@ function AuctionsListPage() {
                             backgroundColor: userWon ? "#2e7d32" : auction.isRefunded ? "#FFD700" : "#9090D0",
                             color: "white",
                             borderRadius: "20px",
-                            padding: "6px 16px",
+                            padding: "6px 20px",
                             textTransform: "uppercase",
                             fontSize: "0.875rem",
+                            width: "max-content",
                           }}
                           onClick={(e) => handleRowClick(auction.address, e)}
                         >
