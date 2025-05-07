@@ -1,21 +1,38 @@
 // SPDX-License-Identifier: MIT
-
 pragma solidity ^0.8.9;
-pragma experimental ABIEncoderV2;
+
+abstract contract ReentrancyGuard {
+    uint256 private constant _NOT_ENTERED = 1;
+    uint256 private constant _ENTERED = 2;
+
+    uint256 private _status;
+
+    constructor() {
+        _status = _NOT_ENTERED;
+    }
+
+    modifier nonReentrant() {
+        require(_status != _ENTERED, "ReentrancyGuard: reentrant call");
+        _status = _ENTERED;
+        _;
+        _status = _NOT_ENTERED;
+    }
+}
 
 contract CampaignFactory {
     address payable[] public deployedCampaigns;
 
     function createCampaign(
-        // create a campaign and add it to deployed existings campaigns
         uint256 minimum,
-        string memory dataSell,
+        string memory dataForSale,
         string memory dataDesc,
-        uint256 duration
+        uint256 durationInMinutes
     ) public {
-        uint256 dur = 60 * duration + block.timestamp; // convert duration to real end time
+        require(minimum > 0, "Minimum must be greater than 0");
+        uint256 deadline = block.timestamp + durationInMinutes * 60;
+
         address newCampaign = address(
-            new Campaign(minimum, dataSell, dataDesc, msg.sender, dur)
+            new Campaign(minimum, dataForSale, dataDesc, msg.sender, deadline)
         );
         deployedCampaigns.push(payable(newCampaign));
     }
@@ -28,178 +45,116 @@ contract CampaignFactory {
         return deployedCampaigns;
     }
 
-    function checkEndedAuctions() public payable {
+    function checkEndedAuctions() public {
         uint256 campaignsLength = deployedCampaigns.length;
-        for (uint256 i = 0; i < campaignsLength; i++) {
+        for (uint256 i = 0; i < campaignsLength; ) {
             Campaign campaign = Campaign(deployedCampaigns[i]);
-            campaign.EndedAuctions();
+            campaign.endAuction();
+            unchecked {
+                i++;
+            }
         }
     }
 }
 
-contract Campaign {
-    event LogMyVariable(address[] indexed myVariable);
-    event LogMyVariable1(address indexed myVariable);
-
-    // approvers mean people who contributed to the auction
+contract Campaign is ReentrancyGuard {
     struct Bid {
         uint256 value;
         uint256 time;
         address sellerAddress;
     }
+
     Bid[] public transactions;
     address public manager;
     uint256 public minimumContribution;
-    string public dataForSell;
+    string public dataForSale;
     string public dataDescription;
-    mapping(address => bool) public approvers;
-    mapping(address => uint256) public approversMonney;
-    uint256 public approversCount;
-    address[] public addresses;
+    mapping(address => bool) public bidders;
+    mapping(address => uint256) public biddersMoney;
+    uint256 public biddersCount;
+    address[] public bidderAddresses;
     address public highestBidder;
     uint256 public highestBid;
     uint256 public endTime;
     bool public closed;
-    // uint256 public startTime;
-    modifier restricted() {
-        require(msg.sender == manager);
+    bool public auctionEnded;
+
+    modifier onlyManager() {
+        require(msg.sender == manager, "Only manager can call this");
         _;
     }
 
     constructor(
         uint256 minimum,
-        string memory dataSell,
-        string memory dataDesc,
+        string memory _dataForSale,
+        string memory _dataDescription,
         address creator,
-        uint256 endtime
-    ) // uint256 starttime
-    {
+        uint256 _endTime
+    ) {
         manager = creator;
         minimumContribution = minimum;
-        dataForSell = dataSell;
-        dataDescription = dataDesc;
-        endTime = endtime;
+        dataForSale = _dataForSale;
+        dataDescription = _dataDescription;
+        endTime = _endTime;
         closed = false;
-        // startTime = starttime;
+        auctionEnded = false;
     }
 
-    function compareAddresses(address a, address b) public pure returns (bool) {
-        return toLower(a) == toLower(b);
-    }
+    function endAuction() public nonReentrant {
+        if (block.timestamp >= endTime && !auctionEnded) {
+            auctionEnded = true;
 
-    function toLower(address _address) public pure returns (address) {
-        uint160 intAddress = uint160(_address);
-        for (uint i = 0; i < 20; i++) {
-            uint8 b = uint8(bytes20(_address)[i]);
-            if (b >= 65 && b <= 90) {
-                b += 32;
-            }
-            intAddress |= uint160(b) << uint160(8 * (19 - i));
-        }
-        return address(intAddress);
-    }
-
-    function EndedAuctions() public payable {
-        //step 1 check if the auction is ended
-        if (endTime < block.timestamp) {
-            // step 2 go over the approvers
-            uint256 index = 0;
-            address[] memory nonWinningAddresses = new address[](
-                addresses.length - 1
-            );
-
-            for (uint i = 0; i < addresses.length; i++) {
-                emit LogMyVariable1(toLower(addresses[i]));
-                emit LogMyVariable1(highestBidder);
-                if (
-                    !compareAddresses(
-                        toLower(addresses[i]),
-                        toLower(highestBidder)
-                    )
-                ) {
-                    nonWinningAddresses[index] = addresses[i];
-                    index++;
+            for (uint256 i = 0; i < bidderAddresses.length; ) {
+                address bidder = bidderAddresses[i];
+                if (bidder != highestBidder) {
+                    withdrawBid(payable(bidder));
                 }
-
-                // step 3 give monney back if not the winner
-                // if (addresses[i] != highestBidder){
-                //     withdrawBid(payable(msg.sender));
-                // }
-            }
-
-            emit LogMyVariable(nonWinningAddresses);
-            emit LogMyVariable(addresses);
-            for (uint256 i = 0; i < nonWinningAddresses.length; i++) {
-                withdrawBid(payable(nonWinningAddresses[i]));
+                unchecked {
+                    i++;
+                }
             }
         }
     }
 
-    function getTransactions() public view returns (Bid[] memory) {
-        return transactions;
-    }
+    function contribute() public payable nonReentrant {
+        require(msg.sender != manager, "You can't bid on your own data");
+        require(block.timestamp < endTime, "Auction ended");
 
-    function getBid(address add) public view returns (uint256) {
-        uint256 monney = 0;
+        uint256 newBidAmount = biddersMoney[msg.sender] + msg.value;
+        require(newBidAmount > highestBid, "Bid too low");
+        require(newBidAmount >= minimumContribution, "Below minimum");
 
-        if (approversMonney[add] != 0) {
-            monney = approversMonney[add];
-        }
-
-        return monney;
-    }
-    function getStatus() public view returns (bool) {
-        return closed;
-    }
-
-    function getAddresses() public view returns (address[] memory) {
-        return addresses;
-    }
-
-    function contribute() public payable {
-        // require(msg.value > minimumContribution);
-        require(msg.sender != manager, "you can't buy your own data");
-        require(
-            endTime > block.timestamp,
-            "you can't contribute to an ended auction"
-        );
         transactions.push(Bid(msg.value, block.timestamp, msg.sender));
 
-        if (approvers[msg.sender] != true) {
-            require(msg.value > minimumContribution);
+        if (!bidders[msg.sender]) {
+            bidders[msg.sender] = true;
+            biddersCount++;
+            bidderAddresses.push(msg.sender);
+        }
 
-            // approvers who never contributed
-            require(msg.value > highestBid, "value < highest"); // we compare the bid he proposed to the highest bid
-            approvers[msg.sender] = true;
-            highestBidder = msg.sender;
-            highestBid = msg.value;
-            approversCount++;
-            approversMonney[msg.sender] = msg.value;
-            addresses.push(msg.sender);
-        } else {
-            // approvers who already contributed
+        biddersMoney[msg.sender] = newBidAmount;
+        highestBidder = msg.sender;
+        highestBid = newBidAmount;
+    }
 
-            uint256 calculatedAmmount = msg.value + approversMonney[msg.sender];
-            require(calculatedAmmount > highestBid, "value < highest"); // we compare to the highest bid , THE BID HE ADDED TO THE BID HE PUT PREVIOUSLY
-            require(calculatedAmmount > minimumContribution);
-
-            approversMonney[msg.sender] = calculatedAmmount;
-            highestBidder = msg.sender;
-            highestBid = calculatedAmmount;
+    function withdrawBid(address payable bidder) internal {
+        uint256 amount = biddersMoney[bidder];
+        if (amount > 0) {
+            biddersMoney[bidder] = 0;
+            (bool sent, ) = bidder.call{value: amount}("");
+            require(sent, "Transfer failed");
         }
     }
 
-    function withdrawBid(address payable _address) public {
-        (_address).transfer(approversMonney[_address]);
-        // after refunding non winners , we have to make sure we dont refund them twice
-        // evrything has to be initialized 
-        // approvers , approvercount , approversmonney , addresses
-        // approvers (mapping adress with flag will stay same)
-        // approverscount (is not usefull anymore we can reinitalize it )
-        // approversMonney (mapping adress with money sould be initialise)
-        // transactions (array of Bid should remain the same)
-        // adreeses (array of addresses which contributes sould stay the same)
-        approversMonney[_address] = 0;
+    function withdrawFunds() public nonReentrant onlyManager {
+        require(auctionEnded, "Auction not yet ended");
+
+        uint256 amount = biddersMoney[highestBidder];
+        biddersMoney[highestBidder] = 0;
+
+        (bool sent, ) = payable(manager).call{value: amount}("");
+        require(sent, "Transfer failed");
+
         closed = true;
     }
 
@@ -222,14 +177,36 @@ contract Campaign {
         return (
             minimumContribution,
             address(this).balance,
-            approversCount,
+            biddersCount,
             manager,
             highestBid,
-            dataForSell,
+            dataForSale,
             dataDescription,
             endTime,
             highestBidder,
-            addresses
+            bidderAddresses
         );
     }
+
+    function getBid(address bidder) public view returns (uint256) {
+        return biddersMoney[bidder];
+    }
+
+    function getStatus() public view returns (bool) {
+        return closed;
+    }
+
+    function getBidders() public view returns (address[] memory) {
+        return bidderAddresses;
+    }
+
+    function getTransactions() public view returns (Bid[] memory) {
+        return transactions;
+    }
+
+    function isAuctionActive() public view returns (bool) {
+        return block.timestamp < endTime && !auctionEnded;
+    }
 }
+// This contract is a simplified version of a crowdfunding campaign on Ethereum. It allows users to create campaigns, contribute funds, and manage bids. The contract includes features like minimum contributions, auction end times, and bid withdrawals. The CampaignFactory contract manages multiple campaigns and allows for checking the status of all campaigns.
+// The Campaign contract includes functions for contributing to the campaign, withdrawing bids, and checking the status of the auction. It also implements a reentrancy guard to prevent reentrant calls. Overall, this contract provides a basic framework for crowdfunding campaigns on Ethereum.
