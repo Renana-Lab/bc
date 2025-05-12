@@ -4,7 +4,6 @@ pragma solidity ^0.8.9;
 abstract contract ReentrancyGuard {
     uint256 private constant _NOT_ENTERED = 1;
     uint256 private constant _ENTERED = 2;
-
     uint256 private _status;
 
     constructor() {
@@ -31,10 +30,15 @@ contract CampaignFactory {
         require(minimum > 0, "Minimum must be greater than 0");
         uint256 deadline = block.timestamp + durationInMinutes * 60;
 
-        address newCampaign = address(
-            new Campaign(minimum, dataForSale, dataDesc, msg.sender, deadline)
+        Campaign newCampaign = new Campaign(
+            minimum,
+            dataForSale,
+            dataDesc,
+            msg.sender,
+            deadline
         );
-        deployedCampaigns.push(payable(newCampaign));
+
+        deployedCampaigns.push(payable(address(newCampaign)));
     }
 
     function getDeployedCampaigns()
@@ -69,10 +73,12 @@ contract Campaign is ReentrancyGuard {
     uint256 public minimumContribution;
     string public dataForSale;
     string public dataDescription;
-    mapping(address => bool) public bidders;
+
     mapping(address => uint256) public biddersMoney;
-    uint256 public biddersCount;
+    mapping(address => bool) public bidders;
     address[] public bidderAddresses;
+
+    uint256 public biddersCount;
     address public highestBidder;
     uint256 public highestBid;
     uint256 public endTime;
@@ -100,58 +106,63 @@ contract Campaign is ReentrancyGuard {
         auctionEnded = false;
     }
 
-    function endAuction() public nonReentrant {
-        if (block.timestamp >= endTime && !auctionEnded) {
-            auctionEnded = true;
-
-            for (uint256 i = 0; i < bidderAddresses.length; ) {
-                address bidder = bidderAddresses[i];
-                if (bidder != highestBidder) {
-                    withdrawBid(payable(bidder));
-                }
-                unchecked {
-                    i++;
-                }
-            }
-        }
-    }
-
     function contribute() public payable nonReentrant {
         require(msg.sender != manager, "You can't bid on your own data");
         require(block.timestamp < endTime, "Auction ended");
+        require(msg.value > highestBid, "Bid too low");
+        require(msg.value >= minimumContribution, "Below minimum");
 
-        uint256 newBidAmount = biddersMoney[msg.sender] + msg.value;
-        require(newBidAmount > highestBid, "Bid too low");
-        require(newBidAmount >= minimumContribution, "Below minimum");
+        uint256 previousBid = biddersMoney[msg.sender];
 
+        // Refund previous bid if it exists
+        if (previousBid > 0) {
+            (bool refunded, ) = payable(msg.sender).call{value: previousBid}(
+                ""
+            );
+            require(refunded, "Refund failed");
+        }
+
+        // Replace previous bid with the new one
+        biddersMoney[msg.sender] = msg.value;
+        highestBid = msg.value;
+        highestBidder = msg.sender;
+
+        // Record bid
         transactions.push(Bid(msg.value, block.timestamp, msg.sender));
 
+        // Track unique bidders
         if (!bidders[msg.sender]) {
             bidders[msg.sender] = true;
             biddersCount++;
             bidderAddresses.push(msg.sender);
         }
-
-        biddersMoney[msg.sender] = newBidAmount;
-        highestBidder = msg.sender;
-        highestBid = newBidAmount;
     }
 
-    function withdrawBid(address payable bidder) internal {
-        uint256 amount = biddersMoney[bidder];
-        if (amount > 0) {
-            biddersMoney[bidder] = 0;
-            (bool sent, ) = bidder.call{value: amount}("");
-            require(sent, "Transfer failed");
+    function endAuction() public nonReentrant {
+        if (block.timestamp >= endTime && !auctionEnded) {
+            auctionEnded = true;
         }
+    }
+
+    function refund() public nonReentrant {
+        require(auctionEnded, "Auction not yet ended");
+        require(msg.sender != highestBidder, "Winner cannot refund");
+
+        uint256 amount = biddersMoney[msg.sender];
+        require(amount > 0, "No funds to refund");
+
+        biddersMoney[msg.sender] = 0;
+        (bool sent, ) = payable(msg.sender).call{value: amount}("");
+        require(sent, "Refund failed");
     }
 
     function withdrawFunds() public nonReentrant onlyManager {
         require(auctionEnded, "Auction not yet ended");
 
         uint256 amount = biddersMoney[highestBidder];
-        biddersMoney[highestBidder] = 0;
+        require(amount > 0, "No funds to withdraw");
 
+        biddersMoney[highestBidder] = 0;
         (bool sent, ) = payable(manager).call{value: amount}("");
         require(sent, "Transfer failed");
 
@@ -208,5 +219,3 @@ contract Campaign is ReentrancyGuard {
         return block.timestamp < endTime && !auctionEnded;
     }
 }
-// This contract is a simplified version of a crowdfunding campaign on Ethereum. It allows users to create campaigns, contribute funds, and manage bids. The contract includes features like minimum contributions, auction end times, and bid withdrawals. The CampaignFactory contract manages multiple campaigns and allows for checking the status of all campaigns.
-// The Campaign contract includes functions for contributing to the campaign, withdrawing bids, and checking the status of the auction. It also implements a reentrancy guard to prevent reentrant calls. Overall, this contract provides a basic framework for crowdfunding campaigns on Ethereum.
