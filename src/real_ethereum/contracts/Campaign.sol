@@ -48,45 +48,44 @@ contract CampaignFactory {
     {
         return deployedCampaigns;
     }
-
-    function checkEndedAuctions() public {
-        uint256 campaignsLength = deployedCampaigns.length;
-        for (uint256 i = 0; i < campaignsLength; ) {
-            Campaign campaign = Campaign(deployedCampaigns[i]);
-            campaign.endAuction();
-            unchecked {
-                i++;
-            }
-        }
-    }
 }
 
 contract Campaign is ReentrancyGuard {
     struct Bid {
         uint256 value;
         uint256 time;
-        address sellerAddress;
+        address bidder;
     }
 
-    Bid[] public transactions;
     address public manager;
     uint256 public minimumContribution;
     string public dataForSale;
     string public dataDescription;
+    uint256 public endTime;
 
-    mapping(address => uint256) public biddersMoney;
-    mapping(address => bool) public bidders;
-    address[] public bidderAddresses;
-
-    uint256 public biddersCount;
     address public highestBidder;
     uint256 public highestBid;
-    uint256 public endTime;
-    bool public closed;
+
     bool public auctionEnded;
+    bool public sellerPaid;
+
+    Bid[] public bids;
+    address[] public allBidders;
+    mapping(address => uint256) public pendingReturns;
+    mapping(address => bool) public hasBid;
 
     modifier onlyManager() {
         require(msg.sender == manager, "Only manager can call this");
+        _;
+    }
+
+    modifier auctionActive() {
+        require(block.timestamp < endTime, "Auction has ended");
+        _;
+    }
+
+    modifier auctionExpired() {
+        require(block.timestamp >= endTime, "Auction still active");
         _;
     }
 
@@ -102,117 +101,97 @@ contract Campaign is ReentrancyGuard {
         dataForSale = _dataForSale;
         dataDescription = _dataDescription;
         endTime = _endTime;
-        closed = false;
         auctionEnded = false;
+        sellerPaid = false;
     }
 
-    function contribute() public payable nonReentrant {
-        require(msg.sender != manager, "You can't bid on your own data");
-        require(block.timestamp < endTime, "Auction ended");
-        require(msg.value > highestBid, "Bid too low");
-        require(msg.value >= minimumContribution, "Below minimum");
+    function contribute() public payable nonReentrant auctionActive {
+        require(msg.sender != manager, "Owner cannot bid");
+        require(msg.value >= minimumContribution, "Bid below minimum");
+        require(msg.value > highestBid, "There already is a higher bid");
 
-        uint256 previousBid = biddersMoney[msg.sender];
-
-        // Refund previous bid if it exists
-        if (previousBid > 0) {
-            (bool refunded, ) = payable(msg.sender).call{value: previousBid}(
-                ""
-            );
-            require(refunded, "Refund failed");
+        // Refund old bid if bidder is rebidding
+        if (pendingReturns[msg.sender] > 0) {
+            uint256 oldBid = pendingReturns[msg.sender];
+            pendingReturns[msg.sender] = 0;
+            (bool refunded, ) = payable(msg.sender).call{value: oldBid}("");
+            require(refunded, "Old bid refund failed");
         }
 
-        // Replace previous bid with the new one
-        biddersMoney[msg.sender] = msg.value;
-        highestBid = msg.value;
+        // Refund previous highest bidder
+        if (highestBid > 0) {
+            pendingReturns[highestBidder] = highestBid;
+        }
+
         highestBidder = msg.sender;
+        highestBid = msg.value;
 
-        // Record bid
-        transactions.push(Bid(msg.value, block.timestamp, msg.sender));
+        bids.push(Bid(msg.value, block.timestamp, msg.sender));
 
-        // Track unique bidders
-        if (!bidders[msg.sender]) {
-            bidders[msg.sender] = true;
-            biddersCount++;
-            bidderAddresses.push(msg.sender);
+        if (!hasBid[msg.sender]) {
+            hasBid[msg.sender] = true;
+            allBidders.push(msg.sender);
         }
     }
 
-    function endAuction() public nonReentrant {
-        if (block.timestamp >= endTime && !auctionEnded) {
-            auctionEnded = true;
+    function endAuction() public nonReentrant auctionExpired {
+        require(!auctionEnded, "Auction already ended");
+
+        auctionEnded = true;
+
+        // Auto-refund all non-winning bidders
+        for (uint256 i = 0; i < allBidders.length; i++) {
+            address bidder = allBidders[i];
+            if (bidder != highestBidder) {
+                uint256 amount = pendingReturns[bidder];
+                if (amount > 0) {
+                    pendingReturns[bidder] = 0;
+                    (bool sent, ) = payable(bidder).call{value: amount}("");
+                    require(sent, "Refund failed");
+                }
+            }
         }
     }
 
-    function refund() public nonReentrant {
-        require(auctionEnded, "Auction not yet ended");
-        require(msg.sender != highestBidder, "Winner cannot refund");
+    function withdrawSellerFunds() public nonReentrant onlyManager auctionExpired {
+        require(auctionEnded, "Auction must be ended");
+        require(!sellerPaid, "Funds already withdrawn");
 
-        uint256 amount = biddersMoney[msg.sender];
-        require(amount > 0, "No funds to refund");
+        uint256 amount = highestBid;
+        highestBid = 0;
+        sellerPaid = true;
 
-        biddersMoney[msg.sender] = 0;
-        (bool sent, ) = payable(msg.sender).call{value: amount}("");
-        require(sent, "Refund failed");
-    }
-
-    function withdrawFunds() public nonReentrant onlyManager {
-        require(auctionEnded, "Auction not yet ended");
-
-        uint256 amount = biddersMoney[highestBidder];
-        require(amount > 0, "No funds to withdraw");
-
-        biddersMoney[highestBidder] = 0;
         (bool sent, ) = payable(manager).call{value: amount}("");
-        require(sent, "Transfer failed");
-
-        closed = true;
+        require(sent, "Seller withdraw failed");
     }
 
     function getSummary()
         public
         view
         returns (
-            uint256,
-            uint256,
-            uint256,
-            address,
-            uint256,
-            string memory,
-            string memory,
-            uint256,
-            address,
+            uint256, uint256, address, address,
+            string memory, string memory, uint256,
             address[] memory
         )
     {
         return (
             minimumContribution,
             address(this).balance,
-            biddersCount,
             manager,
-            highestBid,
+            highestBidder,
             dataForSale,
             dataDescription,
             endTime,
-            highestBidder,
-            bidderAddresses
+            allBidders
         );
     }
 
-    function getBid(address bidder) public view returns (uint256) {
-        return biddersMoney[bidder];
+    function getBids() public view returns (Bid[] memory) {
+        return bids;
     }
 
-    function getStatus() public view returns (bool) {
-        return closed;
-    }
-
-    function getBidders() public view returns (address[] memory) {
-        return bidderAddresses;
-    }
-
-    function getTransactions() public view returns (Bid[] memory) {
-        return transactions;
+    function getPendingReturn(address user) public view returns (uint256) {
+        return pendingReturns[user];
     }
 
     function isAuctionActive() public view returns (bool) {
