@@ -71,7 +71,7 @@ contract Campaign is ReentrancyGuard {
 
     Bid[] public bids;
     address[] public allBidders;
-    mapping(address => uint256) public pendingReturns;
+    mapping(address => uint256) public userBids;
     mapping(address => bool) public hasBid;
 
     modifier onlyManager() {
@@ -101,32 +101,32 @@ contract Campaign is ReentrancyGuard {
         dataForSale = _dataForSale;
         dataDescription = _dataDescription;
         endTime = _endTime;
-        auctionEnded = false;
-        sellerPaid = false;
     }
 
-    function contribute() public payable nonReentrant auctionActive {
+    function contribute(
+        uint256 newTotalBid
+    ) public payable nonReentrant auctionActive {
         require(msg.sender != manager, "Owner cannot bid");
-        require(msg.value >= minimumContribution, "Bid below minimum");
-        require(msg.value > highestBid, "There already is a higher bid");
+        require(newTotalBid >= minimumContribution, "Bid below minimum");
+        require(newTotalBid > highestBid, "There already is a higher bid");
 
-        // Refund old bid if bidder is rebidding
-        if (pendingReturns[msg.sender] > 0) {
-            uint256 oldBid = pendingReturns[msg.sender];
-            pendingReturns[msg.sender] = 0;
-            (bool refunded, ) = payable(msg.sender).call{value: oldBid}("");
-            require(refunded, "Old bid refund failed");
-        }
+        uint256 currentBid = userBids[msg.sender];
+        require(
+            newTotalBid > currentBid,
+            "New bid must be higher than your previous bid"
+        );
 
-        // Refund previous highest bidder
-        if (highestBid > 0) {
-            pendingReturns[highestBidder] = highestBid;
-        }
+        uint256 requiredIncrement = newTotalBid - currentBid;
+        require(
+            msg.value == requiredIncrement,
+            "Must send exact difference from your previous bid"
+        );
 
+        userBids[msg.sender] = newTotalBid;
         highestBidder = msg.sender;
-        highestBid = msg.value;
+        highestBid = newTotalBid;
 
-        bids.push(Bid(msg.value, block.timestamp, msg.sender));
+        bids.push(Bid(newTotalBid, block.timestamp, msg.sender));
 
         if (!hasBid[msg.sender]) {
             hasBid[msg.sender] = true;
@@ -136,41 +136,50 @@ contract Campaign is ReentrancyGuard {
 
     function endAuction() public nonReentrant auctionExpired {
         require(!auctionEnded, "Auction already ended");
-
         auctionEnded = true;
-
-        // Auto-refund all non-winning bidders
-        for (uint256 i = 0; i < allBidders.length; i++) {
-            address bidder = allBidders[i];
-            if (bidder != highestBidder) {
-                uint256 amount = pendingReturns[bidder];
-                if (amount > 0) {
-                    pendingReturns[bidder] = 0;
-                    (bool sent, ) = payable(bidder).call{value: amount}("");
-                    require(sent, "Refund failed");
-                }
-            }
-        }
     }
 
-    function withdrawSellerFunds() public nonReentrant onlyManager auctionExpired {
+    function withdrawSellerFunds()
+        public
+        nonReentrant
+        onlyManager
+        auctionExpired
+    {
         require(auctionEnded, "Auction must be ended");
         require(!sellerPaid, "Funds already withdrawn");
 
         uint256 amount = highestBid;
-        highestBid = 0;
         sellerPaid = true;
+        highestBid = 0;
 
         (bool sent, ) = payable(manager).call{value: amount}("");
         require(sent, "Seller withdraw failed");
+    }
+
+    function withdrawRefund() public nonReentrant auctionExpired {
+        require(auctionEnded, "Auction not yet ended");
+        require(msg.sender != highestBidder, "Winner cannot withdraw");
+
+        uint256 amount = userBids[msg.sender];
+        require(amount > 0, "Nothing to refund");
+
+        userBids[msg.sender] = 0;
+
+        (bool sent, ) = payable(msg.sender).call{value: amount}("");
+        require(sent, "Refund failed");
     }
 
     function getSummary()
         public
         view
         returns (
-            uint256, uint256, address, address,
-            string memory, string memory, uint256,
+            uint256,
+            uint256,
+            address,
+            address,
+            string memory,
+            string memory,
+            uint256,
             address[] memory
         )
     {
@@ -191,7 +200,7 @@ contract Campaign is ReentrancyGuard {
     }
 
     function getPendingReturn(address user) public view returns (uint256) {
-        return pendingReturns[user];
+        return userBids[user];
     }
 
     function isAuctionActive() public view returns (bool) {
