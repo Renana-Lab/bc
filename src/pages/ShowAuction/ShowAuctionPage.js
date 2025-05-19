@@ -136,6 +136,13 @@ function ShowAuctionPage() {
         }
       }
 
+      let currentUserBid = 0;
+      if (accounts[0]) {
+        currentUserBid = await auctionInstance.methods
+          .getBid(accounts[0])
+          .call();
+      }
+
       setState((prev) => ({
         ...prev,
         connectedAccount: accounts[0],
@@ -151,6 +158,7 @@ function ShowAuctionPage() {
         transactions,
         contributors,
         refundsProcessed,
+        userBid: Number(currentUserBid), // 👈 add this
       }));
 
       // Update remaining budget after fetching account data
@@ -207,13 +215,39 @@ function ShowAuctionPage() {
     }
   }, [state, fetchAuctionData]);
 
-  const handleSuccessfulBid = (bidAmount) => {
-    addUserSpending(state.connectedAccount.toLowerCase(), bidAmount);
-    const updatedBudget = getRemainingBudget(
-      state.connectedAccount.toLowerCase()
-    );
-    setRemainingBudget(updatedBudget);
-    fetchAuctionData();
+  const handleSuccessfulBid = async (newBidAmount) => {
+    const account = state.connectedAccount?.toLowerCase();
+    if (!account) {
+      toast.error("No connected account found");
+      return;
+    }
+
+    try {
+      // Get the previous bid amount for this user from the contract or your state/storage
+      const campaign = Campaign(state.campaignAddress); // or wherever campaign instance comes from
+      const previousBidStr = await campaign.methods.getBid(account).call();
+      const previousBid = Number(previousBidStr);
+
+      // Calculate the difference to add to spending
+      const difference = newBidAmount - previousBid;
+
+      if (difference > 0) {
+        // Only add the difference, not the full new bid amount
+        await addUserSpending(account, difference);
+
+        // Update budget based on the new total spending
+        const updatedBudget = await getRemainingBudget(account);
+        setRemainingBudget(updatedBudget);
+
+        // Refresh auction data
+        await fetchAuctionData();
+      } else {
+        // No increase or invalid (bid decreased), handle accordingly
+        toast.error("New bid must be higher than previous bid.");
+      }
+    } catch (error) {
+      toast.error("Error updating bid info: " + error.message);
+    }
   };
 
   const renderAuctionInfo = () => (
@@ -335,6 +369,7 @@ function ShowAuctionPage() {
               address={address}
               remainingBudget={remainingBudget}
               onSuccessfulBid={handleSuccessfulBid}
+              userBid={state.userBid}
             />
           </div>
         )}

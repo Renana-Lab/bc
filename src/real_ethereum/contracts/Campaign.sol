@@ -103,9 +103,7 @@ contract Campaign is ReentrancyGuard {
         endTime = _endTime;
     }
 
-    function contribute(
-        uint256 newTotalBid
-    ) public payable nonReentrant auctionActive {
+    function contribute(uint256 newTotalBid) public payable nonReentrant auctionActive {
         require(msg.sender != manager, "Owner cannot bid");
         require(newTotalBid >= minimumContribution, "Bid below minimum");
         require(newTotalBid > highestBid, "There already is a higher bid");

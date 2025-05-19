@@ -1,10 +1,9 @@
-import React, { Component } from "react";
+import { Component } from "react";
 import FormControl from "@mui/material/FormControl";
 import TextField from "@mui/material/TextField";
 import Button from "@mui/material/Button";
 import Alert from "@mui/material/Alert";
 import Campaign from "../real_ethereum/campaign";
-import web3 from "../real_ethereum/web3";
 import styles from "./../styles/components.module.scss";
 import CircularProgress from "@mui/material/CircularProgress";
 import { Typography } from "@mui/material";
@@ -23,7 +22,7 @@ class ContributeForm extends Component {
     event.preventDefault();
     this.setState({ transactionIsLoading: true, error: false, errorMessage: "" });
 
-    const { address, remainingBudget, onSuccessfulBid } = this.props;
+    const { address, remainingBudget, onSuccessfulBid, userBid = 0 } = this.props;
     const campaign = Campaign(address);
     const summary = await campaign.methods.getSummary().call();
     const minimumContribution = summary[0];
@@ -31,12 +30,12 @@ class ContributeForm extends Component {
     const manager = summary[3];
     const accounts = await window.ethereum.request({ method: "eth_accounts" });
     const connectedAccount = accounts[0];
-    const monney = await campaign.methods.getBid(connectedAccount).call();
-    let val = Number(monney);
 
-    // Budget check
-    const bidValue = Number(this.state.bidAmount);
-    if (bidValue <= 0) {
+    const newBid = Number(this.state.bidAmount);
+    const additionalBid = newBid - userBid;
+
+    // Basic validations
+    if (newBid <= 0) {
       this.setState({
         error: true,
         errorMessage: "Bid amount must be greater than 0",
@@ -44,20 +43,26 @@ class ContributeForm extends Component {
       });
       return;
     }
-    if (bidValue > remainingBudget) {
+    if (newBid <= userBid) {
       this.setState({
         error: true,
-        errorMessage: `Bid exceeds your remaining budget of ${remainingBudget} wei`,
+        errorMessage: `Your new bid must be greater than your previous bid of ${userBid} wei`,
         transactionIsLoading: false,
       });
       return;
     }
-
-    // Existing validation checks
-    if (val + bidValue < Number(minimumContribution)) {
+    if (additionalBid > remainingBudget) {
       this.setState({
         error: true,
-        errorMessage: "You can only contribute more than the minimum required!",
+        errorMessage: `Insufficient budget. You need ${additionalBid} wei, but your remaining budget is ${remainingBudget} wei.`,
+        transactionIsLoading: false,
+      });
+      return;
+    }
+    if (newBid < Number(minimumContribution)) {
+      this.setState({
+        error: true,
+        errorMessage: `Total bid must exceed the minimum required of ${minimumContribution} wei.`,
         transactionIsLoading: false,
       });
       return;
@@ -82,16 +87,12 @@ class ContributeForm extends Component {
     try {
       await campaign.methods.contribute().send({
         from: connectedAccount,
-        value: bidValue,
+        value: additionalBid.toString(),
       });
 
-      // Show a success toast
-      toast.success("Bid placed successfully!");
+      toast.success(`Bid placed successfully! You were charged ${additionalBid} wei.`);
+      onSuccessfulBid(additionalBid);
 
-      // Update spending and refresh via callback
-      onSuccessfulBid(bidValue);
-
-      // Clear the input field only on success
       this.setState({ bidAmount: "", transactionIsLoading: false });
     } catch (err) {
       toast.error("Error placing bid: " + err.message);
@@ -104,29 +105,29 @@ class ContributeForm extends Component {
   };
 
   render() {
+    const { userBid = 0 } = this.props;
+    const newBid = Number(this.state.bidAmount);
+    const difference = newBid > userBid ? newBid - userBid : 0;
+
     return (
       <FormControl>
         <div className={styles.tooltip}>
           <label className={styles.tooltiplabe}>
-            Minimum Bid (in Wei)
+            Total Bid (in Wei)
             <button onClick={this.onReveal} className={styles.circleIcon}>
               ?
             </button>
             <div className={styles.description}>
               {this.state.weiInfoClicked && (
-                <div>
-                  <div>
-                    <Typography fontStyle="italic">
-                      Wei is the smallest (base) unit of Ether, you can convert
-                      between Ether units
-                      <a href="https://eth-converter.com/"> here.</a>
-                    </Typography>
-                  </div>
-                </div>
+                <Typography fontStyle="italic">
+                  Wei is the smallest (base) unit of Ether. You can convert between Ether units
+                  <a href="https://eth-converter.com/" target="_blank" rel="noreferrer"> here.</a>
+                </Typography>
               )}
             </div>
           </label>
         </div>
+
         <TextField
           type="number"
           style={{
@@ -139,11 +140,20 @@ class ContributeForm extends Component {
           value={this.state.bidAmount}
           onChange={(event) => this.setState({ bidAmount: event.target.value })}
         />
+
+        {/* 💬 Display how much will be charged */}
+        {difference > 0 && (
+          <Typography fontSize="0.9rem" sx={{ marginTop: "0.5rem", color: "#555" }}>
+            You will be charged <strong>{difference}</strong> wei (based on your previous bid of {userBid} wei).
+          </Typography>
+        )}
+
         {this.state.error && (
           <Alert severity="error" sx={{ marginTop: "1rem" }}>
             {this.state.errorMessage}
           </Alert>
         )}
+
         <Button
           style={{
             marginTop: "2rem",
@@ -171,3 +181,4 @@ class ContributeForm extends Component {
 }
 
 export default ContributeForm;
+ 
