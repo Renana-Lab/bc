@@ -20,9 +20,18 @@ class ContributeForm extends Component {
 
   onSubmit = async (event) => {
     event.preventDefault();
-    this.setState({ transactionIsLoading: true, error: false, errorMessage: "" });
+    this.setState({
+      transactionIsLoading: true,
+      error: false,
+      errorMessage: "",
+    });
 
-    const { address, remainingBudget, onSuccessfulBid, userBid = 0 } = this.props;
+    const {
+      address,
+      remainingBudget,
+      onSuccessfulBid,
+      userBid = 0,
+    } = this.props;
     const campaign = Campaign(address);
     const summary = await campaign.methods.getSummary().call();
     const minimumContribution = summary[0];
@@ -90,13 +99,19 @@ class ContributeForm extends Component {
         value: additionalBid.toString(),
       });
 
-      toast.success(`Bid placed successfully! You were charged ${additionalBid} wei.`);
-      onSuccessfulBid(additionalBid);
+      toast.success(
+        `Bid placed successfully! You were charged ${additionalBid} wei.`
+      );
+      onSuccessfulBid(additionalBid, address);
 
       this.setState({ bidAmount: "", transactionIsLoading: false });
     } catch (err) {
       toast.error("Error placing bid: " + err.message);
-      this.setState({ transactionIsLoading: false, error: true, errorMessage: err.message });
+      this.setState({
+        transactionIsLoading: false,
+        error: true,
+        errorMessage: err.message,
+      });
     }
   };
 
@@ -120,8 +135,16 @@ class ContributeForm extends Component {
             <div className={styles.description}>
               {this.state.weiInfoClicked && (
                 <Typography fontStyle="italic">
-                  Wei is the smallest (base) unit of Ether. You can convert between Ether units
-                  <a href="https://eth-converter.com/" target="_blank" rel="noreferrer"> here.</a>
+                  Wei is the smallest (base) unit of Ether. You can convert
+                  between Ether units
+                  <a
+                    href="https://eth-converter.com/"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {" "}
+                    here.
+                  </a>
                 </Typography>
               )}
             </div>
@@ -143,8 +166,12 @@ class ContributeForm extends Component {
 
         {/* 💬 Display how much will be charged */}
         {difference > 0 && (
-          <Typography fontSize="0.9rem" sx={{ marginTop: "0.5rem", color: "#555" }}>
-            You will be charged <strong>{difference}</strong> wei (based on your previous bid of {userBid} wei).
+          <Typography
+            fontSize="0.9rem"
+            sx={{ marginTop: "0.5rem", color: "#555" }}
+          >
+            You will be charged <strong>{difference}</strong> wei (based on your
+            previous bid of {userBid} wei).
           </Typography>
         )}
 
@@ -181,4 +208,3 @@ class ContributeForm extends Component {
 }
 
 export default ContributeForm;
- 

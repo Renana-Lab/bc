@@ -17,6 +17,8 @@ const saveBudget = (budget) => {
   localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify({ defaultBudget: budget }));
 };
 
+
+
 export const getDefaultBudget = () => getStoredBudget();
 
 const ManageBudgetPage = () => {
@@ -25,6 +27,13 @@ const ManageBudgetPage = () => {
   const [isAdmin, setIsAdmin] = useState(false);
   const [pass, setPass] = useState("");
   const [error, setError] = useState("");
+
+    useEffect(() => {
+      if (!window.ethereum) {
+        navigate("/"); // Redirect away if no MetaMask
+        return;
+      }
+    });
 
   const authenticate = () => {
     if (pass === ADMIN_SECRET) {
@@ -80,7 +89,6 @@ const ManageBudgetPage = () => {
 
   return (
     <Layout>
-      <button onClick={alert(1)}></button>
       <Box
         display="flex"
         flexDirection="column"

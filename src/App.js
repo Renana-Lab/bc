@@ -115,7 +115,7 @@ function App() {
             <h1 className="mobile-header">Mobile Access Not Supported</h1>
             {/* Message */}
             <p className="mobile-message">
-              Our blockchain auction platform requires a larger screen for the best experience. Please use a desktop or tablet.
+             {` Our blockchain auction platform requires a larger screen for the best experience. Please use a desktop or tablet.`}
             </p>         
           </div>
         </>
