@@ -41,11 +41,7 @@ contract CampaignFactory {
         deployedCampaigns.push(payable(address(newCampaign)));
     }
 
-    function getDeployedCampaigns()
-        public
-        view
-        returns (address payable[] memory)
-    {
+    function getDeployedCampaigns() public view returns (address payable[] memory) {
         return deployedCampaigns;
     }
 }
@@ -67,7 +63,6 @@ contract Campaign is ReentrancyGuard {
     uint256 public highestBid;
 
     bool public auctionEnded;
-    bool public sellerPaid;
 
     Bid[] public bids;
     address[] public allBidders;
@@ -109,16 +104,9 @@ contract Campaign is ReentrancyGuard {
         require(newTotalBid > highestBid, "There already is a higher bid");
 
         uint256 currentBid = userBids[msg.sender];
-        require(
-            newTotalBid > currentBid,
-            "New bid must be higher than your previous bid"
-        );
-
+        require(newTotalBid > currentBid, "New bid must be higher than previous");
         uint256 requiredIncrement = newTotalBid - currentBid;
-        require(
-            msg.value == requiredIncrement,
-            "Must send exact difference from your previous bid"
-        );
+        require(msg.value == requiredIncrement, "Must send exact difference");
 
         userBids[msg.sender] = newTotalBid;
         highestBidder = msg.sender;
@@ -135,36 +123,27 @@ contract Campaign is ReentrancyGuard {
     function endAuction() public nonReentrant auctionExpired {
         require(!auctionEnded, "Auction already ended");
         auctionEnded = true;
-    }
 
-    function withdrawSellerFunds()
-        public
-        nonReentrant
-        onlyManager
-        auctionExpired
-    {
-        require(auctionEnded, "Auction must be ended");
-        require(!sellerPaid, "Funds already withdrawn");
+        // Pay seller
+        uint256 winningAmount = highestBid;
+        (bool sellerPaid, ) = payable(manager).call{value: winningAmount}("");
+        require(sellerPaid, "Payment to seller failed");
 
-        uint256 amount = highestBid;
-        sellerPaid = true;
+        // Refund non-winning bidders
+        for (uint256 i = 0; i < allBidders.length; i++) {
+            address bidder = allBidders[i];
+            if (bidder != highestBidder) {
+                uint256 refundAmount = userBids[bidder];
+                if (refundAmount > 0) {
+                    userBids[bidder] = 0;
+                    (bool refunded, ) = payable(bidder).call{value: refundAmount}("");
+                    require(refunded, "Refund failed");
+                }
+            }
+        }
+
+        // Clear highest bid to prevent reentrancy issues
         highestBid = 0;
-
-        (bool sent, ) = payable(manager).call{value: amount}("");
-        require(sent, "Seller withdraw failed");
-    }
-
-    function withdrawRefund() public nonReentrant auctionExpired {
-        require(auctionEnded, "Auction not yet ended");
-        require(msg.sender != highestBidder, "Winner cannot withdraw");
-
-        uint256 amount = userBids[msg.sender];
-        require(amount > 0, "Nothing to refund");
-
-        userBids[msg.sender] = 0;
-
-        (bool sent, ) = payable(msg.sender).call{value: amount}("");
-        require(sent, "Refund failed");
     }
 
     function getSummary()
