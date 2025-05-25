@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.9;
 
+/// @title Campaign Auction Smart Contract
+/// @notice Supports one-shot auctions where highest bidder wins access to data
+/// @dev Includes ReentrancyGuard, graceful refund handling, and event logging
+
 abstract contract ReentrancyGuard {
     uint256 private constant _NOT_ENTERED = 1;
     uint256 private constant _ENTERED = 2;
@@ -41,7 +45,11 @@ contract CampaignFactory {
         deployedCampaigns.push(payable(address(newCampaign)));
     }
 
-    function getDeployedCampaigns() public view returns (address payable[] memory) {
+    function getDeployedCampaigns()
+        public
+        view
+        returns (address payable[] memory)
+    {
         return deployedCampaigns;
     }
 }
@@ -53,6 +61,12 @@ contract Campaign is ReentrancyGuard {
         address bidder;
     }
 
+    // Events
+    event AuctionFinalized(address winner, uint256 winningAmount);
+    event RefundIssued(address bidder, uint256 amount);
+    event RefundFailed(address bidder, uint256 amount);
+
+    // State variables
     address public manager;
     uint256 public minimumContribution;
     string public dataForSale;
@@ -66,9 +80,11 @@ contract Campaign is ReentrancyGuard {
 
     Bid[] public bids;
     address[] public allBidders;
+
     mapping(address => uint256) public userBids;
     mapping(address => bool) public hasBid;
 
+    // Modifiers
     modifier onlyManager() {
         require(msg.sender == manager, "Only manager can call this");
         _;
@@ -84,6 +100,7 @@ contract Campaign is ReentrancyGuard {
         _;
     }
 
+    // Constructor
     constructor(
         uint256 minimum,
         string memory _dataForSale,
@@ -98,13 +115,20 @@ contract Campaign is ReentrancyGuard {
         endTime = _endTime;
     }
 
-    function contribute(uint256 newTotalBid) public payable nonReentrant auctionActive {
+    // Public bidding function
+    function contribute(
+        uint256 newTotalBid
+    ) public payable nonReentrant auctionActive {
         require(msg.sender != manager, "Owner cannot bid");
         require(newTotalBid >= minimumContribution, "Bid below minimum");
         require(newTotalBid > highestBid, "There already is a higher bid");
 
         uint256 currentBid = userBids[msg.sender];
-        require(newTotalBid > currentBid, "New bid must be higher than previous");
+        require(
+            newTotalBid > currentBid,
+            "New bid must be higher than previous"
+        );
+
         uint256 requiredIncrement = newTotalBid - currentBid;
         require(msg.value == requiredIncrement, "Must send exact difference");
 
@@ -120,12 +144,14 @@ contract Campaign is ReentrancyGuard {
         }
     }
 
+    // Ends the auction, pays seller, refunds others
     function endAuction() public nonReentrant auctionExpired {
         require(!auctionEnded, "Auction already ended");
         auctionEnded = true;
 
-        // Pay seller
         uint256 winningAmount = highestBid;
+
+        // Pay seller
         (bool sellerPaid, ) = payable(manager).call{value: winningAmount}("");
         require(sellerPaid, "Payment to seller failed");
 
@@ -136,16 +162,26 @@ contract Campaign is ReentrancyGuard {
                 uint256 refundAmount = userBids[bidder];
                 if (refundAmount > 0) {
                     userBids[bidder] = 0;
-                    (bool refunded, ) = payable(bidder).call{value: refundAmount}("");
-                    require(refunded, "Refund failed");
+                    (bool refunded, ) = payable(bidder).call{
+                        value: refundAmount
+                    }("");
+                    if (refunded) {
+                        emit RefundIssued(bidder, refundAmount);
+                    } else {
+                        emit RefundFailed(bidder, refundAmount);
+                        // Don't revert, continue refunds
+                    }
                 }
             }
         }
 
-        // Clear highest bid to prevent reentrancy issues
+        // Reset highest bid to prevent reentrancy confusion
         highestBid = 0;
+
+        emit AuctionFinalized(highestBidder, winningAmount);
     }
 
+    // View functions
     function getSummary()
         public
         view
