@@ -215,33 +215,31 @@ function ShowAuctionPage() {
     }
   }, [state, fetchAuctionData]);
 
-const handleSuccessfulBid = async (newBidAmount, address) => {
-  const account = state.connectedAccount?.toLowerCase();
-  if (!account || !address) {
-    toast.error("Missing account or campaign address");
-    return;
-  }
-
-  try {
-    const campaign = Campaign(address); // ✅ Ensure address is provided
-    const previousBidStr = await campaign.methods.getBid(account).call();
-    const previousBid = Number(previousBidStr);
-    const difference = newBidAmount - previousBid;
-
-    if (difference > 0) {
-      await addUserSpending(account, difference);
-      const updatedBudget = await getRemainingBudget(account);
-      setRemainingBudget(updatedBudget);
-      await fetchAuctionData();
-    } else {
-      toast("No additional spending recorded (bid was same or lower)");
+  const handleSuccessfulBid = async (newBidAmount, address) => {
+    const account = state.connectedAccount?.toLowerCase();
+    if (!account || !address) {
+      toast.error("Missing account or campaign address");
+      return;
     }
-  } catch (error) {
-    toast.error("Error updating bid info: " + error.message);
-  }
-};
 
+    try {
+      const campaign = Campaign(address); // ✅ Ensure address is provided
+      const previousBidStr = await campaign.methods.getBid(account).call();
+      const previousBid = Number(previousBidStr);
+      const difference = newBidAmount - previousBid;
 
+      if (difference > 0) {
+        await addUserSpending(account, difference);
+        const updatedBudget = await getRemainingBudget(account);
+        setRemainingBudget(updatedBudget);
+        await fetchAuctionData();
+      } else {
+        toast("No additional spending recorded (bid was same or lower)");
+      }
+    } catch (error) {
+      toast.error("Error updating bid info: " + error.message);
+    }
+  };
 
   const renderAuctionInfo = () => (
     <Box>
@@ -517,7 +515,6 @@ const handleSuccessfulBid = async (newBidAmount, address) => {
         </Dialog>
       )}
     </Layout>
-
   );
 }
 

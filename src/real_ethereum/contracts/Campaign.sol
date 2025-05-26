@@ -3,7 +3,7 @@ pragma solidity ^0.8.9;
 
 /// @title Campaign Auction Smart Contract
 /// @notice Supports one-shot auctions where highest bidder wins access to data
-/// @dev Includes ReentrancyGuard, graceful refund handling, and event logging
+/// @dev Includes ReentrancyGuard, pull-based refund handling, and event logging
 
 abstract contract ReentrancyGuard {
     uint256 private constant _NOT_ENTERED = 1;
@@ -64,9 +64,9 @@ contract Campaign is ReentrancyGuard {
     // Events
     event AuctionFinalized(address winner, uint256 winningAmount);
     event RefundIssued(address bidder, uint256 amount);
-    event RefundFailed(address bidder, uint256 amount);
+    event BidPlaced(address bidder, uint256 totalBid);
 
-    // State variables
+    // State
     address public manager;
     uint256 public minimumContribution;
     string public dataForSale;
@@ -80,18 +80,19 @@ contract Campaign is ReentrancyGuard {
 
     Bid[] public bids;
     address[] public allBidders;
+    mapping(address => bool) public hasBid;
 
     mapping(address => uint256) public userBids;
-    mapping(address => bool) public hasBid;
+    mapping(address => uint256) public pendingReturns;
 
     // Modifiers
     modifier onlyManager() {
-        require(msg.sender == manager, "Only manager can call this");
+        require(msg.sender == manager, "Only manager");
         _;
     }
 
     modifier auctionActive() {
-        require(block.timestamp < endTime, "Auction has ended");
+        require(block.timestamp < endTime, "Auction ended");
         _;
     }
 
@@ -100,7 +101,6 @@ contract Campaign is ReentrancyGuard {
         _;
     }
 
-    // Constructor
     constructor(
         uint256 minimum,
         string memory _dataForSale,
@@ -115,7 +115,6 @@ contract Campaign is ReentrancyGuard {
         endTime = _endTime;
     }
 
-    // Public bidding function
     function contribute(
         uint256 newTotalBid
     ) public payable nonReentrant auctionActive {
@@ -124,13 +123,15 @@ contract Campaign is ReentrancyGuard {
         require(newTotalBid > highestBid, "There already is a higher bid");
 
         uint256 currentBid = userBids[msg.sender];
-        require(
-            newTotalBid > currentBid,
-            "New bid must be higher than previous"
-        );
+        require(newTotalBid > currentBid, "New bid must exceed previous");
 
         uint256 requiredIncrement = newTotalBid - currentBid;
-        require(msg.value == requiredIncrement, "Must send exact difference");
+        require(msg.value == requiredIncrement, "Send exact difference");
+
+        // Refund old highestBidder using pull method
+        if (highestBid != 0) {
+            pendingReturns[highestBidder] += highestBid;
+        }
 
         userBids[msg.sender] = newTotalBid;
         highestBidder = msg.sender;
@@ -142,43 +143,41 @@ contract Campaign is ReentrancyGuard {
             hasBid[msg.sender] = true;
             allBidders.push(msg.sender);
         }
+
+        emit BidPlaced(msg.sender, newTotalBid);
     }
 
-    // Ends the auction, pays seller, refunds others
     function endAuction() public nonReentrant auctionExpired {
         require(!auctionEnded, "Auction already ended");
         auctionEnded = true;
 
         uint256 winningAmount = highestBid;
+        highestBid = 0;
 
-        // Pay seller
+        // Transfer winning amount to seller
         (bool sellerPaid, ) = payable(manager).call{value: winningAmount}("");
         require(sellerPaid, "Payment to seller failed");
 
-        // Refund non-winning bidders
-        for (uint256 i = 0; i < allBidders.length; i++) {
-            address bidder = allBidders[i];
-            if (bidder != highestBidder) {
-                uint256 refundAmount = userBids[bidder];
-                if (refundAmount > 0) {
-                    userBids[bidder] = 0;
-                    (bool refunded, ) = payable(bidder).call{
-                        value: refundAmount
-                    }("");
-                    if (refunded) {
-                        emit RefundIssued(bidder, refundAmount);
-                    } else {
-                        emit RefundFailed(bidder, refundAmount);
-                        // Don't revert, continue refunds
-                    }
-                }
-            }
-        }
-
-        // Reset highest bid to prevent reentrancy confusion
-        highestBid = 0;
-
         emit AuctionFinalized(highestBidder, winningAmount);
+    }
+
+    /// @notice Allows bidders to withdraw refunds safely
+    function withdrawRefund() public nonReentrant {
+        uint256 amount = pendingReturns[msg.sender];
+        require(amount > 0, "No refund available");
+
+        pendingReturns[msg.sender] = 0;
+        (bool success, ) = payable(msg.sender).call{value: amount}("");
+        require(success, "Refund transfer failed");
+
+        emit RefundIssued(msg.sender, amount);
+    }
+
+    /// @notice Auto-callable helper for frontend or scripts to finalize auction
+    function finalizeAuctionIfEnded() public {
+        if (!auctionEnded && block.timestamp >= endTime) {
+            endAuction();
+        }
     }
 
     // View functions
@@ -213,7 +212,7 @@ contract Campaign is ReentrancyGuard {
     }
 
     function getPendingReturn(address user) public view returns (uint256) {
-        return userBids[user];
+        return pendingReturns[user];
     }
 
     function isAuctionActive() public view returns (bool) {
