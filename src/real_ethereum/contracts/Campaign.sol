@@ -154,24 +154,40 @@ contract Campaign is ReentrancyGuard {
         uint256 winningAmount = highestBid;
         highestBid = 0;
 
-        // Transfer winning amount to seller
+        // Pay seller
         (bool sellerPaid, ) = payable(manager).call{value: winningAmount}("");
         require(sellerPaid, "Payment to seller failed");
 
         emit AuctionFinalized(highestBidder, winningAmount);
+
+        // Automatically refund all non-winning bidders
+        for (uint256 i = 0; i < allBidders.length; i++) {
+            address bidder = allBidders[i];
+            if (bidder != highestBidder) {
+                uint256 refundAmount = userBids[bidder];
+                if (refundAmount > 0) {
+                    userBids[bidder] = 0;
+                    (bool refunded, ) = payable(bidder).call{
+                        value: refundAmount
+                    }("");
+                    require(refunded, "Refund failed");
+                    emit RefundIssued(bidder, refundAmount);
+                }
+            }
+        }
     }
 
-    /// @notice Allows bidders to withdraw refunds safely
-    function withdrawRefund() public nonReentrant {
-        uint256 amount = pendingReturns[msg.sender];
-        require(amount > 0, "No refund available");
+    // /// @notice Allows bidders to withdraw refunds safely
+    // function withdrawRefund() public nonReentrant {
+    //     uint256 amount = pendingReturns[msg.sender];
+    //     require(amount > 0, "No refund available");
 
-        pendingReturns[msg.sender] = 0;
-        (bool success, ) = payable(msg.sender).call{value: amount}("");
-        require(success, "Refund transfer failed");
+    //     pendingReturns[msg.sender] = 0;
+    //     (bool success, ) = payable(msg.sender).call{value: amount}("");
+    //     require(success, "Refund transfer failed");
 
-        emit RefundIssued(msg.sender, amount);
-    }
+    //     emit RefundIssued(msg.sender, amount);
+    // }
 
     /// @notice Auto-callable helper for frontend or scripts to finalize auction
     function finalizeAuctionIfEnded() public {
