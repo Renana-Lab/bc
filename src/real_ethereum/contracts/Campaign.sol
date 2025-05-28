@@ -152,18 +152,22 @@ contract Campaign is ReentrancyGuard {
         auctionEnded = true;
 
         uint256 winningAmount = highestBid;
+
+        // Reset state before transfers to prevent reentrancy
+        address winner = highestBidder;
         highestBid = 0;
+        userBids[winner] = 0;
 
         // Pay seller
         (bool sellerPaid, ) = payable(manager).call{value: winningAmount}("");
         require(sellerPaid, "Payment to seller failed");
 
-        emit AuctionFinalized(highestBidder, winningAmount);
+        emit AuctionFinalized(winner, winningAmount);
 
         // Automatically refund all non-winning bidders
         for (uint256 i = 0; i < allBidders.length; i++) {
             address bidder = allBidders[i];
-            if (bidder != highestBidder) {
+            if (bidder != winner) {
                 uint256 refundAmount = userBids[bidder];
                 if (refundAmount > 0) {
                     userBids[bidder] = 0;
