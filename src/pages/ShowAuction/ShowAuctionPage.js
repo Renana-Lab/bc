@@ -62,8 +62,7 @@ function ShowAuctionPage() {
     highestBidder: "",
     transactions: [],
     contributors: [],
-    refundsProcessed: false,
-    auctionEnded: false, // Added to track auction end state
+    refundsProcessed: false, // Track if refunds have been processed
   });
 
   const { address } = useParams();
@@ -74,8 +73,8 @@ function ShowAuctionPage() {
   );
 
   const isAuctionActive = useMemo(
-    () => Number(state.endTime + "000") > Date.now() && !state.auctionEnded,
-    [state.endTime, state.auctionEnded]
+    () => Number(state.endTime + "000") > Date.now(),
+    [state.endTime]
   );
 
   const isManager = useMemo(
@@ -110,23 +109,27 @@ function ShowAuctionPage() {
 
       const [summary, rawTransactions, contributors] = await Promise.all([
         auctionInstance.methods.getSummary().call(),
-        auctionInstance.methods.getBids().call(), // Updated to match contract
-        auctionInstance.methods.getAddresses().call(), // Assuming this matches; adjust if needed
+        auctionInstance.methods.getTransactions().call(),
+        auctionInstance.methods.getAddresses().call(),
       ]);
 
-      const transactions = rawTransactions.map(({ bidder, value, time }) => ({
-        bidder,
-        bid: value,
-        time: moment.unix(Number(time)).format("DD-MM-YYYY HH:mm:ss"),
-      }));
+      const transactions = rawTransactions.map(
+        ({ sellerAddress, value, time }) => ({
+          bidder: sellerAddress,
+          bid: value,
+          time: moment.unix(Number(time)).format("DD-MM-YYYY HH:mm:ss"),
+        })
+      );
 
+      // Check if refunds have been processed by checking if non-winners have a balance of 0
       let refundsProcessed = true;
       for (const contributor of contributors) {
-        if (contributor.toLowerCase() !== summary[3].toLowerCase()) {
-          const pending = await auctionInstance.methods
-            .getPendingReturn(contributor)
+        if (contributor.toLowerCase() !== summary[8].toLowerCase()) {
+          // Not the highest bidder
+          const balance = await auctionInstance.methods
+            .getBid(contributor)
             .call();
-          if (Number(pending) > 0) {
+          if (Number(balance) > 0) {
             refundsProcessed = false;
             break;
           }
@@ -136,7 +139,7 @@ function ShowAuctionPage() {
       let currentUserBid = 0;
       if (accounts[0]) {
         currentUserBid = await auctionInstance.methods
-          .userBids(accounts[0])
+          .getBid(accounts[0])
           .call();
       }
 
@@ -146,19 +149,19 @@ function ShowAuctionPage() {
         auction: auctionInstance,
         minimumContribution: summary[0],
         approversCount: summary[2],
-        manager: summary[2], // Adjusted to match contract (manager is summary[2])
-        highestBidder: summary[3],
+        manager: summary[3],
         highestBid: summary[4],
         dataForSell: summary[5],
         dataDescription: summary[6],
         endTime: summary[7],
-        contributors: summary[8],
-        auctionEnded: summary[9], // Fetch auctionEnded
+        highestBidder: summary[8],
         transactions,
+        contributors,
         refundsProcessed,
-        userBid: Number(currentUserBid),
+        userBid: Number(currentUserBid), // 👈 add this
       }));
 
+      // Update remaining budget after fetching account data
       setRemainingBudget(getRemainingBudget(accounts[0].toLowerCase()));
     } catch (err) {
       console.error(err);
@@ -174,47 +177,43 @@ function ShowAuctionPage() {
 
   const refundApprovers = useCallback(async () => {
     try {
-      if (isManager) {
-        // Check if auction has ended and hasn't been finalized
-        if (!state.auctionEnded) {
-          await state.auction.methods
-            .endAuction()
-            .send({ from: state.connectedAccount });
-        }
-
-        const refundPromises = state.contributors
-          .filter(
-            (addr) => addr.toLowerCase() !== state.highestBidder.toLowerCase()
-          )
-          .map(async (addr) => {
-            const pending = await state.auction.methods
-              .getPendingReturn(addr)
-              .call();
-            if (Number(pending) > 0) {
-              await state.auction.methods
-                .withdrawBid(addr)
-                .send({ from: state.connectedAccount });
-              reduceUserSpending(addr.toLowerCase(), Number(pending));
-              if (addr.toLowerCase() === state.connectedAccount.toLowerCase()) {
-                setRemainingBudget(
-                  getRemainingBudget(state.connectedAccount.toLowerCase())
-                );
-              }
-            }
-          });
-
-        await Promise.all(refundPromises);
-        toast.success("Refunds processed and seller paid!");
-        setState((prev) => ({ ...prev, refundsProcessed: true }));
-        fetchAuctionData();
-      } else {
-        toast.error("Only the manager can process refunds and payments");
+      const isActive = await state.auction.methods.getStatus().call();
+      if (isActive) {
+        toast.error("Auction still active, cannot refund yet.");
+        return;
       }
+
+      const refundPromises = state.contributors
+        .filter(
+          (addr) => addr.toLowerCase() !== state.highestBidder.toLowerCase()
+        )
+        .map(async (addr) => {
+          const bidAmount = await state.auction.methods.getBid(addr).call();
+          if (Number(bidAmount) > 0) {
+            // Only refund if they have a balance
+            await state.auction.methods
+              .withdrawBid(addr)
+              .send({ from: state.manager });
+            // Update userSpendingStore
+            reduceUserSpending(addr.toLowerCase(), Number(bidAmount));
+            // If the refunded user is the connected account, update their budget
+            if (addr.toLowerCase() === state.connectedAccount.toLowerCase()) {
+              setRemainingBudget(
+                getRemainingBudget(state.connectedAccount.toLowerCase())
+              );
+            }
+          }
+        });
+
+      await Promise.all(refundPromises);
+      toast.success("Refunds processed for non-winning bidders!");
+      setState((prev) => ({ ...prev, refundsProcessed: true }));
+      fetchAuctionData();
     } catch (err) {
       console.error(err);
-      toast.error("Error processing refunds and payment: " + err.message);
+      toast.error("Error processing refunds: " + err.message);
     }
-  }, [state, isManager, fetchAuctionData]);
+  }, [state, fetchAuctionData]);
 
   const handleSuccessfulBid = async (newBidAmount, address) => {
     const account = state.connectedAccount?.toLowerCase();
@@ -224,8 +223,8 @@ function ShowAuctionPage() {
     }
 
     try {
-      const campaign = Campaign(address);
-      const previousBidStr = await campaign.methods.userBids(account).call();
+      const campaign = Campaign(address); // ✅ Ensure address is provided
+      const previousBidStr = await campaign.methods.getBid(account).call();
       const previousBid = Number(previousBidStr);
       const difference = newBidAmount - previousBid;
 
