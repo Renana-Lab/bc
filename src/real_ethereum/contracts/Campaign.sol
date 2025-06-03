@@ -165,7 +165,7 @@ contract Campaign is ReentrancyGuard {
         emit AuctionFinalized(winner, winningAmount);
     }
 
-    /// @notice Allows bidders to withdraw refunds safely
+    /// @notice Allows bidders to withdraw their refunds
     function withdrawRefund() public nonReentrant {
         uint256 amount = pendingReturns[msg.sender];
         require(amount > 0, "No refund available");
@@ -177,11 +177,42 @@ contract Campaign is ReentrancyGuard {
         emit RefundIssued(msg.sender, amount);
     }
 
+    /// @notice Allows the manager to withdraw funds on behalf of a bidder
+    function withdrawBid(
+        address payable _address
+    ) public onlyManager nonReentrant {
+        require(auctionEnded, "Auction has not ended");
+        require(_address != address(0), "Invalid address");
+        require(_address != highestBidder, "Winner cannot withdraw");
+
+        uint256 amount = userBids[_address] + pendingReturns[_address];
+        require(amount > 0, "No funds to withdraw");
+
+        // Clear both userBids and pendingReturns for the address
+        userBids[_address] = 0;
+        pendingReturns[_address] = 0;
+
+        (bool sent, ) = _address.call{value: amount}("");
+        require(sent, "Failed to send Ether");
+
+        emit RefundIssued(_address, amount);
+    }
+
     /// @notice Auto-callable helper for frontend or scripts to finalize auction
     function finalizeAuctionIfEnded() public {
         if (!auctionEnded && block.timestamp >= endTime) {
             endAuction();
         }
+    }
+
+    /// @notice Allows the manager to withdraw any remaining funds if something goes wrong
+    function withdrawRemainingFunds() public onlyManager nonReentrant {
+        require(auctionEnded, "Auction has not ended");
+        uint256 remainingBalance = address(this).balance;
+        require(remainingBalance > 0, "No funds remaining");
+
+        (bool sent, ) = payable(manager).call{value: remainingBalance}("");
+        require(sent, "Failed to send remaining funds");
     }
 
     // View functions
