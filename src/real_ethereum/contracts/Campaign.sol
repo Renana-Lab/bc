@@ -147,72 +147,52 @@ contract Campaign is ReentrancyGuard {
         emit BidPlaced(msg.sender, newTotalBid);
     }
 
-    function endAuction() public auctionExpired onlyManager {
+    function endAuction() public auctionExpired {
         require(!auctionEnded, "Auction already ended");
         auctionEnded = true;
 
         address winner = highestBidder;
         uint256 winningAmount = highestBid;
 
+        highestBid = 0;
+        userBids[winner] = 0;
+
+        // Assign refund balances only, do not transfer here
+        for (uint256 i = 0; i < allBidders.length; i++) {
+            address bidder = allBidders[i];
+            if (bidder != winner) {
+                uint256 refundAmount = userBids[bidder];
+                if (refundAmount > 0) {
+                    userBids[bidder] = 0;
+                    pendingReturns[bidder] += refundAmount;
+                }
+            }
+        }
+
         // Pay seller immediately
         (bool sellerPaid, ) = payable(manager).call{value: winningAmount}("");
         require(sellerPaid, "Payment to seller failed");
 
-        // Clear winner's bid
-        userBids[winner] = 0;
-        highestBid = 0;
-
         emit AuctionFinalized(winner, winningAmount);
     }
 
-    /// @notice Allows bidders to withdraw their refunds
-    function withdrawRefund() public nonReentrant {
-        uint256 amount = pendingReturns[msg.sender];
-        require(amount > 0, "No refund available");
+    // /// @notice Allows bidders to withdraw refunds safely
+    // function withdrawRefund() public nonReentrant {
+    //     uint256 amount = pendingReturns[msg.sender];
+    //     require(amount > 0, "No refund available");
 
-        pendingReturns[msg.sender] = 0;
-        (bool success, ) = payable(msg.sender).call{value: amount}("");
-        require(success, "Refund transfer failed");
+    //     pendingReturns[msg.sender] = 0;
+    //     (bool success, ) = payable(msg.sender).call{value: amount}("");
+    //     require(success, "Refund transfer failed");
 
-        emit RefundIssued(msg.sender, amount);
-    }
-
-    /// @notice Allows the manager to withdraw funds on behalf of a bidder
-    function withdrawBid(
-        address payable _address
-    ) public onlyManager nonReentrant {
-        require(auctionEnded, "Auction has not ended");
-        require(_address != address(0), "Invalid address");
-        require(_address != highestBidder, "Winner cannot withdraw");
-
-        uint256 amount = userBids[_address] + pendingReturns[_address];
-        require(amount > 0, "No funds to withdraw");
-
-        // Clear both userBids and pendingReturns for the address
-        userBids[_address] = 0;
-        pendingReturns[_address] = 0;
-
-        (bool sent, ) = _address.call{value: amount}("");
-        require(sent, "Failed to send Ether");
-
-        emit RefundIssued(_address, amount);
-    }
+    //     emit RefundIssued(msg.sender, amount);
+    // }
 
     /// @notice Auto-callable helper for frontend or scripts to finalize auction
     function finalizeAuctionIfEnded() public {
-        if (!auctionEnded && block.timestamp >= endTime) {
+        if (auctionEnded && block.timestamp >= endTime) {
             endAuction();
         }
-    }
-
-    /// @notice Allows the manager to withdraw any remaining funds if something goes wrong
-    function withdrawRemainingFunds() public onlyManager nonReentrant {
-        require(auctionEnded, "Auction has not ended");
-        uint256 remainingBalance = address(this).balance;
-        require(remainingBalance > 0, "No funds remaining");
-
-        (bool sent, ) = payable(manager).call{value: remainingBalance}("");
-        require(sent, "Failed to send remaining funds");
     }
 
     // View functions
