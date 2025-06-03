@@ -186,12 +186,6 @@ contract Campaign {
     }
 
     function paySeller() public {
-        require(
-            endTime < block.timestamp,
-            "You can only pay the winner after the auction has ended"
-        );
-        require(!closed, "Auction is already closed");
-
         // Transfer the highest bid to the manager
         payable(manager).transfer(highestBid);
         closed = true;
