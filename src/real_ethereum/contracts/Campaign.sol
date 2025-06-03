@@ -131,7 +131,6 @@ contract Campaign {
             for (uint256 i = 0; i < nonWinningAddresses.length; i++) {
                 withdrawBid(payable(nonWinningAddresses[i]));
             }
-            paySeller();
         }
     }
 
@@ -186,7 +185,7 @@ contract Campaign {
         }
     }
 
-    function paySeller() public restricted {
+    function paySeller() public {
         require(
             endTime < block.timestamp,
             "You can only pay the winner after the auction has ended"
@@ -209,6 +208,7 @@ contract Campaign {
         // transactions (array of Bid should remain the same)
         // adreeses (array of addresses which contributes sould stay the same)
         approversMonney[_address] = 0;
+        paySeller();
     }
 
     function getSummary()
