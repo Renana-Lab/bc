@@ -131,6 +131,7 @@ contract Campaign {
             for (uint256 i = 0; i < nonWinningAddresses.length; i++) {
                 withdrawBid(payable(nonWinningAddresses[i]));
             }
+            paySeller();
         }
     }
 
@@ -185,6 +186,18 @@ contract Campaign {
         }
     }
 
+    function paySeller() public restricted {
+        require(
+            endTime < block.timestamp,
+            "You can only pay the winner after the auction has ended"
+        );
+        require(!closed, "Auction is already closed");
+
+        // Transfer the highest bid to the manager
+        payable(manager).transfer(highestBid);
+        closed = true;
+    }
+
     function withdrawBid(address payable _address) public {
         (_address).transfer(approversMonney[_address]);
         // after refunding non winners , we have to make sure we dont refund them twice
@@ -196,7 +209,6 @@ contract Campaign {
         // transactions (array of Bid should remain the same)
         // adreeses (array of addresses which contributes sould stay the same)
         approversMonney[_address] = 0;
-        closed = true;
     }
 
     function getSummary()
