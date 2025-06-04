@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import moment from "moment";
 import Layout from "../../components/Layout";
@@ -34,7 +34,6 @@ import picSrc from "./medal.png";
 import {
   getRemainingBudget,
   addUserSpending,
-  reduceUserSpending,
 } from "../AuctionsList/AuctionsListPage";
 
 const buttonStyle = {

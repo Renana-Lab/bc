@@ -193,12 +193,13 @@ contract Campaign {
         }
     }
 
-  function paySeller() public {
+function paySeller() public {
     require(!closed, "Auction already closed");
     require(address(this).balance >= highestBid, "Insufficient balance");
     payable(manager).transfer(highestBid);
     closed = true;
 }
+
 
 
  function withdrawBid(address payable _address) public {
