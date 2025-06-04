@@ -120,7 +120,7 @@ function AuctionsListPage() {
         fetchAuctionsList();
         setRemainingBudget(getRemainingBudget(userAddress));
         console.log("⏰ Fetching auctions list...");
-      }, 10000);
+      }, 5000);
 
       return () => clearInterval(interval);
     }
