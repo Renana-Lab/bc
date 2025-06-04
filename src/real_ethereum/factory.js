@@ -8,7 +8,6 @@ const instance = new web3.eth.Contract(
 
 export default instance;
 
-
 // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
 // WHEN UPDATING THE CONTRACT, ALSO UPDATE THE ADDRESS HERE
