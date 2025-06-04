@@ -1,3 +1,11 @@
+// after refunding non winners , we have to make sure we dont refund them twice
+// evrything has to be initialized
+// approvers , approvercount , approversmonney , addresses
+// approvers (mapping adress with flag will stay same)
+// approverscount (is not usefull anymore we can reinitalize it )
+// approversMonney (mapping adress with money sould be initialise)
+// transactions (array of Bid should remain the same)
+// adreeses (array of addresses which contributes sould stay the same)
 // SPDX-License-Identifier: MIT
 
 pragma solidity ^0.8.9;
@@ -185,25 +193,21 @@ contract Campaign {
         }
     }
 
-    function paySeller() public {
-        // Transfer the highest bid to the manager
-        payable(manager).transfer(highestBid);
-        closed = true;
-    }
+  function paySeller() public {
+    require(!closed, "Auction already closed");
+    require(address(this).balance >= highestBid, "Insufficient balance");
+    payable(manager).transfer(highestBid);
+    closed = true;
+}
 
-    function withdrawBid(address payable _address) public {
-        (_address).transfer(approversMonney[_address]);
-        // after refunding non winners , we have to make sure we dont refund them twice
-        // evrything has to be initialized
-        // approvers , approvercount , approversmonney , addresses
-        // approvers (mapping adress with flag will stay same)
-        // approverscount (is not usefull anymore we can reinitalize it )
-        // approversMonney (mapping adress with money sould be initialise)
-        // transactions (array of Bid should remain the same)
-        // adreeses (array of addresses which contributes sould stay the same)
-        approversMonney[_address] = 0;
-        paySeller();
-    }
+
+ function withdrawBid(address payable _address) public {
+    require(approversMonney[_address] > 0, "No bid to refund");
+    uint256 refund = approversMonney[_address];
+    approversMonney[_address] = 0;
+    _address.transfer(refund);
+}
+
 
     function getSummary()
         public

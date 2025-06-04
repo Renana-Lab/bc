@@ -171,7 +171,7 @@ function ShowAuctionPage() {
 
   useEffect(() => {
     fetchAuctionData();
-    const interval = setInterval(fetchAuctionData, 10000); // Refresh every 10 seconds
+    const interval = setInterval(fetchAuctionData, 5000); // Refresh every 5 seconds
     return () => clearInterval(interval);
   }, [fetchAuctionData]);
 
@@ -183,31 +183,22 @@ function ShowAuctionPage() {
         return;
       }
 
-      const refundPromises = state.contributors
-        .filter(
-          (addr) => addr.toLowerCase() !== state.highestBidder.toLowerCase()
-        )
-        .map(async (addr) => {
-          const bidAmount = await state.auction.methods.getBid(addr).call();
-          if (Number(bidAmount) > 0) {
-            // Only refund if they have a balance
-            await state.auction.methods
-              .withdrawBid(addr)
-              .send({ from: state.manager });
-            // Update userSpendingStore
-            reduceUserSpending(addr.toLowerCase(), Number(bidAmount));
-            // If the refunded user is the connected account, update their budget
-            if (addr.toLowerCase() === state.connectedAccount.toLowerCase()) {
-              setRemainingBudget(
-                getRemainingBudget(state.connectedAccount.toLowerCase())
-              );
-            }
-          }
-        });
+      const nonWinners = state.contributors.filter(
+        (addr) => addr.toLowerCase() !== state.highestBidder.toLowerCase()
+      );
 
-      await Promise.all(refundPromises);
-      toast.success("Refunds processed for non-winning bidders!");
-      setState((prev) => ({ ...prev, refundsProcessed: true }));
+      for (const addr of nonWinners) {
+        const bidAmount = await state.auction.methods.getBid(addr).call();
+        if (Number(bidAmount) > 0) {
+          await state.auction.methods
+            .withdrawBid(addr)
+            .send({ from: state.manager });
+        }
+      }
+
+      await state.auction.methods.paySeller().send({ from: state.manager });
+
+      toast.success("Refunds processed and seller paid!");
       fetchAuctionData();
     } catch (err) {
       console.error(err);
