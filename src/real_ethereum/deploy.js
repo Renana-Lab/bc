@@ -1,3 +1,5 @@
+const fs = require("fs");
+const path = require("path");
 const HDWalletProvider = require("@truffle/hdwallet-provider");
 const Web3 = require("web3");
 const compiledFactory = require("./build/CampaignFactory.json");
@@ -32,10 +34,20 @@ const deploy = async () => {
       .deploy({ data: compiledFactory.evm.bytecode.object })
       .send({ gas: gasEstimate + 50000, from: accounts[0] });
 
-    console.log(
-      "✅ Contract successfully deployed at:",
-      result.options.address
+    const contractAddress = result.options.address;
+    console.log("✅ Contract successfully deployed at:", contractAddress);
+
+    // Update factory.js with the new contract address
+    const factoryPath = path.resolve(__dirname, "factory.js");
+    let factoryContent = fs.readFileSync(factoryPath, "utf8");
+
+    factoryContent = factoryContent.replace(
+      /"0x[a-fA-F0-9]{40}"/, // Match the existing address
+      `"${contractAddress}"` // Replace with the new address
     );
+
+    fs.writeFileSync(factoryPath, factoryContent, "utf8");
+    console.log("✅ factory.js updated with new contract address.");
   } catch (error) {
     console.error("❌ Deployment failed:", error);
   } finally {

@@ -119,7 +119,6 @@ function ShowAuctionPage() {
 
   const fetchAuctionData = useCallback(async () => {
     if (!window.ethereum) return navigate("/");
-    dispatch({ type: "SET_LOADING" });
     try {
       const [accounts, auctionInstance] = await Promise.all([
         window.ethereum.request({ method: "eth_accounts" }),
