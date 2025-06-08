@@ -68,6 +68,9 @@ contract Campaign {
     uint256 public highestBid;
     uint256 public endTime;
     bool public closed;
+    bool public refundsProcessed;
+    bool public sellerPaid;
+
     // uint256 public startTime;
     modifier restricted() {
         require(msg.sender == manager);
@@ -87,6 +90,9 @@ contract Campaign {
         dataDescription = dataDesc;
         endTime = endtime;
         closed = false;
+        refundsProcessed = false;
+        sellerPaid = false;
+
         // startTime = starttime;
     }
 
@@ -106,39 +112,33 @@ contract Campaign {
         return address(intAddress);
     }
 
-    function EndedAuctions() public payable {
-        //step 1 check if the auction is ended
-        if (endTime < block.timestamp) {
-            // step 2 go over the approvers
-            uint256 index = 0;
-            address[] memory nonWinningAddresses = new address[](
-                addresses.length - 1
-            );
+    function EndedAuctions() public {
+        require(endTime < block.timestamp, "Auction is still active");
+        require(!refundsProcessed || !sellerPaid, "Auction already finalized");
 
+        // Step 1: Refund all non-winners
+        if (!refundsProcessed) {
             for (uint i = 0; i < addresses.length; i++) {
-                emit LogMyVariable1(toLower(addresses[i]));
-                emit LogMyVariable1(highestBidder);
-                if (
-                    !compareAddresses(
-                        toLower(addresses[i]),
-                        toLower(highestBidder)
-                    )
-                ) {
-                    nonWinningAddresses[index] = addresses[i];
-                    index++;
+                address contributor = addresses[i];
+                if (contributor != highestBidder) {
+                    uint256 refundAmount = approversMonney[contributor];
+                    if (refundAmount > 0) {
+                        approversMonney[contributor] = 0;
+                        payable(contributor).transfer(refundAmount);
+                        emit RefundProcessed(contributor, refundAmount);
+                    }
                 }
-
-                // step 3 give monney back if not the winner
-                // if (addresses[i] != highestBidder){
-                //     withdrawBid(payable(msg.sender));
-                // }
             }
+            refundsProcessed = true;
+        }
 
-            emit LogMyVariable(nonWinningAddresses);
-            emit LogMyVariable(addresses);
-            for (uint256 i = 0; i < nonWinningAddresses.length; i++) {
-                withdrawBid(payable(nonWinningAddresses[i]));
-            }
+        // Step 2: Pay the seller
+        if (!sellerPaid) {
+            require(address(this).balance >= highestBid, "Insufficient balance");
+            payable(manager).transfer(highestBid);
+            sellerPaid = true;
+            closed = true;
+            emit SellerPaid(manager, highestBid);
         }
     }
 
@@ -193,22 +193,19 @@ contract Campaign {
         }
     }
 
-function paySeller() public {
-    require(!closed, "Auction already closed");
-    require(address(this).balance >= highestBid, "Insufficient balance");
-    payable(manager).transfer(highestBid);
-    closed = true;
-}
+    function paySeller() public {
+        require(!closed, "Auction already closed");
+        require(address(this).balance >= highestBid, "Insufficient balance");
+        payable(manager).transfer(highestBid);
+        closed = true;
+    }
 
-
-
- function withdrawBid(address payable _address) public {
-    require(approversMonney[_address] > 0, "No bid to refund");
-    uint256 refund = approversMonney[_address];
-    approversMonney[_address] = 0;
-    _address.transfer(refund);
-}
-
+    function withdrawBid(address payable _address) public {
+        require(approversMonney[_address] > 0, "No bid to refund");
+        uint256 refund = approversMonney[_address];
+        approversMonney[_address] = 0;
+        _address.transfer(refund);
+    }
 
     function getSummary()
         public
@@ -239,4 +236,8 @@ function paySeller() public {
             addresses
         );
     }
+
+    // New events for frontend synchronization
+    event RefundProcessed(address indexed contributor, uint256 amount);
+    event SellerPaid(address indexed seller, uint256 amount);
 }
