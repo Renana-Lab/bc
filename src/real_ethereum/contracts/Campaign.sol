@@ -112,6 +112,41 @@ contract Campaign {
         return address(intAddress);
     }
 
+    // Modifier to finalize the auction automatically
+    modifier finalizeAuction() {
+        if (block.timestamp >= endTime && !closed) {
+            _finalizeAuction();
+        }
+        _;
+    }
+
+    // Internal function to finalize the auction
+    function _finalizeAuction() internal {
+        require(block.timestamp >= endTime, "Auction is still active");
+        require(!closed, "Auction already finalized");
+
+        // Refund all non-winners
+        for (uint256 i = 0; i < addresses.length; i++) {
+            address contributor = addresses[i];
+            if (contributor != highestBidder) {
+                uint256 refundAmount = approversMonney[contributor];
+                if (refundAmount > 0) {
+                    approversMonney[contributor] = 0;
+                    payable(contributor).transfer(refundAmount);
+                    emit RefundProcessed(contributor, refundAmount);
+                }
+            }
+        }
+
+        // Transfer the highest bid to the seller
+        if (highestBid > 0) {
+            payable(manager).transfer(highestBid);
+            emit SellerPaid(manager, highestBid);
+        }
+
+        closed = true;
+    }
+
     function EndedAuctions() public {
         require(endTime < block.timestamp, "Auction is still active");
         require(!refundsProcessed || !sellerPaid, "Auction already finalized");
@@ -163,7 +198,7 @@ contract Campaign {
         return addresses;
     }
 
-    function contribute() public payable {
+    function contribute() public payable finalizeAuction {
         require(msg.sender != manager, "you can't buy your own data");
         require(
             endTime > block.timestamp,
