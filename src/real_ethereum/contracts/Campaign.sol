@@ -131,7 +131,7 @@ contract Campaign {
             if (contributor != highestBidder) {
                 uint256 refundAmount = approversMonney[contributor];
                 if (refundAmount > 0) {
-                    approversMonney[contributor] = 0;
+                    approversMonney[contributor] = 0; // Preventing Reentrancy Attack
                     payable(contributor).transfer(refundAmount);
                     emit RefundProcessed(contributor, refundAmount);
                 }
