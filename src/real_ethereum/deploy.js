@@ -38,16 +38,16 @@ const deploy = async () => {
     console.log("✅ Contract successfully deployed at:", contractAddress);
 
     // Update factory.js with the new contract address
-    const factoryPath = path.resolve(__dirname, "factory.js");
-    let factoryContent = fs.readFileSync(factoryPath, "utf8");
+    // const factoryPath = path.resolve(__dirname, "factory.js");
+    // let factoryContent = fs.readFileSync(factoryPath, "utf8");
 
-    factoryContent = factoryContent.replace(
-      /"0x[a-fA-F0-9]{40}"/, // Match the existing address
-      `"${contractAddress}"` // Replace with the new address
-    );
+    // factoryContent = factoryContent.replace(
+    //   /"0x[a-fA-F0-9]{40}"/, // Match the existing address
+    //   `"${contractAddress}"` // Replace with the new address
+    // );
 
-    fs.writeFileSync(factoryPath, factoryContent, "utf8");
-    console.log("✅ factory.js updated with new contract address.");
+    // fs.writeFileSync(factoryPath, factoryContent, "utf8");
+    // console.log("✅ factory.js updated with new contract address.");
   } catch (error) {
     console.error("❌ Deployment failed:", error);
   } finally {

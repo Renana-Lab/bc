@@ -9,21 +9,165 @@
 // SPDX-License-Identifier: MIT
 
 pragma solidity ^0.8.9;
-pragma experimental ABIEncoderV2;
+
+contract Campaign {
+    event RefundProcessed(address indexed contributor, uint256 amount);
+    event SellerPaid(address indexed seller, uint256 amount);
+
+    struct Bid {
+        uint256 value;
+        uint256 time;
+        address bidderAddress;
+    }
+
+    address public manager;
+    uint256 public minimumContribution;
+    string public dataForSell;
+    string public dataDescription;
+
+    mapping(address => bool) public approvers;
+    mapping(address => uint256) public approversMoney;
+    uint256 public approversCount;
+
+    address[] public addresses;
+    Bid[] public transactions;
+
+    address public highestBidder;
+    uint256 public highestBid;
+    uint256 public endTime;
+    bool public closed;
+
+    modifier onlyBeforeEnd() {
+        require(block.timestamp < endTime, "Auction ended");
+        _;
+    }
+
+    modifier onlyAfterEnd() {
+        require(block.timestamp >= endTime, "Auction not ended yet");
+        _;
+    }
+
+    constructor(
+        uint256 minimum,
+        string memory dataSell,
+        string memory dataDesc,
+        address creator,
+        uint256 duration
+    ) {
+        manager = creator;
+        minimumContribution = minimum;
+        dataForSell = dataSell;
+        dataDescription = dataDesc;
+        endTime = duration;
+        closed = false;
+    }
+
+    function contribute() public payable onlyBeforeEnd {
+        require(msg.sender != manager, "You can't bid on your own auction");
+        require(msg.value >= minimumContribution, "Bid below minimum");
+        require(msg.value > highestBid, "There is already a higher or equal bid");
+
+        if (approversMoney[msg.sender] > 0) {
+            uint256 oldBid = approversMoney[msg.sender];
+            payable(msg.sender).transfer(oldBid);
+            emit RefundProcessed(msg.sender, oldBid);
+        }
+
+        approversMoney[msg.sender] = msg.value;
+        highestBid = msg.value;
+        highestBidder = msg.sender;
+
+        transactions.push(Bid(msg.value, block.timestamp, msg.sender));
+
+        if (!approvers[msg.sender]) {
+            approvers[msg.sender] = true;
+            approversCount++;
+            addresses.push(msg.sender);
+        }
+    }
+
+    function finalizeAuctionIfNeeded() public onlyAfterEnd {
+        require(!closed, "Auction already finalized");
+
+        for (uint256 i = 0; i < addresses.length; i++) {
+            address contributor = addresses[i];
+            if (contributor != highestBidder) {
+                uint256 refundAmount = approversMoney[contributor];
+                if (refundAmount > 0) {
+                    approversMoney[contributor] = 0;
+                    payable(contributor).transfer(refundAmount);
+                    emit RefundProcessed(contributor, refundAmount);
+                }
+            }
+        }
+
+        if (highestBid > 0) {
+            require(address(this).balance >= highestBid, "Insufficient balance");
+            payable(manager).transfer(highestBid);
+            emit SellerPaid(manager, highestBid);
+        }
+
+        closed = true;
+    }
+
+    function getStatus() public view returns (bool) {
+        return closed;
+    }
+
+    function getBid(address bidder) public view returns (uint256) {
+        return approversMoney[bidder];
+    }
+
+    function getTransactions() public view returns (Bid[] memory) {
+        return transactions;
+    }
+
+    function getData() public view returns (string memory) {
+        require(closed, "Auction not finalized");
+        require(msg.sender == highestBidder, "Only winner can access the data");
+        return dataForSell;
+    }
+
+    function getAddresses() public view returns (address[] memory) {
+        return addresses;
+    }
+
+    function getSummary()
+        public
+        view
+        returns (
+            uint256, uint256, uint256, address,
+            uint256, string memory, string memory,
+            address, address[] memory, uint256
+        )
+    {
+        return (
+            minimumContribution,
+            address(this).balance,
+            approversCount,
+            manager,
+            highestBid,
+            dataForSell,
+            dataDescription,
+            highestBidder,
+            addresses,
+            endTime
+        );
+    }
+}
 
 contract CampaignFactory {
     address payable[] public deployedCampaigns;
 
     function createCampaign(
-        // create a campaign and add it to deployed existings campaigns
         uint256 minimum,
         string memory dataSell,
         string memory dataDesc,
         uint256 duration
     ) public {
-        uint256 dur = 60 * duration + block.timestamp; // convert duration to real end time
+        uint256 end = 60 * duration + block.timestamp;
         address newCampaign = address(
-            new Campaign(minimum, dataSell, dataDesc, msg.sender, dur)
+            new Campaign(minimum, dataSell, dataDesc, msg.sender, end)
         );
         deployedCampaigns.push(payable(newCampaign));
     }
@@ -36,243 +180,12 @@ contract CampaignFactory {
         return deployedCampaigns;
     }
 
-    function checkEndedAuctions() public payable {
-        uint256 campaignsLength = deployedCampaigns.length;
-        for (uint256 i = 0; i < campaignsLength; i++) {
+    function checkEndedAuctions() public {
+        for (uint256 i = 0; i < deployedCampaigns.length; i++) {
             Campaign campaign = Campaign(deployedCampaigns[i]);
-            campaign.EndedAuctions();
-        }
-    }
-}
-
-contract Campaign {
-    event LogMyVariable(address[] indexed myVariable);
-    event LogMyVariable1(address indexed myVariable);
-
-    // approvers mean people who contributed to the auction
-    struct Bid {
-        uint256 value;
-        uint256 time;
-        address sellerAddress;
-    }
-    Bid[] public transactions;
-    address public manager;
-    uint256 public minimumContribution;
-    string public dataForSell;
-    string public dataDescription;
-    mapping(address => bool) public approvers;
-    mapping(address => uint256) public approversMonney;
-    uint256 public approversCount;
-    address[] public addresses;
-    address public highestBidder;
-    uint256 public highestBid;
-    uint256 public endTime;
-    bool public closed;
-    bool public refundsProcessed;
-    bool public sellerPaid;
-
-    // uint256 public startTime;
-    modifier restricted() {
-        require(msg.sender == manager);
-        _;
-    }
-
-    constructor(
-        uint256 minimum,
-        string memory dataSell,
-        string memory dataDesc,
-        address creator,
-        uint256 endtime // uint256 starttime
-    ) {
-        manager = creator;
-        minimumContribution = minimum;
-        dataForSell = dataSell;
-        dataDescription = dataDesc;
-        endTime = endtime;
-        closed = false;
-        refundsProcessed = false;
-        sellerPaid = false;
-
-        // startTime = starttime;
-    }
-
-    function compareAddresses(address a, address b) public pure returns (bool) {
-        return toLower(a) == toLower(b);
-    }
-
-    function toLower(address _address) public pure returns (address) {
-        uint160 intAddress = uint160(_address);
-        for (uint i = 0; i < 20; i++) {
-            uint8 b = uint8(bytes20(_address)[i]);
-            if (b >= 65 && b <= 90) {
-                b += 32;
-            }
-            intAddress |= uint160(b) << uint160(8 * (19 - i));
-        }
-        return address(intAddress);
-    }
-
-    // Modifier to finalize the auction automatically
-    modifier finalizeAuction() {
-        if (block.timestamp >= endTime && !closed) {
-            _finalizeAuction();
-        }
-        _;
-    }
-
-    // Internal function to finalize the auction
-    function _finalizeAuction() internal {
-        require(block.timestamp >= endTime, "Auction is still active");
-        require(!closed, "Auction already finalized");
-
-        // Refund all non-winners
-        for (uint256 i = 0; i < addresses.length; i++) {
-            address contributor = addresses[i];
-            if (contributor != highestBidder) {
-                uint256 refundAmount = approversMonney[contributor];
-                if (refundAmount > 0) {
-                    approversMonney[contributor] = 0; // Preventing Reentrancy Attack
-                    payable(contributor).transfer(refundAmount);
-                    emit RefundProcessed(contributor, refundAmount);
-                }
+            if (!campaign.getStatus() && block.timestamp >= campaign.endTime()) {
+                campaign.finalizeAuctionIfNeeded();
             }
         }
-
-        // Transfer the highest bid to the seller
-        if (highestBid > 0) {
-            payable(manager).transfer(highestBid);
-            emit SellerPaid(manager, highestBid);
-        }
-
-        closed = true;
     }
-
-    function EndedAuctions() public {
-        require(endTime < block.timestamp, "Auction is still active");
-        require(!refundsProcessed || !sellerPaid, "Auction already finalized");
-
-        // Step 1: Refund all non-winners
-        if (!refundsProcessed) {
-            for (uint i = 0; i < addresses.length; i++) {
-                address contributor = addresses[i];
-                if (contributor != highestBidder) {
-                    uint256 refundAmount = approversMonney[contributor];
-                    if (refundAmount > 0) {
-                        approversMonney[contributor] = 0;
-                        payable(contributor).transfer(refundAmount);
-                        emit RefundProcessed(contributor, refundAmount);
-                    }
-                }
-            }
-            refundsProcessed = true;
-        }
-
-        // Step 2: Pay the seller
-        if (!sellerPaid) {
-            require(address(this).balance >= highestBid, "Insufficient balance");
-            payable(manager).transfer(highestBid);
-            sellerPaid = true;
-            closed = true;
-            emit SellerPaid(manager, highestBid);
-        }
-    }
-
-    function getTransactions() public view returns (Bid[] memory) {
-        return transactions;
-    }
-
-    function getBid(address add) public view returns (uint256) {
-        uint256 monney = 0;
-
-        if (approversMonney[add] != 0) {
-            monney = approversMonney[add];
-        }
-
-        return monney;
-    }
-    function getStatus() public view returns (bool) {
-        return closed;
-    }
-
-    function getAddresses() public view returns (address[] memory) {
-        return addresses;
-    }
-
-    function contribute() public payable finalizeAuction {
-        require(msg.sender != manager, "you can't buy your own data");
-        require(
-            endTime > block.timestamp,
-            "you can't contribute to an ended auction"
-        );
-
-        uint256 currentBid = approversMonney[msg.sender];
-        uint256 newTotalBid = currentBid + msg.value;
-
-        require(newTotalBid >= minimumContribution, "Bid below minimum");
-        require(
-            newTotalBid > highestBid,
-            "There already is a higher or equal bid"
-        );
-
-        // Update highest bid state
-        highestBidder = msg.sender;
-        highestBid = newTotalBid;
-        approversMonney[msg.sender] = newTotalBid;
-
-        transactions.push(Bid(msg.value, block.timestamp, msg.sender));
-
-        if (!approvers[msg.sender]) {
-            approvers[msg.sender] = true;
-            approversCount++;
-            addresses.push(msg.sender);
-        }
-    }
-
-    function paySeller() public {
-        require(!closed, "Auction already closed");
-        require(address(this).balance >= highestBid, "Insufficient balance");
-        payable(manager).transfer(highestBid);
-        closed = true;
-    }
-
-    function withdrawBid(address payable _address) public {
-        require(approversMonney[_address] > 0, "No bid to refund");
-        uint256 refund = approversMonney[_address];
-        approversMonney[_address] = 0;
-        _address.transfer(refund);
-    }
-
-    function getSummary()
-        public
-        view
-        returns (
-            uint256,
-            uint256,
-            uint256,
-            address,
-            uint256,
-            string memory,
-            string memory,
-            uint256,
-            address,
-            address[] memory
-        )
-    {
-        return (
-            minimumContribution,
-            address(this).balance,
-            approversCount,
-            manager,
-            highestBid,
-            dataForSell,
-            dataDescription,
-            endTime,
-            highestBidder,
-            addresses
-        );
-    }
-
-    // New events for frontend synchronization
-    event RefundProcessed(address indexed contributor, uint256 amount);
-    event SellerPaid(address indexed seller, uint256 amount);
 }

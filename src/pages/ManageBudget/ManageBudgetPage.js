@@ -6,7 +6,7 @@ import toast from "react-hot-toast";
 
 const LOCAL_STORAGE_KEY = "globalBudgetStore";
 const DEFAULT_BUDGET = 2000; // in wei
-const ADMIN_SECRET = "1234"; // ⚠️ Warning: in production, NEVER store secrets like this on the frontend
+const ADMIN_SECRET = process.env.REACT_APP_ADMIN_SECRET;
 
 const getStoredBudget = () => {
   const stored = localStorage.getItem(LOCAL_STORAGE_KEY);

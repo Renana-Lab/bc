@@ -1,12 +1,15 @@
 const path = require("path");
-const solc = require("solc");
 const fs = require("fs-extra");
-const deploy = require("./deploy");
+
+// ייבוא גרסה מדויקת של הסולק מה-node_modules
+const solc = require(path.resolve(__dirname, "../../node_modules/solc"));
 
 const buildPath = path.resolve(__dirname, "build");
+console.log("🧹 Removing old build folder...");
 fs.removeSync(buildPath);
 
 const campaignPath = path.resolve(__dirname, "contracts", "Campaign.sol");
+console.log("📄 Reading Campaign.sol from:", campaignPath);
 const source = fs.readFileSync(campaignPath, "utf8");
 
 const input = {
@@ -25,26 +28,26 @@ const input = {
   },
 };
 
-const output = JSON.parse(solc.compile(JSON.stringify(input))).contracts[
-  "Campaign.sol"
-];
+console.log("🛠 Compiling contracts...");
+console.log("🧪 Using solc version:", solc.version());
+
+const compiled = JSON.parse(solc.compile(JSON.stringify(input)));
+
+if (!compiled.contracts || !compiled.contracts["Campaign.sol"]) {
+  console.error("❌ Compilation failed:", compiled.errors);
+  throw new Error("Compilation failed.");
+}
+
+const output = compiled.contracts["Campaign.sol"];
+console.log("✅ Contracts compiled successfully:");
+console.log(Object.keys(output)); // הדפסת שמות החוזים
 
 fs.ensureDirSync(buildPath);
 
-for (let contract in output) {
-  fs.outputJsonSync(
-    path.resolve(buildPath, contract.replace(":", "") + ".json"),
-    output[contract]
-  );
+for (let contractName in output) {
+  const filePath = path.resolve(buildPath, `${contractName}.json`);
+  fs.outputJsonSync(filePath, output[contractName]);
+  console.log(`📦 Saved ${contractName}.json to build folder`);
 }
 
-// Automatically deploy and update after compilation
-(async () => {
-  try {
-    console.log("Starting deployment after compilation...");
-    await deploy();
-    console.log("Deployment completed successfully!!");
-  } catch (error) {
-    console.error("Error during deployment:", error);
-  }
-})();
+console.log("✅ Compilation finished. Run deploy.js manually after this.");

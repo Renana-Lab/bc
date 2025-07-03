@@ -1,3 +1,4 @@
+/* eslint-env es2020 */
 import { useReducer, useEffect, useMemo, useCallback, useState } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import moment from "moment";
@@ -6,6 +7,7 @@ import Campaign from "../../real_ethereum/campaign";
 import ContributeForm from "../../components/ContributeForm";
 import Countdown from "react-countdown";
 import toast from "react-hot-toast";
+import web3 from "../../real_ethereum/web3.js";
 import {
   Box,
   Button,
@@ -118,101 +120,149 @@ function ShowAuctionPage() {
   );
 
   const fetchAuctionData = useCallback(async () => {
-    if (!window.ethereum) return navigate("/");
-    try {
-      const [accounts, auctionInstance] = await Promise.all([
-        window.ethereum.request({ method: "eth_accounts" }),
-        Campaign(address),
-      ]);
-      const [summary, rawTransactions, contributors, userBid, isActive] =
-        await Promise.all([
-          auctionInstance.methods.getSummary().call(),
-          auctionInstance.methods.getTransactions().call(),
-          auctionInstance.methods.getAddresses().call(),
-          accounts[0]
-            ? auctionInstance.methods.getBid(accounts[0]).call()
-            : Promise.resolve(0),
-          auctionInstance.methods.getStatus().call(),
-        ]);
-      const transactions = rawTransactions.map(
-        ({ sellerAddress, value, time }) => ({
-          bidder: sellerAddress,
-          bid: value,
-          time: moment.unix(Number(time)).format("DD-MM-YYYY HH:mm:ss"),
-        })
-      );
-      let refundsProcessed = true;
-      if (!isActive) {
-        for (const contributor of contributors) {
-          if (contributor.toLowerCase() !== summary[8].toLowerCase()) {
-            const balance = await auctionInstance.methods
-              .getBid(contributor)
-              .call();
-            if (Number(balance) > 0) {
-              refundsProcessed = false;
-              break;
-            }
-          }
-        }
-      }
-      dispatch({
-        type: "SET_AUCTION_DATA",
-        payload: {
-          connectedAccount: accounts[0] || "",
-          auction: auctionInstance,
-          minimumContribution: summary[0],
-          approversCount: summary[2],
-          manager: summary[3],
-          highestBid: summary[4],
-          dataForSell: summary[5],
-          dataDescription: summary[6],
-          endTime: summary[7],
-          highestBidder: summary[8],
-          transactions,
-          contributors,
-          refundsProcessed,
-          userBid: Number(userBid),
-        },
-      });
-      if (accounts[0])
-        setRemainingBudget(await getRemainingBudget(accounts[0].toLowerCase()));
-    } catch (err) {
-      console.error(err);
-      dispatch({ type: "SET_ERROR", payload: "Error fetching auction data" });
-      toast.error("Error fetching auction data");
-    }
-  }, [address, navigate]);
+  if (!window.ethereum) return navigate("/");
 
-  const refundApprovers = useCallback(async () => {
-    if (!state.auction) return;
-    try {
-      const isActive = await state.auction.methods.getStatus().call();
-      if (isActive)
-        return toast.error("Auction still active, cannot refund yet.");
-      const nonWinners = state.contributors.filter(
-        (addr) => addr.toLowerCase() !== state.highestBidder.toLowerCase()
+  try {
+    const [accounts, auctionInstance] = await Promise.all([
+      window.ethereum.request({ method: "eth_accounts" }),
+      Campaign(address),
+    ]);
+
+    const account = accounts[0] || "";
+
+    const summary = await auctionInstance.methods.getSummary().call();
+
+    const minimumContribution = summary[0];
+    const balance = summary[1];
+    const approversCount = summary[2];
+    const manager = summary[3];
+    const highestBid = summary[4];
+    const dataForSell = summary[5];
+    const dataDescription = summary[6];
+    const highestBidder = summary[7];
+    const addresses = summary[8];
+    const endTime = summary[9];
+
+    const [rawTransactions, userBid, closed] = await Promise.all([
+      auctionInstance.methods.getTransactions().call(),
+      account ? auctionInstance.methods.getBid(account).call() : Promise.resolve(0),
+      auctionInstance.methods.getStatus().call(),
+    ]);
+
+    const transactions = rawTransactions.map(({ bidderAddress, value, time }) => ({
+      bidder: bidderAddress,
+      bid: value,
+      time: moment.unix(Number(time)).format("DD-MM-YYYY HH:mm:ss"),
+    }));
+
+    let refundsProcessed = true;
+
+    if (closed) {
+      const stillOwed = await Promise.all(
+        addresses
+          .filter((addr) => addr.toLowerCase() !== highestBidder.toLowerCase())
+          .map(async (addr) => {
+            const owed = await auctionInstance.methods.getBid(addr).call();
+            return Number(owed) > 0;
+          })
       );
-      for (const addr of nonWinners) {
-        const bidAmount = await state.auction.methods.getBid(addr).call();
-        if (Number(bidAmount) > 0)
-          await state.auction.methods
-            .withdrawBid(addr)
-            .send({ from: state.manager });
+      refundsProcessed = !stillOwed.includes(true);
+
+      if (refundsProcessed) {
+        const ethBalances = await Promise.all(
+          addresses.map((addr) => web3.eth.getBalance(addr))
+        );
+        const contractBalance = BigInt(await web3.eth.getBalance(auctionInstance.options.address));
+        const managerBalance = BigInt(await web3.eth.getBalance(manager));
+
+        if (contractBalance !== 0n) refundsProcessed = false;
+        if (managerBalance < BigInt(highestBid)) refundsProcessed = false;
       }
-      await state.auction.methods.paySeller().send({ from: state.manager });
-      toast.success("Refunds processed and seller paid!");
-      await fetchAuctionData();
-    } catch (err) {
-      console.error(err);
-      toast.error("Error processing refunds: " + err.message);
     }
-  }, [
-    state.auction,
-    state.contributors,
-    state.highestBidder,
-    state.manager,
-    fetchAuctionData,
-  ]);
+
+    dispatch({
+      type: "SET_AUCTION_DATA",
+      payload: {
+        connectedAccount: account,
+        auction: auctionInstance,
+        minimumContribution,
+        approversCount,
+        manager,
+        highestBid,
+        dataForSell,
+        dataDescription,
+        endTime,
+        highestBidder,
+        transactions,
+        contributors: addresses,
+        refundsProcessed,
+        userBid: Number(userBid),
+        closed,
+      },
+    });
+
+    if (account) {
+      setRemainingBudget(getRemainingBudget(account.toLowerCase()));
+    }
+
+  } catch (err) {
+    console.error(err);
+    dispatch({ type: "SET_ERROR", payload: "Error fetching auction data" });
+    toast.error("Error fetching auction data");
+  }
+}, [address, navigate]);
+
+const finalizeAuction = useCallback(async () => {
+  if (!state.auction) return;
+
+  try {
+    console.log("⏳ Finalizing auction from:", state.manager);
+    const summaryBefore = await state.auction.methods.getSummary().call();
+    const addresses = await state.auction.methods.getAddresses().call();
+
+    const balancesBefore = await Promise.all(
+      addresses.map(addr => web3.eth.getBalance(addr))
+    );
+    const managerBalanceBefore = await web3.eth.getBalance(state.manager);
+
+    await state.auction.methods.finalizeAuctionIfNeeded().send({ from: state.manager });
+    toast.success(`Auction finalized! Seller earned: ${
+      web3.utils.fromWei((BigInt(managerBalanceAfter) - BigInt(managerBalanceBefore)).toString(), "ether")
+    } ETH`);
+
+    const summaryAfter = await state.auction.methods.getSummary().call();
+    const closed = await state.auction.methods.getStatus().call();
+    const balancesAfter = await Promise.all(
+      addresses.map(addr => web3.eth.getBalance(addr))
+    );
+    const managerBalanceAfter = await web3.eth.getBalance(state.manager);
+
+    console.log("✅ Auction closed:", closed);
+    console.log("🏆 Highest bidder:", summaryAfter[7]);
+    console.log("💰 Highest bid:", web3.utils.fromWei(summaryAfter[4], "ether"), "ETH");
+
+    console.log("💸 Seller (manager) balance change:",
+      web3.utils.fromWei((BigInt(managerBalanceAfter) - BigInt(managerBalanceBefore)).toString(), "ether"),
+      "ETH"
+    );
+
+    addresses.forEach((addr, i) => {
+      if (addr !== summaryAfter[7]) {
+        const refundAmount = BigInt(balancesAfter[i]) - BigInt(balancesBefore[i]);
+        console.log(`🔁 Refund to ${addr}:`, web3.utils.fromWei(refundAmount.toString(), "ether"), "ETH");
+      }
+    });
+
+    dispatch({ type: "SET_AUCTION_DATA", payload: { refundsProcessed: true } });
+    await fetchAuctionData();
+
+  } catch (err) {
+    console.error("❌ Error during finalization:", err);
+    toast.error("Error finalizing auction: " + err.message);
+  }
+}, [state.auction, state.manager, fetchAuctionData]);
+
+
 
   const handleSuccessfulBid = useCallback(
     async (newBidAmount) => {
@@ -280,25 +330,6 @@ function ShowAuctionPage() {
     };
   }, [state.auction, fetchAuctionData]);
 
-  // useEffect(() => {
-  //   if (!isAuctionActive) {
-  //     console.log("Handling auction end for manager...");
-  //     try {
-  //       refundApprovers().finally(() => {
-  //         setHasHandledAuctionEnd(true); // prevent double execution
-  //         console.log("Handled!");
-  //       });
-  //     } catch (error) {
-  //       console.error("Error handling auction end:", error);
-  //     }
-  //   }
-  // }, [
-  //   isAuctionActive,
-  //   isManager,
-  //   state.refundsProcessed,
-  //   refundApprovers,
-  //   hasHandledAuctionEnd,
-  // ]);
 
   const renderAuctionInfo = () => (
     <Box>
@@ -519,14 +550,15 @@ function ShowAuctionPage() {
           </DialogContent>
           <DialogActions>
             <Button
+              id="finalize-auction-button"
               variant="contained"
-              disabled={!state.transactions.length || state.refundsProcessed}
+              disabled={!(state.transactions.length && state.refundsProcessed)}
               style={{ ...buttonStyle, marginRight: "1rem", width: "12rem" }}
-              onClick={refundApprovers}
+              onClick={finalizeAuction} 
             >
               {state.refundsProcessed
-                ? "Refunds Processed"
-                : "Refund Approvers"}
+                ? "Auction Finalized"
+                : "Finalize Auction"}
             </Button>
           </DialogActions>
         </Dialog>

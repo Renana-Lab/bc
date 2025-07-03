@@ -3,7 +3,7 @@ import CampaignFactory from "./build/CampaignFactory.json";
 
 const instance = new web3.eth.Contract(
   CampaignFactory.abi,
-  "0x3fd4eA406a1aB032af2Ac8aCF72f22D35161934D" // Replace with your deployed contract address
+  "0xb60Fe0f7fd083E82F018D98d3Fd1304f0478C44F" // Replace with your deployed contract address
 );
 
 export default instance;

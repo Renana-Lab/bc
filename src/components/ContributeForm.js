@@ -35,7 +35,7 @@ class ContributeForm extends Component {
     const campaign = Campaign(address);
     const summary = await campaign.methods.getSummary().call();
     const minimumContribution = summary[0];
-    const endTime = summary[7];
+    const endTime = summary[9];
     const manager = summary[3];
     const accounts = await window.ethereum.request({ method: "eth_accounts" });
     const connectedAccount = accounts[0];

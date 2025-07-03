@@ -7,7 +7,7 @@ if (typeof window !== "undefined" && typeof window.ethereum !== "undefined") {
   web3 = new Web3(window.ethereum);
 
   window.ethereum
-    .request({ method: "eth_requestAccounts" })
+    .request({ method: "eth_requestAccounts" }) 
     .then(() => {
       return window.ethereum.request({ method: "net_version" });
     })

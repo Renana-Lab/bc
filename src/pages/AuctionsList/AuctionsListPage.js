@@ -73,11 +73,11 @@ function AuctionsListPage() {
         auctions.map(async (address) => {
           const auction = Campaign(address);
           const details = await auction.methods.getSummary().call();
-          const contributors = await auction.methods.getAddresses().call();
+          const addresses = await auction.methods.getAddresses().call();
           let isRefunded = false;
           const currentUserAddress = window.ethereum?.selectedAddress?.toLowerCase();
           if (
-            contributors.includes(currentUserAddress) &&
+            addresses.includes(currentUserAddress) &&
             details[8].toLowerCase() !== currentUserAddress &&
             Number(details[7] + "000") < Date.now()
           ) {
@@ -85,16 +85,18 @@ function AuctionsListPage() {
             isRefunded = Number(balance) === 0;
           }
           return {
-            address,
-            contributors,
-            contributorsCount: contributors.length || 0,
-            dataForSell: details[5],
-            dataDescription: details[6],
-            endTime: Number(details[7] + "000"),
-            highestBidder: details[8],
-            highestBid: details[4],
-            isRefunded,
-          };
+              address,
+              minimumContribution: details[0],
+              balance: details[1],
+              approversCount: details[2],
+              manager: details[3],
+              highestBid: details[4],
+              dataForSell: details[5],
+              dataDescription: details[6],
+              highestBidder: details[7],
+              contributors: details[8],
+              endTime: Number(details[9] + "000"), // ← אל תשכח להכפיל ב-1000
+            };
         })
       );
       setAuctionsList(auctionData);
@@ -147,7 +149,7 @@ function AuctionsListPage() {
 
   const isUserInAuction = (auction) => {
     const currentUserAddress = window.ethereum?.selectedAddress?.toLowerCase();
-    return auction.contributors?.some(
+    return auction.addresses?.some(
       (address) => address.toLowerCase() === currentUserAddress
     );
   };
