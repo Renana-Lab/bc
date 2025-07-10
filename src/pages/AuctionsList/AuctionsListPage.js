@@ -60,13 +60,13 @@ function AuctionsListPage() {
   const fetchNetworkId = async () => {
     try {
       const id = await web3.eth.net.getId();
-      console.log("✅ Connected Network ID:", id);
+      // console.log("✅ Connected Network ID:", id);
     } catch (error) {
       console.error("❌ Error fetching network ID:", error);
     }
   };
 
-  const fetchAuctionsList = async () => {
+  const fetchAuctionsList = async () => { 
     try {
       const auctions = await factory.methods.getDeployedCampaigns().call();
       const auctionData = await Promise.all(
@@ -74,16 +74,19 @@ function AuctionsListPage() {
           const auction = Campaign(address);
           const details = await auction.methods.getSummary().call();
           const addresses = await auction.methods.getAddresses().call();
-          let isRefunded = false;
           const currentUserAddress = window.ethereum?.selectedAddress?.toLowerCase();
-          if (
-            addresses.includes(currentUserAddress) &&
-            details[8].toLowerCase() !== currentUserAddress &&
-            Number(details[7] + "000") < Date.now()
-          ) {
+
+          let isRefunded = false;
+          const auctionEnded = Number(details[9] + "000") < Date.now();
+          const isHighestBidder = details[7].toLowerCase() === currentUserAddress;
+          const isManager = details[3].toLowerCase() === currentUserAddress;
+          const userInAuction = addresses.map(a => a.toLowerCase()).includes(currentUserAddress);
+
+          if (userInAuction && auctionEnded && !isHighestBidder && !isManager) {
             const balance = await auction.methods.getBid(currentUserAddress).call();
             isRefunded = Number(balance) === 0;
           }
+
           return {
               address,
               minimumContribution: details[0],
@@ -94,8 +97,10 @@ function AuctionsListPage() {
               dataForSell: details[5],
               dataDescription: details[6],
               highestBidder: details[7],
-              contributors: details[8],
+              addresses: details[8],
               endTime: Number(details[9] + "000"), // ← אל תשכח להכפיל ב-1000
+              isRefunded,
+
             };
         })
       );
@@ -121,7 +126,7 @@ function AuctionsListPage() {
       const interval = setInterval(() => {
         fetchAuctionsList();
         setRemainingBudget(getRemainingBudget(userAddress));
-        console.log("⏰ Fetching auctions list...");
+        // console.log("⏰ Fe tching auctions list...");
       }, 5000);
 
       return () => clearInterval(interval);
@@ -143,19 +148,20 @@ function AuctionsListPage() {
   const hasUserWonAuction = (auction) => {
     const currentUserAddress = window.ethereum?.selectedAddress?.toLowerCase();
     const auctionEnded = Number(auction.endTime) < Date.now();
-    const isHighestBidder = auction.highestBidder?.toLowerCase() === currentUserAddress;
+    const isHighestBidder = auction.highestBidder?. toLowerCase() === currentUserAddress;
     return auctionEnded && isHighestBidder;
   };
 
   const isUserInAuction = (auction) => {
     const currentUserAddress = window.ethereum?.selectedAddress?.toLowerCase();
-    return auction.addresses?.some(
+    return !!auction?.addresses?.some(
       (address) => address.toLowerCase() === currentUserAddress
     );
   };
 
+
   const getRowStyles = (hasWon, isOpen, isRefunded) => ({
-    backgroundColor: hasWon ? "#90EE90" : isOpen ? "#BBDEFB" : isRefunded ? "#FFD700" : "#E9E9F6",
+    backgroundColor: hasWon ? "#90EE90" : isOpen ? "#BBDEFB" : isRefunded  ? "#FFD700" : "#E9E9F6",
     marginBottom: "1rem",
     "&:hover": {
       backgroundColor: hasWon ? "#77DD77" : isOpen ? "#A3CFFA" : isRefunded ? "#FFC107" : "#D0D0F0",
@@ -261,7 +267,10 @@ function AuctionsListPage() {
                   const auctionOpen = isAuctionOpen(auction.endTime);
                   const refundStatus = userParticipated && !userWon && !auctionOpen
                     ? (auction.isRefunded ? "Refunded" : "Awaiting Refund")
-                    : "-";
+                    : "N/A";
+                  // console.log("auction.isRefunded = ", auction.isRefunded);
+                  // console.log("currentUserAddress =", auction.currentUserAddress);
+                  // console.log("auction.manager =", auction.manager);
                   return (
                     <TableRow
                       key={index}

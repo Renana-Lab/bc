@@ -62,29 +62,35 @@ contract Campaign {
         closed = false;
     }
 
-    function contribute() public payable onlyBeforeEnd {
-        require(msg.sender != manager, "You can't bid on your own auction");
-        require(msg.value >= minimumContribution, "Bid below minimum");
-        require(msg.value > highestBid, "There is already a higher or equal bid");
+function contribute() public payable onlyBeforeEnd {
+    require(msg.sender != manager, "You can't bid on your own auction");
+    require(msg.value > 0, "Must send some ether");
 
-        if (approversMoney[msg.sender] > 0) {
-            uint256 oldBid = approversMoney[msg.sender];
-            payable(msg.sender).transfer(oldBid);
-            emit RefundProcessed(msg.sender, oldBid);
-        }
+    uint256 previous = approversMoney[msg.sender];
+    uint256 newTotal = previous + msg.value;
 
-        approversMoney[msg.sender] = msg.value;
-        highestBid = msg.value;
-        highestBidder = msg.sender;
-
-        transactions.push(Bid(msg.value, block.timestamp, msg.sender));
-
-        if (!approvers[msg.sender]) {
-            approvers[msg.sender] = true;
-            approversCount++;
-            addresses.push(msg.sender);
-        }
+    // בביד הראשון נדרש לעמוד במינימום, בבידים הבאים לא
+    if (previous == 0) {
+        require(newTotal >= minimumContribution, "Below minimum bid");
     }
+
+    require(newTotal > highestBid, "Bid must exceed current highest");
+
+    // מעדכנים את המאזן המצטבר
+    approversMoney[msg.sender] = newTotal;
+    highestBid = newTotal;
+    highestBidder = msg.sender;
+
+    // שומרים רק את **סכום ההפרש** כהיסטוריה
+    transactions.push(Bid(msg.value, block.timestamp, msg.sender));
+
+    // רישום כתובת חדשה (פעם אחת בלבד)
+    if (!approvers[msg.sender]) {
+        approvers[msg.sender] = true;
+        approversCount++;
+        addresses.push(msg.sender);
+    }
+}
 
     function finalizeAuctionIfNeeded() public onlyAfterEnd {
         require(!closed, "Auction already finalized");

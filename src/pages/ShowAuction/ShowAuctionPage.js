@@ -258,7 +258,7 @@ const finalizeAuction = useCallback(async () => {
 
   } catch (err) {
     console.error("❌ Error during finalization:", err);
-    toast.error("Error finalizing auction: " + err.message);
+    toast.error("Auction did not end!\nYou did not get your money for the data!");
   }
 }, [state.auction, state.manager, fetchAuctionData]);
 
@@ -549,17 +549,17 @@ const finalizeAuction = useCallback(async () => {
             </DialogContentText>
           </DialogContent>
           <DialogActions>
-            <Button
-              id="finalize-auction-button"
-              variant="contained"
-              disabled={!(state.transactions.length && state.refundsProcessed)}
-              style={{ ...buttonStyle, marginRight: "1rem", width: "12rem" }}
-              onClick={finalizeAuction} 
-            >
-              {state.refundsProcessed
-                ? "Auction Finalized"
-                : "Finalize Auction"}
-            </Button>
+            {state.refundsProcessed && (
+              <Button
+                id="finalize-auction-button"
+                variant="contained"
+                disabled={!state.transactions.length}
+                style={{ ...buttonStyle, marginRight: "1rem", width: "12rem" }}
+                onClick={finalizeAuction}
+              >
+                Get your money
+              </Button>
+            )}
           </DialogActions>
         </Dialog>
       )}
