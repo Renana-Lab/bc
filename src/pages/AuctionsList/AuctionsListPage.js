@@ -14,13 +14,13 @@ import {
 } from "@mui/material";
 import { useNavigate, useLocation } from "react-router-dom";
 import Countdown from "react-countdown";
-import factory from "../../real_ethereum/factory";
-import Campaign from "../../real_ethereum/campaign";
-import web3 from "../../real_ethereum/web3";
-import Layout from "../../components/Layout";
+import factory from "../../real_ethereum/factory.js";
+import Campaign from "../../real_ethereum/campaign.js";
+import web3 from "../../real_ethereum/web3.js";
+import Layout from "../../components/Layout.js";
 import styles from "./auctions.module.scss";
 import picSrc from "./Illustration_Start.png";
-import { getDefaultBudget } from "../ManageBudget/ManageBudgetPage";
+import { getDefaultBudget } from "../ManageBudget/ManageBudgetPage.js";
 
 // Initialize userSpendingStore from localStorage
 const userSpendingStore = JSON.parse(localStorage.getItem("userSpendingStore")) || {};

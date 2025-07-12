@@ -1,7 +1,7 @@
 import { Button, TextField, Typography, Box } from "@mui/material";
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import Layout from "../../components/Layout";
+import Layout from "../../components/Layout.js";
 import toast from "react-hot-toast";
 
 const LOCAL_STORAGE_KEY = "globalBudgetStore";

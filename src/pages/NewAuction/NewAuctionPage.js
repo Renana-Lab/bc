@@ -1,8 +1,8 @@
 import React, { useCallback, useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import Layout from "../../components/Layout";
-import factory from "../../real_ethereum/factory";
-import web3 from "../../real_ethereum/web3";
+import Layout from "../../components/Layout.js";
+import factory from "../../real_ethereum/factory.js";
+import web3 from "../../real_ethereum/web3.js";
 import styles from "./new.module.scss";
 import {
   Button,

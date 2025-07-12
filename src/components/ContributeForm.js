@@ -1,11 +1,14 @@
 import { Component } from "react";
-import FormControl from "@mui/material/FormControl";
-import TextField from "@mui/material/TextField";
-import Button from "@mui/material/Button";
-import Alert from "@mui/material/Alert";
-import Campaign from "../real_ethereum/campaign";
+import FormControl from "@mui/material/FormControl/index.js";
+import TextField from "@mui/material/TextField/index.js";
+import Button from "@mui/material/Button/index.js";
+import Alert from "@mui/material/Alert/index.js";
+import Campaign from "../real_ethereum/campaign.js";
+import Token from "../real_ethereum/token.js"; // Token(address) function like Campaign.js
+import tokenAddress from "../real_ethereum/tokenAddress.js";
+
 import styles from "./../styles/components.module.scss";
-import CircularProgress from "@mui/material/CircularProgress";
+import CircularProgress from "@mui/material/CircularProgress/index.js";
 import { Typography } from "@mui/material";
 import toast from "react-hot-toast";
 
@@ -94,9 +97,17 @@ class ContributeForm extends Component {
     }
 
     try {
-      await campaign.methods.contribute().send({
+
+      const token = Token(tokenAddress);
+
+      // 🟦 Approve tokens before bidding
+      await token.methods.approve(address, additionalBid).send({
         from: connectedAccount,
-        value: additionalBid.toString(),
+        });
+
+      // 🟩 Call contribute with amount
+      await campaign.methods.contribute(additionalBid).send({
+        from: connectedAccount,
       });
 
       toast.success(

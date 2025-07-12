@@ -1,5 +1,5 @@
 import React from "react";
-import Layout from "../../components/Layout";
+import Layout from "../../components/Layout.js";
 import styles from "./metamask.module.scss";
 import {
   Accordion,

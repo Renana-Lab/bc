@@ -1,7 +1,7 @@
 import React from "react";
 import styles from "./home.module.scss";
-import Layout from "../../components/Layout";
-import Button from "@mui/material/Button";
+import Layout from "../../components/Layout.js";
+import Button from "@mui/material/Button/index.js";
 import { useNavigate } from "react-router-dom";
 import Welcomepic from "./Illustration_Wel.png";
 function HomePage() {

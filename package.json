@@ -1,6 +1,7 @@
 {
   "name": "bc",
   "version": "0.1.0",
+  "type": "module",
   "private": true,
   "dependencies": {
     "@emotion/react": "^11.10.6",
@@ -57,6 +58,8 @@
     ]
   },
   "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^6.0.0",
+    "hardhat": "^2.25.0",
     "source-map-loader": "^5.0.0"
   }
 }

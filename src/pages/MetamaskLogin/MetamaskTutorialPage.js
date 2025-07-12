@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import Button from "@mui/material/Button";
+import Button from "@mui/material/Button/index.js";
 import { useMetaMask } from "../../Context/Context.js"; // Import useMetaMask hook
 import Layout from "../../components/Layout.js";
 import metamaskImg from "./Illustration_Metamask.png";

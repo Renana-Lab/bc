@@ -2,9 +2,11 @@
 import { useReducer, useEffect, useMemo, useCallback, useState } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import moment from "moment";
-import Layout from "../../components/Layout";
-import Campaign from "../../real_ethereum/campaign";
-import ContributeForm from "../../components/ContributeForm";
+import Layout from "../../components/Layout.js";
+import Campaign from "../../real_ethereum/campaign.js";
+import getTokenContract from "../../real_ethereum/token.js";
+
+import ContributeForm from "../../components/ContributeForm.js";
 import Countdown from "react-countdown";
 import toast from "react-hot-toast";
 import web3 from "../../real_ethereum/web3.js";
@@ -37,7 +39,7 @@ import picSrc from "./medal.png";
 import {
   getRemainingBudget,
   addUserSpending,
-} from "../AuctionsList/AuctionsListPage";
+} from "../AuctionsList/AuctionsListPage.js";
 
 const buttonStyle = {
   height: "2.5rem",
@@ -68,6 +70,10 @@ const initialState = {
   loading: true,
   error: null,
 };
+
+
+const MyToken = getTokenContract();
+
 
 const reducer = (state, action) => {
   switch (action.type) {
@@ -169,14 +175,14 @@ function ShowAuctionPage() {
       refundsProcessed = !stillOwed.includes(true);
 
       if (refundsProcessed) {
-        const ethBalances = await Promise.all(
-          addresses.map((addr) => web3.eth.getBalance(addr))
+        const tokenBalances = await Promise.all(
+          addresses.map((addr) => MyToken.methods.balanceOf(addr).call())
         );
-        const contractBalance = BigInt(await web3.eth.getBalance(auctionInstance.options.address));
-        const managerBalance = BigInt(await web3.eth.getBalance(manager));
+        const managerBalance = await MyToken.methods.balanceOf(manager).call();
+        const contractBalance = await MyToken.methods.balanceOf(address).call();
 
-        if (contractBalance !== 0n) refundsProcessed = false;
-        if (managerBalance < BigInt(highestBid)) refundsProcessed = false;
+        if (BigInt(contractBalance) !== 0n) refundsProcessed = false;
+        if (BigInt(managerBalance) < BigInt(highestBid)) refundsProcessed = false;
       }
     }
 
@@ -221,21 +227,25 @@ const finalizeAuction = useCallback(async () => {
     const addresses = await state.auction.methods.getAddresses().call();
 
     const balancesBefore = await Promise.all(
-      addresses.map(addr => web3.eth.getBalance(addr))
+      addresses.map(addr => MyToken.methods.balanceOf(addr).call())
     );
-    const managerBalanceBefore = await web3.eth.getBalance(state.manager);
+    const managerBalanceBefore = await MyToken.methods.balanceOf(state.manager).call();
+
+    const managerBalanceAfter = await MyToken.methods.balanceOf(state.manager).call();
 
     await state.auction.methods.finalizeAuctionIfNeeded().send({ from: state.manager });
     toast.success(`Auction finalized! Seller earned: ${
-      web3.utils.fromWei((BigInt(managerBalanceAfter) - BigInt(managerBalanceBefore)).toString(), "ether")
-    } ETH`);
+      (BigInt(managerBalanceAfter) - BigInt(managerBalanceBefore)) / 10n ** 18n
+    } RST`);
+
 
     const summaryAfter = await state.auction.methods.getSummary().call();
+
     const closed = await state.auction.methods.getStatus().call();
+
     const balancesAfter = await Promise.all(
-      addresses.map(addr => web3.eth.getBalance(addr))
+      addresses.map(addr => MyToken.methods.balanceOf(addr).call())
     );
-    const managerBalanceAfter = await web3.eth.getBalance(state.manager);
 
     console.log("✅ Auction closed:", closed);
     console.log("🏆 Highest bidder:", summaryAfter[7]);
@@ -305,12 +315,12 @@ const finalizeAuction = useCallback(async () => {
     if (!state.auction) return;
 
     const handleRefundProcessed = (contributor, amount) => {
-      toast.success(`Refund processed for ${contributor}: ${amount} wei`);
+      toast.success(`Refund processed for ${contributor}: ${amount} RST`);
       fetchAuctionData();
     };
 
     const handleSellerPaid = (seller, amount) => {
-      toast.success(`Seller paid: ${amount} wei`);
+      toast.success(`Seller paid: ${amount} RST`);
       fetchAuctionData();
     };
 
@@ -345,10 +355,10 @@ const finalizeAuction = useCallback(async () => {
           />
         )}
         <InfoItem
-          label="Minimum bid (wei) required"
+          label="Minimum bid (RST) required"
           value={state.minimumContribution}
         />
-        <InfoItem label="Highest bid (wei) recorded" value={state.highestBid} />
+        <InfoItem label="Highest bid (RST) recorded" value={state.highestBid} />
         <InfoItem label="Number of bidders" value={state.approversCount} />
       </div>
       {!isAuctionActive && isManager && (
@@ -427,7 +437,7 @@ const finalizeAuction = useCallback(async () => {
               Remaining Budget:{" "}
               {remainingBudget === Infinity
                 ? "Unlimited"
-                : `${remainingBudget} wei`}
+                : `${remainingBudget} RST`}
             </Typography>
             <ContributeForm
               address={address}

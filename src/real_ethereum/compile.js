@@ -1,17 +1,15 @@
-const path = require("path");
-const fs = require("fs-extra");
+import path from "path";
+import fs from "fs-extra"; // שים לב לשינוי מ-fs ל-fs-extra
+import solc from "solc";
 
-// ייבוא גרסה מדויקת של הסולק מה-node_modules
-const solc = require(path.resolve(__dirname, "../../node_modules/solc"));
+// 🔹 Define paths
+const contractPath = path.resolve("src", "real_ethereum", "contracts", "Campaign.sol");
+const buildPath = path.resolve("src", "real_ethereum", "build");
 
-const buildPath = path.resolve(__dirname, "build");
-console.log("🧹 Removing old build folder...");
-fs.removeSync(buildPath);
+// 🔹 Read source
+const source = fs.readFileSync(contractPath, "utf8");
 
-const campaignPath = path.resolve(__dirname, "contracts", "Campaign.sol");
-console.log("📄 Reading Campaign.sol from:", campaignPath);
-const source = fs.readFileSync(campaignPath, "utf8");
-
+// 🔹 Build input
 const input = {
   language: "Solidity",
   sources: {
@@ -28,26 +26,40 @@ const input = {
   },
 };
 
-console.log("🛠 Compiling contracts...");
-console.log("🧪 Using solc version:", solc.version());
-
-const compiled = JSON.parse(solc.compile(JSON.stringify(input)));
-
-if (!compiled.contracts || !compiled.contracts["Campaign.sol"]) {
-  console.error("❌ Compilation failed:", compiled.errors);
-  throw new Error("Compilation failed.");
+// 🔹 Import resolver for OpenZeppelin imports
+function findImports(importPath) {
+  try {
+    const fullPath = path.resolve("node_modules", importPath);
+    return { contents: fs.readFileSync(fullPath, "utf8") };
+  } catch (e) {
+    return { error: "File not found: " + importPath };
+  }
 }
 
-const output = compiled.contracts["Campaign.sol"];
-console.log("✅ Contracts compiled successfully:");
-console.log(Object.keys(output)); // הדפסת שמות החוזים
+// 🔹 Compile
+console.log("🛠 Compiling Campaign.sol...");
+const output = JSON.parse(solc.compile(JSON.stringify(input), { import: findImports }));
 
+if (output.errors) {
+  output.errors.forEach((err) => {
+    console.error(err.formattedMessage);
+  });
+}
+
+if (!output.contracts || !output.contracts["Campaign.sol"]) {
+  throw new Error("❌ Compilation failed. No contracts found.");
+}
+
+// 🔹 Save output
+fs.removeSync(buildPath);
 fs.ensureDirSync(buildPath);
 
-for (let contractName in output) {
-  const filePath = path.resolve(buildPath, `${contractName}.json`);
-  fs.outputJsonSync(filePath, output[contractName]);
-  console.log(`📦 Saved ${contractName}.json to build folder`);
+const compiled = output.contracts["Campaign.sol"];
+for (const name in compiled) {
+  const filePath = path.resolve(buildPath, `${name}.json`);
+  fs.outputJsonSync(filePath, compiled[name]);
+  console.log(`📦 Saved ${name}.json`);
 }
 
-console.log("✅ Compilation finished. Run deploy.js manually after this.");
+console.log("✅ Compilation complete.");
+export default compiled;

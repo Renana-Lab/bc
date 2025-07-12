@@ -10,6 +10,12 @@
 
 pragma solidity ^0.8.9;
 
+
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+
+
+
+
 contract Campaign {
     event RefundProcessed(address indexed contributor, uint256 amount);
     event SellerPaid(address indexed seller, uint256 amount);
@@ -37,6 +43,10 @@ contract Campaign {
     uint256 public endTime;
     bool public closed;
 
+
+    IERC20 public token;
+
+
     modifier onlyBeforeEnd() {
         require(block.timestamp < endTime, "Auction ended");
         _;
@@ -52,7 +62,9 @@ contract Campaign {
         string memory dataSell,
         string memory dataDesc,
         address creator,
-        uint256 duration
+        uint256 duration,
+        address tokenAddress
+
     ) {
         manager = creator;
         minimumContribution = minimum;
@@ -60,14 +72,14 @@ contract Campaign {
         dataDescription = dataDesc;
         endTime = duration;
         closed = false;
+        token = IERC20(tokenAddress);
     }
 
-function contribute() public payable onlyBeforeEnd {
+function contribute(uint256 amount) public onlyBeforeEnd {
     require(msg.sender != manager, "You can't bid on your own auction");
-    require(msg.value > 0, "Must send some ether");
 
     uint256 previous = approversMoney[msg.sender];
-    uint256 newTotal = previous + msg.value;
+    uint256 newTotal = previous + amount;
 
     // בביד הראשון נדרש לעמוד במינימום, בבידים הבאים לא
     if (previous == 0) {
@@ -76,13 +88,17 @@ function contribute() public payable onlyBeforeEnd {
 
     require(newTotal > highestBid, "Bid must exceed current highest");
 
+
+    token.transferFrom(msg.sender, address(this), amount);
+
+
     // מעדכנים את המאזן המצטבר
     approversMoney[msg.sender] = newTotal;
     highestBid = newTotal;
     highestBidder = msg.sender;
 
     // שומרים רק את **סכום ההפרש** כהיסטוריה
-    transactions.push(Bid(msg.value, block.timestamp, msg.sender));
+    transactions.push(Bid(amount, block.timestamp, msg.sender));
 
     // רישום כתובת חדשה (פעם אחת בלבד)
     if (!approvers[msg.sender]) {
@@ -101,15 +117,14 @@ function contribute() public payable onlyBeforeEnd {
                 uint256 refundAmount = approversMoney[contributor];
                 if (refundAmount > 0) {
                     approversMoney[contributor] = 0;
-                    payable(contributor).transfer(refundAmount);
+                    require(token.transfer(contributor, refundAmount), "Refund failed");
                     emit RefundProcessed(contributor, refundAmount);
                 }
             }
         }
 
         if (highestBid > 0) {
-            require(address(this).balance >= highestBid, "Insufficient balance");
-            payable(manager).transfer(highestBid);
+            require(token.transfer(manager, highestBid), "Payment to seller failed");
             emit SellerPaid(manager, highestBid);
         }
 
@@ -149,7 +164,7 @@ function contribute() public payable onlyBeforeEnd {
     {
         return (
             minimumContribution,
-            address(this).balance,
+            token.balanceOf(address(this)), // 👈 במקום address(this).balance
             approversCount,
             manager,
             highestBid,
@@ -169,11 +184,12 @@ contract CampaignFactory {
         uint256 minimum,
         string memory dataSell,
         string memory dataDesc,
-        uint256 duration
+        uint256 duration,
+        address tokenAddress
     ) public {
         uint256 end = 60 * duration + block.timestamp;
         address newCampaign = address(
-            new Campaign(minimum, dataSell, dataDesc, msg.sender, end)
+            new Campaign(minimum, dataSell, dataDesc, msg.sender, end, tokenAddress)
         );
         deployedCampaigns.push(payable(newCampaign));
     }
