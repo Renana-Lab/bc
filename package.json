@@ -17,7 +17,7 @@
     "@testing-library/react": "^13.4.0",
     "@testing-library/user-event": "^13.5.0",
     "@truffle/hdwallet-provider": "^2.1.15",
-    "dotenv": "^17.0.1",
+    "dotenv": "^17.2.0",
     "ethereumjs-abi": "^0.6.8",
     "moment": "^2.29.4",
     "react": "^18.2.0",

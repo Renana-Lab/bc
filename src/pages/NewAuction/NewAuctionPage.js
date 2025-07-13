@@ -92,7 +92,6 @@ function NewAuctionPage() {
     async (event) => {
       event.preventDefault();
       if (!validateForm()) return;
-
       setLoading(true);
       const toastId = toast.loading("⏳ Creating auction...");
 
@@ -103,7 +102,8 @@ function NewAuctionPage() {
             formData.minimumContribution,
             formData.dataForSell,
             formData.dataDescription,
-            formData.auctionDuration
+            formData.auctionDuration,
+            "0x6FB626276ABEcE017738509E8a7cad2BD4eD4b0d"
           )
           .send({ from: accounts[0] });
 

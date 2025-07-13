@@ -3,6 +3,8 @@ import path from "path";
 import { fileURLToPath } from "url";
 import HDWalletProvider from "@truffle/hdwallet-provider";
 import Web3 from "web3";
+import dotenv from "dotenv";
+dotenv.config();
 
 // ⚙️ נתיב לתיקייה הנוכחית
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -31,13 +33,19 @@ if (!bytecodeFactory) {
 }
 
 // 🧪 ספק + חשבונות
-// password = RasBlockExp2023!0
-// address = 0xc8C64364770D981a2B3a3B9c90a41d756e946F56
-// prviate key = fbf0fe464efb8b20cf9c758b96cf6f23b6f70caa34413e71e4c2363d70bdb1bd
-const provider = new HDWalletProvider(
-  "satisfy canoe farm alone talent elder cost minor rich frame keep tomorrow",
-  "https://sepolia.infura.io/v3/b27d53291ceb44bd864dbf7b0eb55581"
-);
+
+
+const mnemonic = process.env.MNEMONIC;
+const infuraUrl = process.env.INFURA_URL;
+
+// Check both exist
+if (!mnemonic || !infuraUrl) {
+  console.log("MNEMONIC:", process.env.MNEMONIC);
+console.log("INFURA_URL:", process.env.INFURA_URL);
+
+  throw new Error("Missing MNEMONIC or INFURA_URL from .env");
+}
+const provider = new HDWalletProvider(mnemonic, infuraUrl);
 const web3 = new Web3(provider);
 
 const deploy = async () => {
