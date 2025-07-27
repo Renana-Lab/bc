@@ -10,8 +10,8 @@
 
 pragma solidity ^0.8.9;
 
-
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
 
 
 
@@ -44,7 +44,7 @@ contract Campaign {
     bool public closed;
 
 
-    IERC20 public token;
+    IERC20Permit public token;
 
 
     modifier onlyBeforeEnd() {
@@ -72,41 +72,101 @@ contract Campaign {
         dataDescription = dataDesc;
         endTime = duration;
         closed = false;
-        token = IERC20(tokenAddress);
+        token = IERC20Permit(tokenAddress);
     }
 
-function contribute(uint256 amount) public onlyBeforeEnd {
-    require(msg.sender != manager, "You can't bid on your own auction");
+    function contribute(uint256 amount) public onlyBeforeEnd {
+        require(msg.sender != manager, "You can't bid on your own auction");
 
-    uint256 previous = approversMoney[msg.sender];
-    uint256 newTotal = previous + amount;
+        uint256 previous = approversMoney[msg.sender];
+        uint256 newTotal = previous + amount;
 
-    // בביד הראשון נדרש לעמוד במינימום, בבידים הבאים לא
-    if (previous == 0) {
-        require(newTotal >= minimumContribution, "Below minimum bid");
+        // בביד הראשון נדרש לעמוד במינימום, בבידים הבאים לא
+        if (previous == 0) {
+            require(newTotal >= minimumContribution, "Below minimum bid");
+        }
+
+        require(newTotal > highestBid, "Bid must exceed current highest");
+
+
+        require(IERC20(address(token)).transferFrom(msg.sender, address(this), amount), "Transfer failed");
+
+
+        // מעדכנים את המאזן המצטבר
+        approversMoney[msg.sender] = newTotal;
+        highestBid = newTotal;
+        highestBidder = msg.sender;
+
+        // שומרים רק את **סכום ההפרש** כהיסטוריה
+        transactions.push(Bid(amount, block.timestamp, msg.sender));
+
+        // רישום כתובת חדשה (פעם אחת בלבד)
+        if (!approvers[msg.sender]) {
+            approvers[msg.sender] = true;
+            approversCount++;
+            addresses.push(msg.sender);
+        }
     }
 
-    require(newTotal > highestBid, "Bid must exceed current highest");
+event PermitAttempt(
+    address indexed owner,
+    address indexed spender,
+    uint256 value,
+    uint256 nonce,
+    uint256 deadline
+);
 
+event PermitSuccess(address indexed owner, uint256 allowanceAfter);
+event PermitFailed(string reason);
+event AllowanceCheck(uint256 allowance, uint256 required);
+event NonceCheck(uint256 onChainNonce);
+event ContributeCalled(address contributor, uint256 amount);
 
-    token.transferFrom(msg.sender, address(this), amount);
+function permitAndContribute(
+    uint256 amount,
+    uint256 deadline,
+    uint8 v,
+    bytes32 r,
+    bytes32 s
+) external {
+    address owner = msg.sender;
+    address spender = address(this);
 
+    // Emit on-chain nonce for visibility
+    uint256 nonce = token.nonces(owner);
+    emit NonceCheck(nonce);
 
-    // מעדכנים את המאזן המצטבר
-    approversMoney[msg.sender] = newTotal;
-    highestBid = newTotal;
-    highestBidder = msg.sender;
+    emit PermitAttempt(owner, spender, amount, nonce, deadline);
 
-    // שומרים רק את **סכום ההפרש** כהיסטוריה
-    transactions.push(Bid(amount, block.timestamp, msg.sender));
-
-    // רישום כתובת חדשה (פעם אחת בלבד)
-    if (!approvers[msg.sender]) {
-        approvers[msg.sender] = true;
-        approversCount++;
-        addresses.push(msg.sender);
+    // Try calling permit
+    try token.permit(owner, spender, amount, deadline, v, r, s) {
+        // Continue
+    } catch Error(string memory reason) {
+        emit PermitFailed(reason);
+        revert(string(abi.encodePacked("Permit failed: ", reason)));
+    } catch {
+        emit PermitFailed("Unknown error");
+        revert("Permit failed: unknown error");
     }
+
+    // Confirm allowance is now set
+    uint256 allowance = IERC20(address(token)).allowance(owner, spender);
+    emit AllowanceCheck(allowance, amount);
+
+    require(allowance >= amount, "Allowance was not updated by permit");
+
+    emit PermitSuccess(owner, allowance);
+
+    // Now safely contribute
+    emit ContributeCalled(owner, amount);
+    contribute(amount);
 }
+
+
+
+
+
+
 
     function finalizeAuctionIfNeeded() public onlyAfterEnd {
         require(!closed, "Auction already finalized");
@@ -117,14 +177,14 @@ function contribute(uint256 amount) public onlyBeforeEnd {
                 uint256 refundAmount = approversMoney[contributor];
                 if (refundAmount > 0) {
                     approversMoney[contributor] = 0;
-                    require(token.transfer(contributor, refundAmount), "Refund failed");
+                    require(IERC20(address(token)).transfer(contributor, refundAmount), "Refund failed");
                     emit RefundProcessed(contributor, refundAmount);
                 }
             }
         }
 
         if (highestBid > 0) {
-            require(token.transfer(manager, highestBid), "Payment to seller failed");
+            require(IERC20(address(token)).transfer(manager, highestBid), "Payment to seller failed");
             emit SellerPaid(manager, highestBid);
         }
 
@@ -164,7 +224,7 @@ function contribute(uint256 amount) public onlyBeforeEnd {
     {
         return (
             minimumContribution,
-            token.balanceOf(address(this)), // 👈 במקום address(this).balance
+            IERC20(address(token)).balanceOf(address(this)),
             approversCount,
             manager,
             highestBid,

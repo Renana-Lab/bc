@@ -69,6 +69,9 @@ const deploy = async () => {
 
     const tokenAddress = resultToken.options.address;
     console.log("✅ Token deployed at:", tokenAddress);
+    // Write to .env
+    const envPath = path.resolve(__dirname, "../../.env");
+    fs.appendFileSync(envPath, `\nTOKEN_ADDRESS=${tokenAddress}\n`);
 
     // ✅ שלב 2: פריסת הפקטורי
     console.log("🚀 Estimating gas for CampaignFactory...");

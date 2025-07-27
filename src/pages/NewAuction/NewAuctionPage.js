@@ -152,7 +152,7 @@ function NewAuctionPage() {
           onSubmit={handleSubmit}
         >
           <h3 className={styles.introductionTitle}>Create Auction</h3>
-          {renderTooltip("minBid", "Minimum Bid (in Wei)")}
+          {renderTooltip("minBid", "Minimum Bid (in Huji Coin)")}
           <TextField
             type="number"
             sx={{ width: "85%" }}
