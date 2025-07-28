@@ -95,6 +95,9 @@ function ShowAuctionPage() {
   const [remainingBudget, setRemainingBudget] = useState(
     navState?.remainingBudget || 0
   );
+  useEffect(() => {
+  console.log("🔁 Updated budget:", remainingBudget);
+  }, [remainingBudget]);
 
   const isAuctionActive = useMemo(
     () => Number(state.endTime + "000") > Date.now(),
@@ -278,6 +281,7 @@ const finalizeAuction = useCallback(async () => {
         if (difference > 0) {
           await addUserSpending(account, difference);
           setRemainingBudget(await getRemainingBudget(account));
+          console.log(remainingBudget);
           await fetchAuctionData();
         }
       } catch (error) {

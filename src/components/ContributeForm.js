@@ -106,12 +106,20 @@ class ContributeForm extends Component {
 
       this.setState({ bidAmount: "", transactionIsLoading: false });
     } catch (err) {
-      toast.error("Error placing bid: " + err.message);
-      this.setState({
-        transactionIsLoading: false,
-        error: true,
-        errorMessage: err.message,
-      });
+        let flagForOutput = true;
+        const message = err?.message || "";
+        if (message.includes("User denied transaction signature")) {
+          flagForOutput = false;
+          toast.error("You decided to cancel your bid");
+        } else {
+          toast.error("Error placing bid: " + message);
+        }
+
+        this.setState({
+          transactionIsLoading: false,
+          error: true,
+          errorMessage: flagForOutput ? message : "You decided to cancel your bid",
+        });
     }
   };
 
