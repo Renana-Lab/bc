@@ -8,7 +8,7 @@ import tokenABI from "../real_ethereum/tokenABI.js";
 import tokenAddress from "../real_ethereum/tokenAddress.js";
 
 import { parseUnits, Contract, BrowserProvider } from "ethers";
-import { Signature } from "ethers/crypto";
+import { Signature } from "ethers";
 import { TypedDataEncoder } from "ethers";
 import { formatUnits } from "ethers";
 
@@ -133,13 +133,18 @@ try {
   const nonce = await token.nonces(connectedAccount);
   console.log("🔢 Nonce:", nonce);
 
+  const name = await token.name();
+  console.log("token name is: ", name);
+
   const domain = {
-    name: DOMAIN_NAME,
+    name: await token.name(),
     version: DOMAIN_VERSION,
     chainId: Number(chainId),
     verifyingContract: tokenAddress,
   };
   console.log("📦 Domain:", domain);
+  const domainSeparator = TypedDataEncoder.hashDomain(domain);
+  console.log("📦 Computed DOMAIN_SEPARATOR (frontend):", domainSeparator);
 
   const types = {
     Permit: [
@@ -156,7 +161,7 @@ try {
   console.log("decimals is ", decimals);
   const tokenToETHValue = parseUnits(String(additionalBid), decimals);
   console.log("additionalBid is ", additionalBid);
-  console.log("tokenToETHValue is ", tokenToETHValue);
+  console.log("tokenToETHValue is ", tokenToETHValue.toString().replace(/n$/, ""));
 
   console.log("connectedAccount is ", connectedAccount);
   console.log("spender is ", campaign.options.address);
@@ -168,7 +173,7 @@ try {
   const message = {
     owner: connectedAccount,
     spender: campaign.options.address,
-    value: tokenToETHValue.toString(),  // ✅ stringified!
+    value: tokenToETHValue.toString().replace(/n$/, ""),  // אם אתה מתמודד עם BigInt
     nonce: Number(nonce),          // convert BigInt to Number
     deadline: Number(deadline),    // convert BigInt to Number
   };
@@ -176,23 +181,11 @@ try {
 
   console.log("✍️ Signing permit...");
 
-const signature = await window.ethereum.request({
-  method: "eth_signTypedData_v4",
-  params: [
-    connectedAccount,
-    JSON.stringify({
-      domain,
-      types,
-      primaryType: "Permit",
-      message,
-    }),
-  ],
-});
+
+  const sigString = await signer.signTypedData(domain, types, message);
 
 
-  console.log("🖋️ Signature:", signature);
-
-  const { v, r, s } = Signature.from(signature);
+  const { v, r, s } = Signature.from(sigString);
   console.log("✅ Parsed signature:", { v, r, s });
 
   const allowance = await token.allowance(connectedAccount, campaign.options.address);
@@ -201,9 +194,10 @@ const signature = await window.ethereum.request({
   const onChainNonce = await token.nonces(connectedAccount);
   console.log("🧾 On-chain nonce:", onChainNonce.toString());
 
+
   console.log("🚀 Sending contributeWithPermit...");
   await campaign.methods
-    .permitAndContribute(tokenToETHValue, deadline, v, r, s)
+    .permitAndContribute(tokenToETHValue.toString().replace(/n$/, ""), deadline, v, r, s)
     .send({ from: connectedAccount });
 
   console.log("✅ Transaction sent successfully");

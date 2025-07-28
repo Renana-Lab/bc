@@ -9,7 +9,7 @@ contract MyToken is ERC20Permit, Ownable {
     mapping(address => bool) public hasClaimed;
 
     constructor(address initialOwner)
-        ERC20("Huji Coin", "Huji Coin")
+        ERC20("Huji Coin", "Huji")
         ERC20Permit("Huji Coin")
         Ownable(initialOwner)
     {

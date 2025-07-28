@@ -108,63 +108,89 @@ contract Campaign {
         }
     }
 
-event PermitAttempt(
-    address indexed owner,
-    address indexed spender,
-    uint256 value,
-    uint256 nonce,
-    uint256 deadline
-);
+    event PermitAttempt(
+        address indexed owner,
+        address indexed spender,
+        uint256 value,
+        uint256 nonce,
+        uint256 deadline
+    );
 
-event PermitSuccess(address indexed owner, uint256 allowanceAfter);
-event PermitFailed(string reason);
-event AllowanceCheck(uint256 allowance, uint256 required);
-event NonceCheck(uint256 onChainNonce);
-event ContributeCalled(address contributor, uint256 amount);
+    event PermitSuccess(address indexed owner, uint256 allowanceAfter);
+    event PermitFailed(string reason);
+    event AllowanceCheck(uint256 allowance, uint256 required);
+    event NonceCheck(uint256 onChainNonce);
+    event ContributeCalled(address contributor, uint256 amount);
 
-function permitAndContribute(
-    uint256 amount,
-    uint256 deadline,
-    uint8 v,
-    bytes32 r,
-    bytes32 s
-) external {
-    address owner = msg.sender;
-    address spender = address(this);
+    function permitAndContribute(
+        uint256 amount,
+        uint256 deadline,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external {
+        address owner = msg.sender;
+        address spender = address(this);
 
-    // Emit on-chain nonce for visibility
-    uint256 nonce = token.nonces(owner);
-    emit NonceCheck(nonce);
+        // Emit on-chain nonce for visibility
+        uint256 nonce = token.nonces(owner);
+        emit NonceCheck(nonce);
 
-    emit PermitAttempt(owner, spender, amount, nonce, deadline);
+        emit PermitAttempt(owner, spender, amount, nonce, deadline);
 
-    // Try calling permit
-    try token.permit(owner, spender, amount, deadline, v, r, s) {
-        // Continue
-    } catch Error(string memory reason) {
-        emit PermitFailed(reason);
-        revert(string(abi.encodePacked("Permit failed: ", reason)));
-    } catch {
-        emit PermitFailed("Unknown error");
-        revert("Permit failed: unknown error");
+        // Try calling permit
+        try token.permit(owner, spender, amount, deadline, v, r, s) {
+            // Continue
+        } catch Error(string memory reason) {
+            emit PermitFailed(reason);
+            revert(string(abi.encodePacked("Permit failed: ", reason)));
+        } catch {
+            emit PermitFailed("Unknown error");
+            revert("Permit failed: unknown error");
+        }
+
+        // Confirm allowance is now set
+        uint256 allowance = IERC20(address(token)).allowance(owner, spender);
+        emit AllowanceCheck(allowance, amount);
+
+        require(allowance >= amount, "Allowance was not updated by permit");
+
+        emit PermitSuccess(owner, allowance);
+
+        // Now safely contribute
+        emit ContributeCalled(owner, amount);
+        // contribute(amount);
+                require(owner != manager, "You can't bid on your own auction");
+
+        uint256 previous = approversMoney[owner];
+        uint256 newTotal = previous + amount;
+
+        // בביד הראשון נדרש לעמוד במינימום, בבידים הבאים לא
+        if (previous == 0) {
+            require(newTotal >= minimumContribution, "Below minimum bid");
+        }
+
+        require(newTotal > highestBid, "Bid must exceed current highest");
+
+
+        require(IERC20(address(token)).transferFrom(owner, address(this), amount), "Transfer failed");
+
+
+        // מעדכנים את המאזן המצטבר
+        approversMoney[owner] = newTotal;
+        highestBid = newTotal;
+        highestBidder = owner;
+
+        // שומרים רק את **סכום ההפרש** כהיסטוריה
+        transactions.push(Bid(amount, block.timestamp, owner));
+
+        // רישום כתובת חדשה (פעם אחת בלבד)
+        if (!approvers[owner]) {
+            approvers[owner] = true;
+            approversCount++;
+            addresses.push(owner);
+        }
     }
-
-    // Confirm allowance is now set
-    uint256 allowance = IERC20(address(token)).allowance(owner, spender);
-    emit AllowanceCheck(allowance, amount);
-
-    require(allowance >= amount, "Allowance was not updated by permit");
-
-    emit PermitSuccess(owner, allowance);
-
-    // Now safely contribute
-    emit ContributeCalled(owner, amount);
-    contribute(amount);
-}
-
-
-
-
 
 
 
