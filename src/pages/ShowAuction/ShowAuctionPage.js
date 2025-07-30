@@ -96,7 +96,7 @@ function ShowAuctionPage() {
     navState?.remainingBudget || 0
   );
   useEffect(() => {
-  console.log("🔁 Updated budget:", remainingBudget);
+  // console.log("🔁 Updated budget:", remainingBudget);
   }, [remainingBudget]);
 
   const isAuctionActive = useMemo(
@@ -269,22 +269,35 @@ const finalizeAuction = useCallback(async () => {
 
   const handleSuccessfulBid = useCallback(
     async (newBidAmount) => {
+      console.log("🚨 handleSuccessfulBid triggered", newBidAmount);
       const account = state.connectedAccount?.toLowerCase();
-      if (!account || !address)
-        return toast.error("Missing account or campaign address");
+      if (!account || !address) {
+         toast.error("Missing account or campaign address");
+         console.warn("❌ Missing account or address", account, address);
+      }
       try {
-        const campaign = Campaign(address);
-        const previousBid = Number(
-          await campaign.methods.getBid(account).call()
-        );
-        const difference = newBidAmount - previousBid;
-        if (difference > 0) {
-          await addUserSpending(account, difference);
-          setRemainingBudget(await getRemainingBudget(account));
-          console.log(remainingBudget);
+        // console.log("trying...");
+        // const campaign = Campaign(address);
+        // const previousBid = Number(
+          // await campaign.methods.getBid(account).call()
+        // );
+        // console.log("previousBid = ", previousBid);
+        // console.log("newBidAmount = ", newBidAmount);
+        // const difference = newBidAmount - previousBid;
+        // console.log("difference = ", difference)
+          // console.log("difference > 0...");
+
+          await addUserSpending(account, newBidAmount);
+          const beforeBudget = await getRemainingBudget(account);
+          // console.log("💸 remainingBudget BEFORE update =", beforeBudget);
+
+          setRemainingBudget(beforeBudget);
+          const afterBudget = await getRemainingBudget(account);  
+          // console.log("💸 remainingBudget AFTER update (should match) =", afterBudget);
+
           await fetchAuctionData();
-        }
       } catch (error) {
+        console.log(error.message);
         toast.error("Error updating bid info: " + error.message);
       }
     },
