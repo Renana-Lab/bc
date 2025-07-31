@@ -6,7 +6,8 @@ import toast from "react-hot-toast";
 
 const LOCAL_STORAGE_KEY = "globalBudgetStore";
 const DEFAULT_BUDGET = 2000; // in wei
-const ADMIN_SECRET = process.env.REACT_APP_ADMIN_SECRET;
+// const ADMIN_SECRET = process.env.REACT_APP_ADMIN_SECRET;
+const ADMIN = = 1234;
 
 const getStoredBudget = () => {
   const stored = localStorage.getItem(LOCAL_STORAGE_KEY);
@@ -36,7 +37,7 @@ const ManageBudgetPage = () => {
     });
 
   const authenticate = () => {
-    if (pass === ADMIN_SECRET) {
+    if (pass === ADMIN) {
       setIsAdmin(true);
       setError("");
       toast.success("Admin access granted");

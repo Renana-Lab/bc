@@ -90,11 +90,25 @@ const reducer = (state, action) => {
 
 function ShowAuctionPage() {
   const [finalizedClicked, setFinalizedClicked] = useState(false);
+  useEffect(() => {
+    const checkAuctionStatus = async () => {
+      if (!state.auction) return;
+      try {
+        const isClosed = await state.auction.methods.getStatus().call();
+        setAuctionFinalized(isClosed); // אם זה true – המכרז הסתיים
+      } catch (error) {
+        console.error("Failed to check auction status:", error);
+      }
+    };
+    checkAuctionStatus();
+  }, [state.auction]);
+
   const [state, dispatch] = useReducer(reducer, initialState);
   const [hasHandledAuctionEnd, setHasHandledAuctionEnd] = useState(false);
   const { address } = useParams();
   const navigate = useNavigate();
   const { state: navState } = useLocation();
+  
   const [remainingBudget, setRemainingBudget] = useState(
     navState?.remainingBudget || 0
   );
