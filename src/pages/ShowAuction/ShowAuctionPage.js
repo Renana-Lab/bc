@@ -69,6 +69,9 @@ const initialState = {
   error: null,
 };
 
+const [finalizedClicked, setFinalizedClicked] = useState(false);
+
+
 const reducer = (state, action) => {
   switch (action.type) {
     case "SET_AUCTION_DATA":
@@ -219,6 +222,7 @@ const finalizeAuction = useCallback(async () => {
   if (!state.auction) return;
 
   try {
+    setFinalizedClicked(true); // ✅ לחצו על הכפתור
     console.log("⏳ Finalizing auction from:", state.manager);
     const summaryBefore = await state.auction.methods.getSummary().call();
     const addresses = await state.auction.methods.getAddresses().call();
@@ -235,6 +239,7 @@ const finalizeAuction = useCallback(async () => {
     toast.success(`Auction finalized! Seller earned: ${
       web3.utils.fromWei((BigInt(managerBalanceAfter) - BigInt(managerBalanceBefore)).toString(), "ether")
     } ETH `);
+
  
     const summaryAfter = await state.auction.methods.getSummary().call();
     const closed = await state.auction.methods.getStatus().call();
@@ -262,6 +267,7 @@ const finalizeAuction = useCallback(async () => {
     await fetchAuctionData();
 
   } catch (err) {
+    setFinalizedClicked(false);
     console.error("❌ Error during finalization:", err);
     toast.error("Auction did not end!\nYou did not get your money for the data!");
   }
@@ -568,7 +574,7 @@ const finalizeAuction = useCallback(async () => {
             </DialogContentText>
           </DialogContent>
           <DialogActions>
-            {state.refundsProcessed && (
+            {state.refundsProcessed && !finalizedClicked (
               <Button
                 id="finalize-auction-button"
                 variant="contained"
