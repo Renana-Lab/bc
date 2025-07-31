@@ -574,7 +574,7 @@ const finalizeAuction = useCallback(async () => {
             </DialogContentText>
           </DialogContent>
           <DialogActions>
-            {state.refundsProcessed && !finalizedClicked (
+            {state.refundsProcessed && !finalizedClicked && (
               <Button
                 id="finalize-auction-button"
                 variant="contained"
