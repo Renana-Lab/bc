@@ -289,11 +289,11 @@ const finalizeAuction = useCallback(async () => {
 
           await addUserSpending(account, newBidAmount);
           const beforeBudget = await getRemainingBudget(account);
-          // console.log("💸 remainingBudget BEFORE update =", beforeBudget);
+          console.log("💸 remainingBudget BEFORE update =", beforeBudget);
 
           setRemainingBudget(beforeBudget);
           const afterBudget = await getRemainingBudget(account);  
-          // console.log("💸 remainingBudget AFTER update (should match) =", afterBudget);
+          console.log("💸 remainingBudget AFTER update (should match) =", afterBudget);
 
           await fetchAuctionData();
       } catch (error) {
