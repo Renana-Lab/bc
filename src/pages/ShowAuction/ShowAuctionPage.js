@@ -229,6 +229,9 @@ const finalizeAuction = useCallback(async () => {
     const managerBalanceBefore = await web3.eth.getBalance(state.manager);
 
     await state.auction.methods.finalizeAuctionIfNeeded().send({ from: state.manager });
+
+    const managerBalanceAfter = await web3.eth.getBalance(state.manager);
+
     toast.success(`Auction finalized! Seller earned: ${
       web3.utils.fromWei((BigInt(managerBalanceAfter) - BigInt(managerBalanceBefore)).toString(), "ether")
     } ETH `);
@@ -238,7 +241,6 @@ const finalizeAuction = useCallback(async () => {
     const balancesAfter = await Promise.all(
       addresses.map(addr => web3.eth.getBalance(addr))
     );
-    const managerBalanceAfter = await web3.eth.getBalance(state.manager);
 
     console.log("✅ Auction closed:", closed);
     console.log("🏆 Highest bidder:", summaryAfter[7]);
