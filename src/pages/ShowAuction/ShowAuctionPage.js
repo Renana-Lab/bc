@@ -69,7 +69,6 @@ const initialState = {
   error: null,
 };
 
-const [finalizedClicked, setFinalizedClicked] = useState(false);
 
 
 const reducer = (state, action) => {
@@ -90,6 +89,7 @@ const reducer = (state, action) => {
 };
 
 function ShowAuctionPage() {
+  const [finalizedClicked, setFinalizedClicked] = useState(false);
   const [state, dispatch] = useReducer(reducer, initialState);
   const [hasHandledAuctionEnd, setHasHandledAuctionEnd] = useState(false);
   const { address } = useParams();
