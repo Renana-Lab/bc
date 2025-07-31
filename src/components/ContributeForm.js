@@ -37,6 +37,7 @@ class ContributeForm extends Component {
     const minimumContribution = summary[0];
     const endTime = summary[9];
     const manager = summary[3];
+    const highestBid = summary[4];
     const accounts = await window.ethereum.request({ method: "eth_accounts" });
     const connectedAccount = accounts[0];
 
@@ -56,6 +57,14 @@ class ContributeForm extends Component {
       this.setState({
         error: true,
         errorMessage: `Your new bid must be greater than your previous bid of ${userBid} wei`,
+        transactionIsLoading: false,
+      });
+      return;
+    }
+    if (newBid <= highestBid) {
+      this.setState({
+        error: true,
+        errorMessage: `Your new bid must be greater than the highest bid - ${highestBid} wei`,
         transactionIsLoading: false,
       });
       return;
