@@ -95,7 +95,7 @@ function ShowAuctionPage() {
       if (!state.auction) return;
       try {
         const isClosed = await state.auction.methods.getStatus().call();
-        setAuctionFinalized(isClosed); // אם זה true – המכרז הסתיים
+        setFinalizedClicked(isClosed); // אם זה true – המכרז הסתיים
       } catch (error) {
         console.error("Failed to check auction status:", error);
       }
@@ -108,7 +108,7 @@ function ShowAuctionPage() {
   const { address } = useParams();
   const navigate = useNavigate();
   const { state: navState } = useLocation();
-  
+
   const [remainingBudget, setRemainingBudget] = useState(
     navState?.remainingBudget || 0
   );
