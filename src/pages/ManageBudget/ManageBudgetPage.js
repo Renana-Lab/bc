@@ -37,8 +37,7 @@ const ManageBudgetPage = () => {
     });
 
   const authenticate = () => {
-    console.log("password = ", ADMIN);
-    if (pass === ADMIN) {
+    if (pass == ADMIN) {
       setIsAdmin(true);
       setError("");
       toast.success("Admin access granted");
