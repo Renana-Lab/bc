@@ -38,6 +38,10 @@ import {
   getRemainingBudget,
   addUserSpending,
 } from "../AuctionsList/AuctionsListPage";
+// import {
+//  saveBudget,
+
+// } from "../ManageBudget/ManageBudgetPage"
 
 const buttonStyle = {
   height: "2.5rem",
@@ -209,6 +213,7 @@ function ShowAuctionPage() {
     });
 
     if (account) {
+      console.log("setRemainingBudget is eexecuted in setRemainingBudget(getRemainingBudget(account.toLowerCase()));")
       setRemainingBudget(getRemainingBudget(account.toLowerCase()));
     }
 
@@ -285,22 +290,12 @@ const finalizeAuction = useCallback(async () => {
          console.warn("❌ Missing account or address", account, address);
       }
       try {
-        // console.log("trying...");
-        // const campaign = Campaign(address);
-        // const previousBid = Number(
-          // await campaign.methods.getBid(account).call()
-        // );
-        // console.log("previousBid = ", previousBid);
-        // console.log("newBidAmount = ", newBidAmount);
-        // const difference = newBidAmount - previousBid;
-        // console.log("difference = ", difference)
-          // console.log("difference > 0...");
-
           await addUserSpending(account, newBidAmount);
           const beforeBudget = await getRemainingBudget(account);
           console.log("💸 remainingBudget BEFORE update =", beforeBudget);
 
           setRemainingBudget(beforeBudget);
+          console.log("setRemainingBudget called in setRemainingBudget(beforeBudget);")
           const afterBudget = await getRemainingBudget(account);  
           console.log("💸 remainingBudget AFTER update (should match) =", afterBudget);
 
@@ -358,7 +353,15 @@ const finalizeAuction = useCallback(async () => {
 
 
   const renderAuctionInfo = () => (
-    <Box>
+      <DialogActions>
+
+    <Box
+    sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0 }}
+    
+    
+    
+    >
+
       <div className={showPageStyles.campaignInfo}>
         <p className={showPageStyles.introductionTitle}>Auction # {address}</p>
         <hr />
@@ -372,11 +375,26 @@ const finalizeAuction = useCallback(async () => {
         )}
         <InfoItem
           label="Minimum bid (wei) required"
-          value={state.minimumContribution}
+          value={state.minimumContribution} 
         />
         <InfoItem label="Highest bid (wei) recorded" value={state.highestBid} />
         <InfoItem label="Number of bidders" value={state.approversCount} />
       </div>
+
+
+
+      {state.refundsProcessed && !finalizedClicked && !isAuctionActive && isManager && (
+        <Button
+          id="finalize-auction-button"
+          variant="contained"
+          disabled={!state.transactions.length}
+          style={{ ...buttonStyle, marginTop: "2rem", width: "24rem"}}
+          onClick={finalizeAuction}
+        >
+          Get your money
+        </Button>
+      )}
+
       {!isAuctionActive && isManager && (
         <Button
           startIcon={<ListIcon />}
@@ -395,8 +413,10 @@ const finalizeAuction = useCallback(async () => {
         }
         style={{
           ...buttonStyle,
-          marginTop: isAuctionActive ? "6.5rem" : "2rem",
-          width: isAuctionActive ? "15rem" : "24rem",
+          marginTop: "0.7rem",
+          // width: isAuctionActive ? "24rem" : "24rem",
+          width: "24rem",
+
           marginBottom: "2rem",
         }}
         variant="contained"
@@ -405,7 +425,11 @@ const finalizeAuction = useCallback(async () => {
           ? "Return To Auctions"
           : "Return To Auctions Main Screen"}
       </Button>
+
     </Box>
+    </DialogActions>
+
+
   );
 
   if (state.loading)
@@ -574,19 +598,6 @@ const finalizeAuction = useCallback(async () => {
               )}
             </DialogContentText>
           </DialogContent>
-          <DialogActions>
-            {state.refundsProcessed && !finalizedClicked && (
-              <Button
-                id="finalize-auction-button"
-                variant="contained"
-                disabled={!state.transactions.length}
-                style={{ ...buttonStyle, marginRight: "1rem", width: "12rem" }}
-                onClick={finalizeAuction}
-              >
-                Get your money
-              </Button>
-            )}
-          </DialogActions>
         </Dialog>
       )}
     </Layout>

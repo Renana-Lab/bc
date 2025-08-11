@@ -23,7 +23,10 @@ import picSrc from "./Illustration_Start.png";
 import { getDefaultBudget } from "../ManageBudget/ManageBudgetPage";
 
 // Initialize userSpendingStore from localStorage
-const userSpendingStore = JSON.parse(localStorage.getItem("userSpendingStore")) || {};
+export const userSpendingStore = JSON.parse(localStorage.getItem("userSpendingStore")) || {};
+
+export const userAddress = window.ethereum?.selectedAddress?.toLowerCase();
+
 
 export const getRemainingBudget = (userAddress) => {
   const defaultBudget = getDefaultBudget();

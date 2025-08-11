@@ -121,13 +121,13 @@ class ContributeForm extends Component {
           flagForOutput = false;
           toast.error("You decided to cancel your bid");
         } else {
-          toast.error("Error placing bid: " + message);
+          toast.error("Your bid was submitted after the deadline");
         }
 
         this.setState({
           transactionIsLoading: false,
           error: true,
-          errorMessage: flagForOutput ? message : "You decided to cancel your bid",
+          errorMessage: flagForOutput ? "Your bid was submitted after the deadline" : "You decided to cancel your bid",
         });
     }
   };
@@ -187,8 +187,6 @@ class ContributeForm extends Component {
             fontSize="0.9rem"
             sx={{ marginTop: "0.5rem", color: "#555" }}
           >
-            You will be charged <strong>{difference}</strong> wei (based on your
-            previous bid of {userBid} wei).
           </Typography>
         )}
 

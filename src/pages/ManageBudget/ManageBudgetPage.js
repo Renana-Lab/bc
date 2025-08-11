@@ -3,6 +3,17 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import Layout from "../../components/Layout";
 import toast from "react-hot-toast";
+import {
+  userSpendingStore,
+  userAddress,
+} from "../AuctionsList/AuctionsListPage";
+
+
+const resetSpending = () => {
+  userSpendingStore[userAddress] = userSpendingStore[userAddress] ?? {};
+  userSpendingStore[userAddress].totalSpent = 0;
+
+}
 
 const LOCAL_STORAGE_KEY = "globalBudgetStore";
 const DEFAULT_BUDGET = 2000; // in wei
@@ -47,6 +58,7 @@ const ManageBudgetPage = () => {
   };
 
   const handleBudgetChange = (e) => {
+    console.log("handleBudgetChange was called");
     const value = Number(e.target.value);
     if (value >= 0) {
       setBudget(value);
@@ -57,7 +69,10 @@ const ManageBudgetPage = () => {
   };
 
   const handleSaveBudget = () => {
+    console.log("handleSaveBudget was called");
     if (budget >= 0) {
+      console.log("about to save with budget = ", budget);
+      resetSpending();
       saveBudget(budget);
       navigate("/auctions-list");
       toast.success(
@@ -71,8 +86,11 @@ const ManageBudgetPage = () => {
   };
 
   const handleResetBudget = () => {
+    resetSpending();
     saveBudget(DEFAULT_BUDGET);
+    console.log("saveBudget was called");
     setBudget(DEFAULT_BUDGET);
+    console.log("setBudget was called");
     navigate("/auctions-list");
     toast.success("Budget reset to 2000 wei for all users");
   };
