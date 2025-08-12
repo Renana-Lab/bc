@@ -69,6 +69,7 @@ function AuctionsListPage() {
     }
   };
 
+
   const fetchAuctionsList = async () => { 
     try {
       const auctions = await factory.methods.getDeployedCampaigns().call();
@@ -81,6 +82,7 @@ function AuctionsListPage() {
 
           let isRefunded = false;
           const auctionEnded = Number(details[9] + "000") < Date.now();
+          // console.log(auctionEnded);
           const isHighestBidder = details[7].toLowerCase() === currentUserAddress;
           const isManager = details[3].toLowerCase() === currentUserAddress;
           const userInAuction = addresses.map(a => a.toLowerCase()).includes(currentUserAddress);
@@ -130,7 +132,7 @@ function AuctionsListPage() {
         fetchAuctionsList();
         setRemainingBudget(getRemainingBudget(userAddress));
         // console.log("⏰ Fe tching auctions list...");
-      }, 5000);
+      }, 1000);
 
       return () => clearInterval(interval);
     }
@@ -148,11 +150,17 @@ function AuctionsListPage() {
     return Number(endTime) > Date.now();
   };
 
+  const isHighestBidder = (auction, currentUserAddress) => {
+    console.log(currentUserAddress, `is the higestbider in ${auction.address} ?`, auction.highestBidder?. toLowerCase() === currentUserAddress);
+    return auction.highestBidder?. toLowerCase() === currentUserAddress;
+  }
+
+
   const hasUserWonAuction = (auction) => {
     const currentUserAddress = window.ethereum?.selectedAddress?.toLowerCase();
     const auctionEnded = Number(auction.endTime) < Date.now();
-    const isHighestBidder = auction.highestBidder?. toLowerCase() === currentUserAddress;
-    return auctionEnded && isHighestBidder;
+    const _isHighestBidder = isHighestBidder(auction, currentUserAddress);
+    return auctionEnded && _isHighestBidder;
   };
 
   const isUserInAuction = (auction) => {
@@ -161,6 +169,11 @@ function AuctionsListPage() {
       (address) => address.toLowerCase() === currentUserAddress
     );
   };
+
+  const isUserMangager = (auction) => {
+    const currentUserAddress = window.ethereum?.selectedAddress?.toLowerCase();
+    return  currentUserAddress == auction.manager.toLowerCase();
+  }
 
 
   const getRowStyles = (hasWon, isOpen, isRefunded) => ({
@@ -171,6 +184,17 @@ function AuctionsListPage() {
       cursor: "pointer",
     },
   });
+
+  const getFontStyles = (auction, currentAddress, isOpen) => (
+    {
+    color : 
+    isHighestBidder(auction, currentAddress) && isAuctionOpen(auction.endTime) ? "#11a811ff" :
+    (isUserInAuction && isAuctionOpen(auction.endTime) && !isUserMangager(auction)) ? "#da0c0cff" :
+    isOpen? 
+    "#D07030D0"
+     :
+    "#0D0D4E"
+  })
 
   const handleRowClick = (address, e) => {
     e.stopPropagation();
@@ -256,7 +280,7 @@ function AuctionsListPage() {
                     <TableCell
                       key={idx}
                       align={idx > 0 ? "center" : "left"}
-                      style={{ color: "#101070", fontWeight: "bold" }}
+                      style={{ color: "#0d0d4eff", fontWeight: "bold" }}
                     >
                       {title}
                     </TableCell>
@@ -271,6 +295,7 @@ function AuctionsListPage() {
                   const refundStatus = userParticipated && !userWon && !auctionOpen
                     ? (auction.isRefunded ? "Refunded" : "Awaiting Refund")
                     : "N/A";
+                  const currentAddress = window.ethereum?.selectedAddress?.toLowerCase();
                   // console.log("auction.isRefunded = ", auction.isRefunded);
                   // console.log("currentUserAddress =", auction.currentUserAddress);
                   // console.log("auction.manager =", auction.manager);
@@ -280,17 +305,33 @@ function AuctionsListPage() {
                       onClick={() => navigate(`/auction/${auction.address}`, { state: { remainingBudget } })}
                       sx={getRowStyles(userWon, auctionOpen, auction.isRefunded)}
                     >
-                      <TableCell>{auction.address}</TableCell>
-                      <TableCell align="center">{auction.dataDescription}</TableCell>
+                      <TableCell
+                      sx={getFontStyles(auction, currentAddress)}
+                      >{auction.address}</TableCell>
+                      <TableCell
+                      sx={getFontStyles(auction, currentAddress)}
+                      align="center"
+                      
+                      >{auction.dataDescription}</TableCell>
                       <TableCell
                         align="center"
-                        style={{ color: "#D07030D0", fontWeight: "bold" }}
+                    
+                        sx={getFontStyles(auction, currentAddress, true)}
+                        style={{fontWeight: "bold" }}
                       >
                         {getTimeLeft(auction.endTime)}
                       </TableCell>
-                      <TableCell align="center">{auction.highestBid}</TableCell>
-                      <TableCell align="center">{auction.contributorsCount}</TableCell>
-                      <TableCell align="center">{refundStatus}</TableCell>
+                      <TableCell
+                      align="center"
+                      sx={getFontStyles(auction, currentAddress)}
+                      >{auction.highestBid}</TableCell>
+                      <TableCell
+                      align="center"
+                      sx={getFontStyles(auction, currentAddress)}
+                      >{auction.approversCount}</TableCell>
+                      <TableCell
+                      sx={getFontStyles(auction, currentAddress)}
+                      align="center">{refundStatus}</TableCell>
                       <TableCell align="center">
                         <Button
                           variant="contained"

@@ -166,7 +166,7 @@ function ShowAuctionPage() {
       time: moment.unix(Number(time)).format("DD-MM-YYYY HH:mm:ss"),
     }));
 
-    let refundsProcessed = true;
+    let refundsProcessed = false;
 
     if (closed) {
       const stillOwed = await Promise.all(
@@ -213,7 +213,7 @@ function ShowAuctionPage() {
     });
 
     if (account) {
-      console.log("setRemainingBudget is eexecuted in setRemainingBudget(getRemainingBudget(account.toLowerCase()));")
+      console.log("setRemainingBudget is eexecuted in setRemainingBudget(getRemainingBudget(account.toLowerCase()));");
       setRemainingBudget(getRemainingBudget(account.toLowerCase()));
     }
 
@@ -383,7 +383,11 @@ const finalizeAuction = useCallback(async () => {
 
 
 
-      {state.refundsProcessed && !finalizedClicked && !isAuctionActive && isManager && (
+      {!state.refundsProcessed &&
+      !finalizedClicked &&
+      !isAuctionActive &&
+      isManager &&
+      state.transactions.length !== 0 && (
         <Button
           id="finalize-auction-button"
           variant="contained"
