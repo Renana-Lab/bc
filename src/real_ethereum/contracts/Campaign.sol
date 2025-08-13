@@ -11,6 +11,13 @@
 pragma solidity ^0.8.9;
 
 contract Campaign {
+    event BidPlaced(
+    address indexed newBidder,
+    uint256 newAmount,        // the *new highest* cumulative bid of newBidder
+    address indexed prevBidder,
+    uint256 prevAmount,       // the *previous highest* cumulative bid (to refund virtually)
+    address indexed auction   // address(this) for convenience on the frontend
+);
     event RefundProcessed(address indexed contributor, uint256 amount);
     event SellerPaid(address indexed seller, uint256 amount);
 
@@ -74,6 +81,10 @@ function contribute() public payable onlyBeforeEnd {
         require(newTotal >= minimumContribution, "Below minimum bid");
     }
 
+    // capture current leader before taking over
+    address prevBidder = highestBidder;
+    uint256 prevAmount = highestBid;
+
     require(newTotal > highestBid, "Bid must exceed current highest");
 
     // מעדכנים את המאזן המצטבר
@@ -90,6 +101,8 @@ function contribute() public payable onlyBeforeEnd {
         approversCount++;
         addresses.push(msg.sender);
     }
+     // 🔊 Tell UIs what changed (for virtual refund/reserve)
+    emit BidPlaced(msg.sender, newTotal, prevBidder, prevAmount, address(this));
 }
 
     function finalizeAuctionIfNeeded() public onlyAfterEnd {

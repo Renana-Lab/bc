@@ -38,10 +38,11 @@ import {
   getRemainingBudget,
   addUserSpending,
 } from "../AuctionsList/AuctionsListPage";
-// import {
-//  saveBudget,
+import {
+  getDefaultBudget,
+  saveBudget,
 
-// } from "../ManageBudget/ManageBudgetPage"
+} from "../ManageBudget/ManageBudgetPage";
 
 const buttonStyle = {
   height: "2.5rem",
@@ -160,11 +161,42 @@ function ShowAuctionPage() {
       auctionInstance.methods.getStatus().call(),
     ]);
 
-    const transactions = rawTransactions.map(({ bidderAddress, value, time }) => ({
-      bidder: bidderAddress,
-      bid: value,
-      time: moment.unix(Number(time)).format("DD-MM-YYYY HH:mm:ss"),
+    // rawTransactions: [{ bidderAddress, value, time }, ...]   // time in SECONDS (string/number)
+    const norm = rawTransactions.map((tx, idx) => ({         // 1) normalize each tx and remember its original index
+      idx,                                                   //    keep original position to restore order later
+      bidder: tx.bidderAddress,                              //    human-facing bidder address (as given)
+      key: tx.bidderAddress.toLowerCase(),                   //    normalized key (lowercase) to avoid 0xAbc vs 0xabc duplicates
+      value: BigInt(tx.value),                               //    convert bid value (wei) to BigInt for safe math
+      time: BigInt(tx.time),                                 //    convert timestamp (seconds) to BigInt for comparisons
     }));
+
+    // Sort by time asc; if times are equal, keep original order (by idx) for stability
+    const byTime = [...norm].sort((a, b) =>                  // 2) make a copy and sort it (don’t mutate norm)
+      a.time === b.time                                      //    if same timestamp…
+        ? a.idx - b.idx                                      //    …fallback to original order (stable tie-breaker)
+        : a.time < b.time ? -1 : 1                           //    otherwise earlier time first
+    );
+
+    const sumByBidder = new Map();                           // 3) running totals per bidderKey (key → BigInt total)
+    const cumIncl = Array(norm.length).fill(0n);             // 4) array to hold cumulative totals INCLUDING current bid,
+                                                            //    aligned to original indices
+
+    for (const tx of byTime) {                               // 5) walk bids in chronological order
+      const prev = sumByBidder.get(tx.key) ?? 0n;            //    previous total for this bidder (0n if none) — `??` handles undefined
+      const next = prev + tx.value;                          //    add current bid → cumulative total up to and INCLUDING this bid
+      sumByBidder.set(tx.key, next);                         //    store updated total for this bidder
+      cumIncl[tx.idx] = next;                                //    write the result at the ORIGINAL index position
+    }
+
+    const transactions = norm.map((tx, i) => ({              // 6) build your display-friendly array in original order
+      bidder: tx.bidder,                                     //    original-cased address for display
+      bid: cumIncl[i].toString(),                            //    cumulative (≤ current time), BigInt → string for UI
+      time: moment.unix(Number(tx.time)).format(             //    format seconds timestamp to "DD-MM-YYYY HH:mm:ss"
+        "DD-MM-YYYY HH:mm:ss"
+      ),
+    }));
+    transactions.reverse();
+
 
     let refundsProcessed = false;
 
@@ -326,12 +358,12 @@ const finalizeAuction = useCallback(async () => {
     if (!state.auction) return;
 
     const handleRefundProcessed = (contributor, amount) => {
-      toast.success(`Refund processed for ${contributor}: ${amount} wei`);
+      // toast.success(`Refund processed for ${contributor}: ${amount} wei`);
       fetchAuctionData();
     };
 
     const handleSellerPaid = (seller, amount) => {
-      toast.success(`Seller paid: ${amount} wei`);
+      // toast.success(`Seller paid: ${amount} wei`);
       fetchAuctionData();
     };
 
@@ -350,6 +382,39 @@ const finalizeAuction = useCallback(async () => {
       sellerPaidEvent.unsubscribe();
     };
   }, [state.auction, fetchAuctionData]);
+
+  
+  useEffect(() => {
+    if (!state.auction || !state.connectedAccount) return;
+
+    const me = state.connectedAccount.toLowerCase();
+
+    const sub = state.auction.events.BidPlaced()
+      .on("data", (ev) => {
+        const { prevBidder, prevAmount /*, newBidder, newAmount, auction */ } = ev.returnValues;
+
+        // Only if *this* user was the previous highest
+        if (prevBidder && prevBidder.toLowerCase() === me) {
+          // Your existing helpers:
+          // getStoredBudget(): number (returns defaultBudget from localStorage)
+          // saveBudget(nextNumber): writes { defaultBudget: nextNumber } back
+          const current = getDefaultBudget(); // e.g., 2000
+          // In your app, 0 means "unlimited" → skip adjusting
+          if (current !== 0) {
+            const next = current + Number(prevAmount); // ⚠️ ok only if values fit in Number
+            saveBudget(next);
+            console.log(`💸 Virtual refund: +${prevAmount} wei → defaultBudget=${next}`);
+          }
+        }
+      })
+      .on("error", console.error);
+
+    return () => sub.unsubscribe();
+  }, [state.auction, state.connectedAccount]);
+
+
+
+
 
 
   const renderAuctionInfo = () => (
