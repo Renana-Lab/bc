@@ -3,6 +3,10 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import Layout from "../../components/Layout";
 import toast from "react-hot-toast";
+import {
+  reduceUserSpending,
+  addUserSpending,
+} from "../AuctionsList/AuctionsListPage";
 
 const LOCAL_STORAGE_KEY = "globalBudgetStore";
 const DEFAULT_BUDGET = 2000; // in wei
@@ -57,6 +61,8 @@ const ManageBudgetPage = () => {
 
   const handleSaveBudget = () => {
     if (budget >= 0) {
+      const userAddress = window.ethereum?.selectedAddress?.toLowerCase();
+      reduceUserSpending(userAddress, Infinity);
       saveBudget(budget);
       navigate("/auctions-list");
       toast.success(
@@ -70,6 +76,8 @@ const ManageBudgetPage = () => {
   };
 
   const handleResetBudget = () => {
+    const userAddress = window.ethereum?.selectedAddress?.toLowerCase();
+    reduceUserSpending(userAddress, Infinity);
     saveBudget(DEFAULT_BUDGET);
     setBudget(DEFAULT_BUDGET);
     navigate("/auctions-list");

@@ -322,9 +322,10 @@ const finalizeAuction = useCallback(async () => {
          console.warn("❌ Missing account or address", account, address);
       }
       try {
-          await addUserSpending(account, newBidAmount);
           const beforeBudget = await getRemainingBudget(account);
           console.log("💸 remainingBudget BEFORE update =", beforeBudget);
+          await addUserSpending(account, newBidAmount);
+
 
           setRemainingBudget(beforeBudget);
           console.log("setRemainingBudget called in setRemainingBudget(beforeBudget);")

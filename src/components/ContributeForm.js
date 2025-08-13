@@ -111,7 +111,7 @@ class ContributeForm extends Component {
       toast.success(
         `Bid placed successfully! You were charged ${additionalBid} wei.`
       );
-      onSuccessfulBid(additionalBid, address);
+      onSuccessfulBid(newBid, address);
 
       this.setState({ bidAmount: "", transactionIsLoading: false });
     } catch (err) {
