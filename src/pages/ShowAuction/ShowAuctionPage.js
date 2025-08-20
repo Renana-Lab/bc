@@ -36,7 +36,6 @@ import showPageStyles from "./show.module.scss";
 import picSrc from "./medal.png";
 import {
   getRemainingBudget,
-  addUserSpending,
 } from "../AuctionsList/AuctionsListPage";
 
 
@@ -242,7 +241,12 @@ function ShowAuctionPage() {
 
     if (account) {
       console.log("setRemainingBudget is eexecuted in setRemainingBudget(getRemainingBudget(account.toLowerCase()));");
-      setRemainingBudget(getRemainingBudget());
+      const loadBudget = async () => {
+    const budget = await getRemainingBudget(account.toLowerCase());
+    setRemainingBudget(budget);
+    };
+    loadBudget(); // הפעלה בפועל
+    
     }
 
   } catch (err) {
@@ -320,7 +324,6 @@ const finalizeAuction = useCallback(async () => {
       try {
           const beforeBudget = await getRemainingBudget();
           console.log("💸 remainingBudget BEFORE update =", beforeBudget);
-          await addUserSpending(account, newBidAmount);
 
 
           setRemainingBudget(beforeBudget);

@@ -121,7 +121,8 @@ function contribute() public payable onlyBeforeEnd {
 
         if (highestBid > 0) {
             require(address(this).balance >= highestBid, "Insufficient balance");
-            payable(manager).transfer(highestBid);
+            payable(manager).transfer(highestBid); 
+            factory.changeBudget(manager, highestBid, false);
             emit SellerPaid(manager, highestBid);
         }
 
@@ -217,9 +218,7 @@ contract CampaignFactory {
     }
 
 
-    function resetAllBudgets(uint256 newBudget, string memory plainPassword) public {
-        require(keccak256(abi.encodePacked(plainPassword)) == passwordHash, "Invalid password");
-
+    function resetAllBudgets(uint256 newBudget) public {
         for (uint256 i = 0; i < allUsers.length; i++) {
             address user = allUsers[i];
             usersBudget[user] = newBudget;

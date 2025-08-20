@@ -3,6 +3,7 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import Layout from "../../components/Layout";
 import toast from "react-hot-toast";
+import factory from "../../real_ethereum/factory"
 
 
 const LOCAL_STORAGE_KEY = "globalBudgetStore";
@@ -11,7 +12,7 @@ const ADMIN_SECRET = "1234"; // ⚠️ Warning: in production, NEVER store secre
 
 const getStoredBudget = async () => {
   const userAddress = window.ethereum?.selectedAddress?.toLowerCase();
-  const budget = await contract.getBudget(userAddress);
+  const budget = await factory.methods.getBudget(userAddress).call();
   return budget;
 };
 
@@ -57,27 +58,49 @@ const ManageBudgetPage = () => {
     }
   };
 
-  const handleSaveBudget = () => {
+  const handleSaveBudget = async () => {
     if (budget >= 0) {
       const userAddress = window.ethereum?.selectedAddress?.toLowerCase();
-      saveBudget(budget);
-      navigate("/auctions-list");
-      toast.success(
-        budget === 0
-          ? "Unlimited spending enabled for all users"
-          : `Budget set to ${budget} wei for all users`
-      );
+
+      try {
+        await factory.methods
+          .resetAllBudgets(budget)
+          .send({ from: userAddress });
+
+        toast.success(
+          budget === 0
+            ? "Unlimited spending enabled for all users"
+            : `Budget set to ${budget} wei for all users`
+        );
+
+        navigate("/auctions-list");
+      } catch (error) {
+        console.error("❌ Error setting budget:", error);
+        toast.error("Budget did not change");
+      }
     } else {
       setError("Please enter a valid budget");
     }
   };
 
-  const handleResetBudget = () => {
-    saveBudget(DEFAULT_BUDGET);
+
+const handleResetBudget = async () => {
+  const userAddress = window.ethereum?.selectedAddress?.toLowerCase();
+
+  try {
     setBudget(DEFAULT_BUDGET);
-    navigate("/auctions-list");
+
+    await factory.methods
+      .resetAllBudgets(DEFAULT_BUDGET)
+      .send({ from: userAddress });
+
     toast.success("Budget reset to 2000 wei for all users");
-  };
+    navigate("/auctions-list");
+  } catch (error) {
+    console.error("❌ Error resetting budget:", error);
+    toast.error("Budget did not change");
+  }
+};
 
   const handleKeyDown = (e) => {
     if (e.key === "Enter") {

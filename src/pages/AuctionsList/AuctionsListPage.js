@@ -107,26 +107,28 @@ function AuctionsListPage() {
     }
   };
 
-  useEffect(() => {
-    if (!window.ethereum) {
-      navigate("/");
-    } else {
-      const userAddress = window.ethereum.selectedAddress?.toLowerCase();
+useEffect(() => {
+  if (!window.ethereum) {
+    navigate("/");
+  } else {
+    const loadData = async () => {
+      const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
+      const userAddress = accounts[0]?.toLowerCase();
+
       setCurrentUser(userAddress);
-      setRemainingBudget(getRemainingBudget());
+
+      const budget = await getRemainingBudget(); // ⬅️ ה-await החשוב
+      setRemainingBudget(budget);
 
       fetchNetworkId();
       fetchAuctionsList();
+    };
 
-      const interval = setInterval(() => {
-        fetchAuctionsList();
-        setRemainingBudget(getRemainingBudget());
-        // console.log("⏰ Fe tching auctions list...");
-      }, 1000);
+    loadData(); // קריאה לפונקציה
+  }
+}, []); // ✅ סגירה של useEffect
 
-      return () => clearInterval(interval);
-    }
-  }, []);
+
 
   const getTimeLeft = (endTime) => {
     return Number(endTime) < Date.now() ? (
