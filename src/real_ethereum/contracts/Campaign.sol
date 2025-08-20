@@ -122,7 +122,7 @@ function contribute() public payable onlyBeforeEnd {
         if (highestBid > 0) {
             require(address(this).balance >= highestBid, "Insufficient balance");
             payable(manager).transfer(highestBid); 
-            factory.changeBudget(manager, highestBid, false);
+            factory.changeBudget(manager, highestBid, true);
             emit SellerPaid(manager, highestBid);
         }
 
