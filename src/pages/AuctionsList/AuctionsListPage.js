@@ -23,7 +23,7 @@ import picSrc from "./Illustration_Start.png";
 import { getDefaultBudget } from "../ManageBudget/ManageBudgetPage";
 
 // Initialize userSpendingStore from localStorage
-export const userSpendingStore = JSON.parse(localStorage.getItem("userSpendingStore")) || {};
+// export const userSpendingStore = JSON.parse(localStorage.getItem("userSpendingStore")) || {};
 
 export const userAddress = window.ethereum?.selectedAddress?.toLowerCase();
 
@@ -53,11 +53,14 @@ function AuctionsListPage() {
   const fetchNetworkId = async () => {
     try {
       const id = await web3.eth.net.getId();
-      console.log("✅ Connected Network ID:", id);
+      // console.log("✅ Connected Network ID:", id);
+
     } catch (error) {
       console.error("❌ Error fetching network ID:", error);
     }
   };
+
+
 
 
   const fetchAuctionsList = async () => { 
@@ -99,13 +102,16 @@ function AuctionsListPage() {
             };
         })
       );
+
       setAuctionsList(auctionData);
     } catch (error) {
       console.error("❌ Error fetching auctions:", error);
     } finally {
       setLoading(false);
     }
+
   };
+
 
 useEffect(() => {
   if (!window.ethereum) {
@@ -115,8 +121,8 @@ useEffect(() => {
       try {
         const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
         const userAddress = accounts[0]?.toLowerCase();
-
-        // setCurrentUser(userAddress);
+        // console.log("userAddress = ", userAddress);
+        setCurrentUser(userAddress);
 
 
         const budget = await getRemainingBudget();
@@ -127,11 +133,10 @@ useEffect(() => {
       } catch (err) {
         console.error("Error in loadData:", err);
       }
-    };
-
-    loadData();
-  }
-}, []);
+      };
+      loadData();
+    }
+    }, []);
 
 
 

@@ -11,10 +11,24 @@ const DEFAULT_BUDGET = 2000; // in wei
 const ADMIN_SECRET = "1234"; // ⚠️ Warning: in production, NEVER store secrets like this on the frontend
 
 const getStoredBudget = async () => {
-  const userAddress = window.ethereum?.selectedAddress?.toLowerCase();
+  if (!window.ethereum) {
+    console.error("MetaMask not found");
+    return;
+  }
+
+  const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
+  const userAddress = accounts[0]?.toLowerCase();
+
+  if (!userAddress) {
+    console.log("No user connected");
+    return;
+  }
+
   const budget = await factory.methods.getBudget(userAddress).call();
   return budget;
 };
+
+
 
 export const saveBudget = (budget) => {
   localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify({ defaultBudget: budget }));
