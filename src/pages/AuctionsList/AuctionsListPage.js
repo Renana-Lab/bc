@@ -53,7 +53,7 @@ function AuctionsListPage() {
   const fetchNetworkId = async () => {
     try {
       const id = await web3.eth.net.getId();
-      // console.log("✅ Connected Network ID:", id);
+      console.log("✅ Connected Network ID:", id);
     } catch (error) {
       console.error("❌ Error fetching network ID:", error);
     }
@@ -112,21 +112,27 @@ useEffect(() => {
     navigate("/");
   } else {
     const loadData = async () => {
-      const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
-      const userAddress = accounts[0]?.toLowerCase();
+      try {
+        const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
+        const userAddress = accounts[0]?.toLowerCase();
 
-      setCurrentUser(userAddress);
+        // setCurrentUser(userAddress);
 
-      const budget = await getRemainingBudget(); // ⬅️ ה-await החשוב
-      setRemainingBudget(budget);
 
-      fetchNetworkId();
-      fetchAuctionsList();
+        const budget = await getRemainingBudget();
+        setRemainingBudget(budget);
+
+        fetchNetworkId();
+        fetchAuctionsList();
+      } catch (err) {
+        console.error("Error in loadData:", err);
+      }
     };
 
-    loadData(); // קריאה לפונקציה
+    loadData();
   }
-}, []); // ✅ סגירה של useEffect
+}, []);
+
 
 
 

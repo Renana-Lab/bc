@@ -130,10 +130,10 @@ function ShowAuctionPage() {
   if (!window.ethereum) return navigate("/");
 
   try {
-    const [accounts, auctionInstance] = await Promise.all([
-      window.ethereum.request({ method: "eth_accounts" }),
-      Campaign(address),
-    ]);
+    console.log("trying!!");
+    const accounts = await window.ethereum.request({ method: "eth_accounts" });
+    const auctionInstance = Campaign(address); // אם סינכרוני
+    console.log("trying2");
 
     const account = accounts[0] || "";
 
