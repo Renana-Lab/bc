@@ -28,27 +28,17 @@ export const userSpendingStore = JSON.parse(localStorage.getItem("userSpendingSt
 export const userAddress = window.ethereum?.selectedAddress?.toLowerCase();
 
 
-export const getRemainingBudget = (userAddress) => {
-  const defaultBudget = getDefaultBudget();
-  if (defaultBudget === 0) return Infinity;
-  const spent = userSpendingStore[userAddress]?.totalSpent || 0;
-  return defaultBudget - spent;
-};
+export const getRemainingBudget = () => getDefaultBudget();
 
-export const addUserSpending = (userAddress, amount) => {
-  if (!userSpendingStore[userAddress]) {
-    userSpendingStore[userAddress] = { totalSpent: 0 };
-  }
-  userSpendingStore[userAddress].totalSpent += Number(amount);
-  localStorage.setItem("userSpendingStore", JSON.stringify(userSpendingStore));
-};
 
-export const reduceUserSpending = (userAddress, amount) => {
-  if (userSpendingStore[userAddress]) {
-    userSpendingStore[userAddress].totalSpent = Math.max(0, userSpendingStore[userAddress].totalSpent - Number(amount));
-    localStorage.setItem("userSpendingStore", JSON.stringify(userSpendingStore));
-  }
-};
+// export const addUserSpending = (userAddress, amount) => {
+//   if (!userSpendingStore[userAddress]) {
+//     userSpendingStore[userAddress] = { totalSpent: 0 };
+//   }
+//   userSpendingStore[userAddress].totalSpent += Number(amount);
+//   localStorage.setItem("userSpendingStore", JSON.stringify(userSpendingStore));
+// };
+
 
 function AuctionsListPage() {
   const navigate = useNavigate();
@@ -123,14 +113,14 @@ function AuctionsListPage() {
     } else {
       const userAddress = window.ethereum.selectedAddress?.toLowerCase();
       setCurrentUser(userAddress);
-      setRemainingBudget(getRemainingBudget(userAddress));
+      setRemainingBudget(getRemainingBudget());
 
       fetchNetworkId();
       fetchAuctionsList();
 
       const interval = setInterval(() => {
         fetchAuctionsList();
-        setRemainingBudget(getRemainingBudget(userAddress));
+        setRemainingBudget(getRemainingBudget());
         // console.log("⏰ Fe tching auctions list...");
       }, 1000);
 
@@ -151,7 +141,7 @@ function AuctionsListPage() {
   };
 
   const isHighestBidder = (auction, currentUserAddress) => {
-    console.log(currentUserAddress, `is the higestbider in ${auction.address} ?`, auction.highestBidder?. toLowerCase() === currentUserAddress);
+    // console.log(currentUserAddress, `is the higestbider in ${auction.address} ?`, auction.highestBidder?. toLowerCase() === currentUserAddress);
     return auction.highestBidder?. toLowerCase() === currentUserAddress;
   }
 

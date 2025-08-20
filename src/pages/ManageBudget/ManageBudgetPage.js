@@ -3,18 +3,16 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import Layout from "../../components/Layout";
 import toast from "react-hot-toast";
-import {
-  reduceUserSpending,
-  addUserSpending,
-} from "../AuctionsList/AuctionsListPage";
+
 
 const LOCAL_STORAGE_KEY = "globalBudgetStore";
 const DEFAULT_BUDGET = 2000; // in wei
 const ADMIN_SECRET = "1234"; // ⚠️ Warning: in production, NEVER store secrets like this on the frontend
 
-const getStoredBudget = () => {
-  const stored = localStorage.getItem(LOCAL_STORAGE_KEY);
-  return stored ? JSON.parse(stored).defaultBudget : DEFAULT_BUDGET;
+const getStoredBudget = async () => {
+  const userAddress = window.ethereum?.selectedAddress?.toLowerCase();
+  const budget = await contract.getBudget(userAddress);
+  return budget;
 };
 
 export const saveBudget = (budget) => {
@@ -62,7 +60,6 @@ const ManageBudgetPage = () => {
   const handleSaveBudget = () => {
     if (budget >= 0) {
       const userAddress = window.ethereum?.selectedAddress?.toLowerCase();
-      reduceUserSpending(userAddress, Infinity);
       saveBudget(budget);
       navigate("/auctions-list");
       toast.success(
@@ -76,8 +73,6 @@ const ManageBudgetPage = () => {
   };
 
   const handleResetBudget = () => {
-    const userAddress = window.ethereum?.selectedAddress?.toLowerCase();
-    reduceUserSpending(userAddress, Infinity);
     saveBudget(DEFAULT_BUDGET);
     setBudget(DEFAULT_BUDGET);
     navigate("/auctions-list");

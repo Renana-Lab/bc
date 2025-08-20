@@ -38,11 +38,7 @@ import {
   getRemainingBudget,
   addUserSpending,
 } from "../AuctionsList/AuctionsListPage";
-import {
-  getDefaultBudget,
-  saveBudget,
 
-} from "../ManageBudget/ManageBudgetPage";
 
 const buttonStyle = {
   height: "2.5rem",
@@ -246,7 +242,7 @@ function ShowAuctionPage() {
 
     if (account) {
       console.log("setRemainingBudget is eexecuted in setRemainingBudget(getRemainingBudget(account.toLowerCase()));");
-      setRemainingBudget(getRemainingBudget(account.toLowerCase()));
+      setRemainingBudget(getRemainingBudget());
     }
 
   } catch (err) {
@@ -322,14 +318,14 @@ const finalizeAuction = useCallback(async () => {
          console.warn("❌ Missing account or address", account, address);
       }
       try {
-          const beforeBudget = await getRemainingBudget(account);
+          const beforeBudget = await getRemainingBudget();
           console.log("💸 remainingBudget BEFORE update =", beforeBudget);
           await addUserSpending(account, newBidAmount);
 
 
           setRemainingBudget(beforeBudget);
           console.log("setRemainingBudget called in setRemainingBudget(beforeBudget);")
-          const afterBudget = await getRemainingBudget(account);  
+          const afterBudget = await getRemainingBudget();  
           console.log("💸 remainingBudget AFTER update (should match) =", afterBudget);
 
           await fetchAuctionData();
@@ -383,39 +379,6 @@ const finalizeAuction = useCallback(async () => {
       sellerPaidEvent.unsubscribe();
     };
   }, [state.auction, fetchAuctionData]);
-
-  
-  useEffect(() => {
-    if (!state.auction || !state.connectedAccount) return;
-
-    const me = state.connectedAccount.toLowerCase();
-
-    const sub = state.auction.events.BidPlaced()
-      .on("data", (ev) => {
-        const { prevBidder, prevAmount /*, newBidder, newAmount, auction */ } = ev.returnValues;
-
-        // Only if *this* user was the previous highest
-        if (prevBidder && prevBidder.toLowerCase() === me) {
-          // Your existing helpers:
-          // getStoredBudget(): number (returns defaultBudget from localStorage)
-          // saveBudget(nextNumber): writes { defaultBudget: nextNumber } back
-          const current = getDefaultBudget(); // e.g., 2000
-          // In your app, 0 means "unlimited" → skip adjusting
-          if (current !== 0) {
-            const next = current + Number(prevAmount); // ⚠️ ok only if values fit in Number
-            saveBudget(next);
-            console.log(`💸 Virtual refund: +${prevAmount} wei → defaultBudget=${next}`);
-          }
-        }
-      })
-      .on("error", console.error);
-
-    return () => sub.unsubscribe();
-  }, [state.auction, state.connectedAccount]);
-
-
-
-
 
 
   const renderAuctionInfo = () => (

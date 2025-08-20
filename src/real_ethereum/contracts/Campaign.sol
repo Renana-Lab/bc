@@ -10,14 +10,10 @@
 
 pragma solidity ^0.8.9;
 
+
+
 contract Campaign {
-    event BidPlaced(
-    address indexed newBidder,
-    uint256 newAmount,        // the *new highest* cumulative bid of newBidder
-    address indexed prevBidder,
-    uint256 prevAmount,       // the *previous highest* cumulative bid (to refund virtually)
-    address indexed auction   // address(this) for convenience on the frontend
-);
+    CampaignFactory public factory;
     event RefundProcessed(address indexed contributor, uint256 amount);
     event SellerPaid(address indexed seller, uint256 amount);
 
@@ -59,7 +55,8 @@ contract Campaign {
         string memory dataSell,
         string memory dataDesc,
         address creator,
-        uint256 duration
+        uint256 duration,
+        address factoryAddress
     ) {
         manager = creator;
         minimumContribution = minimum;
@@ -67,6 +64,7 @@ contract Campaign {
         dataDescription = dataDesc;
         endTime = duration;
         closed = false;
+        factory = CampaignFactory(factoryAddress);
     }
 
 function contribute() public payable onlyBeforeEnd {
@@ -76,33 +74,34 @@ function contribute() public payable onlyBeforeEnd {
     uint256 previous = approversMoney[msg.sender];
     uint256 newTotal = previous + msg.value;
 
-    // בביד הראשון נדרש לעמוד במינימום, בבידים הבאים לא
-    if (previous == 0) {
+    // ביד ראשון חייב לעמוד במינימום
+    if (highestBidder == address(0)) {
         require(newTotal >= minimumContribution, "Below minimum bid");
+        factory.changeBudget(msg.sender, msg.value, false); // חייב את הביד הראשון
+    } else {
+        require(newTotal > highestBid, "Bid must exceed current highest");
+
+        // אם זה יוזר אחר → החזר ל־prev, חיוב מלא ל־new
+        if (msg.sender != highestBidder) {
+            factory.changeBudget(highestBidder, highestBid, true);       // החזר מלא לקודם
+            factory.changeBudget(msg.sender, newTotal, false);           // חיוב מלא לחדש
+        } else {
+            // אם זה אותו יוזר → חיוב על ההפרש בלבד
+            factory.changeBudget(msg.sender, msg.value, false);
+        }
     }
 
-    // capture current leader before taking over
-    address prevBidder = highestBidder;
-    uint256 prevAmount = highestBid;
-
-    require(newTotal > highestBid, "Bid must exceed current highest");
-
-    // מעדכנים את המאזן המצטבר
     approversMoney[msg.sender] = newTotal;
     highestBid = newTotal;
     highestBidder = msg.sender;
 
-    // שומרים רק את **סכום ההפרש** כהיסטוריה
     transactions.push(Bid(msg.value, block.timestamp, msg.sender));
 
-    // רישום כתובת חדשה (פעם אחת בלבד)
     if (!approvers[msg.sender]) {
         approvers[msg.sender] = true;
         approversCount++;
         addresses.push(msg.sender);
     }
-     // 🔊 Tell UIs what changed (for virtual refund/reserve)
-    emit BidPlaced(msg.sender, newTotal, prevBidder, prevAmount, address(this));
 }
 
     function finalizeAuctionIfNeeded() public onlyAfterEnd {
@@ -176,7 +175,57 @@ function contribute() public payable onlyBeforeEnd {
 }
 
 contract CampaignFactory {
+    uint256 defaultBudget = 2000;
     address payable[] public deployedCampaigns;
+    mapping(address => bool) public isCampaign;
+    mapping(address => uint256) public usersBudget; // budgets
+    mapping(address => bool) public isRegistered; // for first contribute
+    address[] public allUsers; // for reset purposes
+
+    modifier onlyCampaigns() {
+    require(isCampaign[msg.sender], "Only campaigns can modify budgets");
+    _;
+}
+
+    modifier ensureRegistered(address user) {
+        if (!isRegistered[user]) {
+            isRegistered[user] = true;
+            usersBudget[user] = defaultBudget;
+            allUsers.push(user);
+        }
+        _;
+    }
+
+
+    function getBudget(address user) public view returns (uint256) {
+        if (!isRegistered[user]) {
+            return defaultBudget;
+        }
+        return usersBudget[user];
+    }
+    function changeBudget(address user, uint256 amount, bool increase)
+    external
+    onlyCampaigns
+    ensureRegistered(user)
+    {
+        if (increase) {
+            usersBudget[user] += amount;
+        } else {
+            require(usersBudget[user] >= amount, "Insufficient budget");
+            usersBudget[user] -= amount;
+        } 
+    }
+
+
+    function resetAllBudgets(uint256 newBudget, string memory plainPassword) public {
+        require(keccak256(abi.encodePacked(plainPassword)) == passwordHash, "Invalid password");
+
+        for (uint256 i = 0; i < allUsers.length; i++) {
+            address user = allUsers[i];
+            usersBudget[user] = newBudget;
+        }
+    }
+
 
     function createCampaign(
         uint256 minimum,
@@ -186,8 +235,9 @@ contract CampaignFactory {
     ) public {
         uint256 end = 60 * duration + block.timestamp;
         address newCampaign = address(
-            new Campaign(minimum, dataSell, dataDesc, msg.sender, end)
+            new Campaign(minimum, dataSell, dataDesc, msg.sender, end, address(this))
         );
+        isCampaign[newCampaign] = true; // ✅ הוספה לסט
         deployedCampaigns.push(payable(newCampaign));
     }
 

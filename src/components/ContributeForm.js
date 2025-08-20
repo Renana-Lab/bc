@@ -40,6 +40,7 @@ class ContributeForm extends Component {
     const highestBid = summary[4];
     const accounts = await window.ethereum.request({ method: "eth_accounts" });
     const connectedAccount = accounts[0];
+    console.log("connectedAccount = ", connectedAccount);
 
     const newBid = Number(this.state.bidAmount);
     const additionalBid = newBid - userBid;
