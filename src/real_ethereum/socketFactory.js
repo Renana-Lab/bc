@@ -1,4 +1,4 @@
-import Web3 from "./web3";
+import Web3 from "web3"; // ✅ קלאס המקורי של Web3
 import CampaignFactory from "./build/CampaignFactory.json";
 
 const FACTORY_ADDRESS = "0xCf77A40535908Ae58c687A4A77D21259822968B8";

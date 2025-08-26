@@ -15,7 +15,8 @@ import {
 import { useNavigate, useLocation } from "react-router-dom";
 import Countdown from "react-countdown";
 import factory from "../../real_ethereum/factory";
-import { factorySocket, web3Socket } from "../../real_ethereum/factorySocket";
+import { factorySocket, web3Socket } from "../../real_ethereum/socketFactory";
+import CampaignABI from "../../real_ethereum/build/Campaign.json";
 import Campaign from "../../real_ethereum/campaign";
 import web3 from "../../real_ethereum/web3";
 import Layout from "../../components/Layout";
@@ -153,7 +154,7 @@ useEffect(() => {
       if (listenedAddresses.has(address)) return; // אל תאזין פעמיים
       listenedAddresses.add(address);
 
-      const campaign = new web3Socket.eth.Contract(campaignABI.abi, address);
+      const campaign = new web3Socket.eth.Contract(CampaignABI.abi, address);
       const sub = campaign.events.BidAdded()
         .on("data", (event) => {
           console.log("💰 New bid on", address, "by", event.returnValues.contributor);
