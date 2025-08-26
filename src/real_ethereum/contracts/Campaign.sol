@@ -14,6 +14,7 @@ pragma solidity ^0.8.9;
 
 contract Campaign {
     CampaignFactory public factory;
+    event BidAdded(address contributor);
     event RefundProcessed(address indexed contributor, uint256 amount);
     event SellerPaid(address indexed seller, uint256 amount);
 
@@ -102,6 +103,8 @@ function contribute() public payable onlyBeforeEnd {
         approversCount++;
         addresses.push(msg.sender);
     }
+    emit BidAdded(msg.sender);
+     
 }
 
     function finalizeAuctionIfNeeded() public onlyAfterEnd {
@@ -176,6 +179,7 @@ function contribute() public payable onlyBeforeEnd {
 }
 
 contract CampaignFactory {
+    event AuctionCreated(address campaignAddress);
     uint256 defaultBudget = 2000;
     address payable[] public deployedCampaigns;
     mapping(address => bool) public isCampaign;
@@ -238,6 +242,8 @@ contract CampaignFactory {
         );
         isCampaign[newCampaign] = true; // ✅ הוספה לסט
         deployedCampaigns.push(payable(newCampaign));
+        emit AuctionCreated(newCampaign);
+
     }
 
     function getDeployedCampaigns()

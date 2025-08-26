@@ -274,9 +274,7 @@ const finalizeAuction = useCallback(async () => {
 
     const managerBalanceAfter = await web3.eth.getBalance(state.manager);
 
-    toast.success(`Auction finalized! Seller earned: ${
-      web3.utils.fromWei((BigInt(managerBalanceAfter) - BigInt(managerBalanceBefore)).toString(), "ether")
-    } ETH `);
+    toast.success(`Auction finalized, you were paid!`);
 
  
     const summaryAfter = await state.auction.methods.getSummary().call();
@@ -354,34 +352,44 @@ const finalizeAuction = useCallback(async () => {
     return () => interval && clearInterval(interval);
   }, [fetchAuctionData, isAuctionActive]);
 
-  useEffect(() => {
-    if (!state.auction) return;
+useEffect(() => {
+  if (!state.auction) return;
 
-    const handleRefundProcessed = (contributor, amount) => {
-      // toast.success(`Refund processed for ${contributor}: ${amount} wei`);
-      fetchAuctionData();
-    };
+  const auction = state.auction;
 
-    const handleSellerPaid = (seller, amount) => {
-      // toast.success(`Seller paid: ${amount} wei`);
-      fetchAuctionData();
-    };
 
-    const refundEvent = state.auction.events.RefundProcessed();
-    const sellerPaidEvent = state.auction.events.SellerPaid();
+  fetchAuctionData();  
 
-    refundEvent.on("data", (event) =>
-      handleRefundProcessed(event.returnValues.contributor, event.returnValues.amount)
-    );
-    sellerPaidEvent.on("data", (event) =>
-      handleSellerPaid(event.returnValues.seller, event.returnValues.amount)
-    );
+  // 🟢 Handlers for the events
+  const handleRefundProcessed = (contributor, amount) => {
+    console.log(`Refund: ${contributor} got ${amount} wei`);
+    fetchAuctionData(); // טען מחדש את הדאטה
+  };
 
-    return () => {
-      refundEvent.unsubscribe();
-      sellerPaidEvent.unsubscribe();
-    };
-  }, [state.auction, fetchAuctionData]);
+  const handleSellerPaid = (seller, amount) => {
+    console.log(`Seller paid: ${seller} got ${amount} wei`);
+    fetchAuctionData(); // גם כאן רענון
+  };
+
+  // 🟡 Create subscriptions
+  const refundEvent = auction.events.RefundProcessed();
+  const sellerPaidEvent = auction.events.SellerPaid();
+
+  refundEvent.on("data", (event) =>
+    handleRefundProcessed(event.returnValues.contributor, event.returnValues.amount)
+  );
+
+  sellerPaidEvent.on("data", (event) =>
+    handleSellerPaid(event.returnValues.seller, event.returnValues.amount)
+  );
+
+  // 🔴 Cleanup on unmount!
+  return () => {
+    refundEvent.unsubscribe();    // ← חובה למנוע דליפות זיכרון
+    sellerPaidEvent.unsubscribe();
+  };
+}, [state.auction]);
+
 
 
   const renderAuctionInfo = () => (

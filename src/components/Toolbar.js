@@ -3,12 +3,14 @@ import { AppBar, Button, Toolbar, Typography } from "@mui/material";
 import MenuIcon from "@mui/icons-material/Menu";
 import HomeIcon from "@mui/icons-material/Home";
 import { useNavigate } from "react-router-dom";
-
+import { getDefaultBudget } from "../pages/ManageBudget/ManageBudgetPage";
 import componentStyles from "./../styles/components.module.scss";
 
 const ToolbarComponent = (props) => {
   const navigate = useNavigate();
   const [currentTime, setCurrentTime] = useState(new Date());
+  const [budget, setBudget] = useState(null); // ✅ בתוך ToolbarComponent
+
 
   // Update clock every second
   useEffect(() => {
@@ -16,6 +18,21 @@ const ToolbarComponent = (props) => {
       setCurrentTime(new Date());
     }, 1000);
     return () => clearInterval(interval);
+  }, []);
+
+
+    // הבאת תקציב מהבלוקצ'יין
+  useEffect(() => {
+    const fetchBudget = async () => {
+      try {
+        const result = await getDefaultBudget(); // ← פונקציה שמביאה את התקציב
+        setBudget(result);
+      } catch (err) {
+        console.error("❌ Failed to fetch budget:", err);
+      }
+    };
+
+    fetchBudget();
   }, []);
 
   const formatTime = (date) =>
@@ -46,10 +63,32 @@ const ToolbarComponent = (props) => {
             </Typography>
           </div>
 
-          {/* Clock */}
-          <Typography variant="body2" style={{ color: "#F0F0F0", marginRight: "1rem", border: "1px solid rgba(240, 240, 240, 0.06)", padding: "0.5rem", borderRadius: "20px" }}>
-            🕒 {formatTime(currentTime)}
-          </Typography>
+          {/* צד ימין – שעון + תקציב */}
+          <div style={{ display: "flex", gap: "1rem", alignItems: "center", marginRight: "1rem" }}>
+            <Typography
+              variant="body2"
+              style={{
+                color: "#F0F0F0",
+                border: "1px solid rgba(240, 240, 240, 0.06)",
+                padding: "0.5rem",
+                borderRadius: "20px",
+              }}
+            >
+              💰 Budget: {budget ?? "Loading..."}
+            </Typography>
+
+            <Typography
+              variant="body2"
+              style={{
+                color: "#F0F0F0",
+                border: "1px solid rgba(240, 240, 240, 0.06)",
+                padding: "0.5rem",
+                borderRadius: "20px",
+              }}
+            >
+              🕒 {formatTime(currentTime)}
+            </Typography>
+          </div>
         </Toolbar>
       </AppBar>
     </div>

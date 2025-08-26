@@ -15,6 +15,7 @@ import {
 import { useNavigate, useLocation } from "react-router-dom";
 import Countdown from "react-countdown";
 import factory from "../../real_ethereum/factory";
+import { factorySocket, web3Socket } from "../../real_ethereum/factorySocket";
 import Campaign from "../../real_ethereum/campaign";
 import web3 from "../../real_ethereum/web3";
 import Layout from "../../components/Layout";
@@ -135,10 +136,64 @@ useEffect(() => {
       }
       };
       loadData();
+
+      // 🔁 2. רענון כל 10 שניות (גיבוי)
+      const interval = setInterval(() => {
+        fetchAuctionsList();
+      }, 10000);
     }
     }, []);
 
 
+  useEffect(() => {
+    const subscriptions = [];
+    const listenedAddresses = new Set();
+
+    const subscribeToBidAdded = (address) => {
+      if (listenedAddresses.has(address)) return; // אל תאזין פעמיים
+      listenedAddresses.add(address);
+
+      const campaign = new web3Socket.eth.Contract(campaignABI.abi, address);
+      const sub = campaign.events.BidAdded()
+        .on("data", (event) => {
+          console.log("💰 New bid on", address, "by", event.returnValues.contributor);
+          // כאן אפשר לרענן רק את הקמפיין הזה או את הרשימה כולה:
+          fetchAuctionsList();
+        })
+        .on("error", (err) => console.error("❌ BidAdded error:", err));
+
+      subscriptions.push(sub);
+    };
+
+    const init = async () => {
+      try {
+        // 1. מאזינים לקמפיינים קיימים
+        const addresses = await factorySocket.methods.getDeployedCampaigns().call();
+        addresses.forEach(subscribeToBidAdded);
+
+        // 2. מאזינים לקמפיינים חדשים
+        const createdSub = factorySocket.events.AuctionCreated()
+          .on("data", (event) => {
+            const addr = event.returnValues.campaignAddress;
+            console.log("📢 New campaign:", addr);
+            fetchAuctionsList(); // רענון כללי
+            subscribeToBidAdded(addr); // מאזין גם אליו
+          })
+          .on("error", (err) => console.error("AuctionCreated error:", err));
+
+        subscriptions.push(createdSub);
+      } catch (e) {
+        console.error("Failed to subscribe:", e);
+      }
+    };
+
+    init();
+
+    // 🧼 ניקוי
+    return () => {
+      subscriptions.forEach((sub) => sub.unsubscribe && sub.unsubscribe());
+    };
+  }, []);
 
 
   const getTimeLeft = (endTime) => {
