@@ -63,6 +63,8 @@ function AuctionsListPage() {
           const details = await auction.methods.getSummary().call();
           const addresses = await auction.methods.getAddresses().call();
           const currentUserAddress = window.ethereum?.selectedAddress?.toLowerCase();
+          const closed = await auction.methods.getStatus().call();
+
 
           let isRefunded = false;
           const auctionEnded = Number(details[9] + "000") < Date.now();
@@ -74,6 +76,8 @@ function AuctionsListPage() {
             const balance = await auction.methods.getBid(currentUserAddress).call();
             isRefunded = Number(balance) === 0;
           }
+          // 🔹 לשמור sellerPaid אם כבר קיים ב־state
+          const prevAuction = auctionsList.find(a => a.address === address);
 
           return {
               address,
@@ -88,12 +92,14 @@ function AuctionsListPage() {
               addresses: details[8],
               endTime: Number(details[9] + "000"), // ← אל תשכח להכפיל ב-1000
               isRefunded,
+              closed, // 👈 כאן הפתרון
 
             };
         })
       );
 
       setAuctionsList(auctionData);
+      // console.log(auctionsList);
     } catch (error) {
       console.error("❌ Error fetching auctions:", error);
     } finally {
@@ -133,40 +139,52 @@ useEffect(() => {
     }
     }, []);
 
-
-  useEffect(() => {
+useEffect(() => {
     const subscriptions = [];
     const listenedAddresses = new Set();
 
-    const subscribeToBidAdded = (address) => {
-      if (listenedAddresses.has(address)) return; // אל תאזין פעמיים
+    const subscribeToCampaignEvents = (address) => {
+      if (listenedAddresses.has(address)) return; // לא להאזין פעמיים
       listenedAddresses.add(address);
 
       const campaign = new web3Socket.eth.Contract(CampaignABI.abi, address);
-      const sub = campaign.events.BidAdded()
+
+      // 🟢 האזנה ל-BidAdded
+      const bidSub = campaign.events.BidAdded()
         .on("data", (event) => {
           console.log("💰 New bid on", address, "by", event.returnValues.contributor);
-          // כאן אפשר לרענן רק את הקמפיין הזה או את הרשימה כולה:
           fetchAuctionsList();
         })
         .on("error", (err) => console.error("❌ BidAdded error:", err));
 
-      subscriptions.push(sub);
+      subscriptions.push(bidSub);
+
+      // 🟢 האזנה ל-SellerPaid
+      const sellerSub = campaign.events.SellerPaid()
+        .on("data", (event) => {
+          console.log("💵 Seller paid on", address, ":", event.returnValues.amount, "wei");
+
+          // עדכון הרשימה – מסמן שהמכרז הזה שולם
+
+        })
+        .on("error", (err) => console.error("❌ SellerPaid error:", err));
+
+      subscriptions.push(sellerSub);
     };
 
     const init = async () => {
       try {
         // 1. מאזינים לקמפיינים קיימים
         const addresses = await factorySocket.methods.getDeployedCampaigns().call();
-        addresses.forEach(subscribeToBidAdded);
+        addresses.forEach(subscribeToCampaignEvents);
 
         // 2. מאזינים לקמפיינים חדשים
         const createdSub = factorySocket.events.AuctionCreated()
           .on("data", (event) => {
             const addr = event.returnValues.campaignAddress;
             console.log("📢 New campaign:", addr);
-            fetchAuctionsList(); // רענון כללי
-            subscribeToBidAdded(addr); // מאזין גם אליו
+            fetchAuctionsList(); 
+            subscribeToCampaignEvents(addr);
           })
           .on("error", (err) => console.error("AuctionCreated error:", err));
 
@@ -182,7 +200,8 @@ useEffect(() => {
     return () => {
       subscriptions.forEach((sub) => sub.unsubscribe && sub.unsubscribe());
     };
-  }, []);
+  }, []); 
+
 
 
   const getTimeLeft = (endTime) => {
@@ -317,7 +336,7 @@ useEffect(() => {
                 <TableRow>
                   {[
                     // "Address",  
-                    "Data Description",
+                    "Description",
                     "Auction Status",
                     "Highest Bid",
                     "Number Of Bidders",
@@ -339,19 +358,51 @@ useEffect(() => {
                   const userWon = hasUserWonAuction(auction);
                   const userParticipated = isUserInAuction(auction);
                   const auctionOpen = isAuctionOpen(auction.endTime);
-                  const refundStatus =
-                      userParticipated && !userWon && !auctionOpen
-                        ? auction.isRefunded
-                          ? "Refunded"
-                          : "Awaiting Refund"
-                        : isUserMangager(auction)
-                          ? <Button variant="contained" color="success">Get Your money</Button>
-                          : "You were charged";
+                  const isManager = isUserMangager(auction);
+                  const currentAddress = window.ethereum?.selectedAddress?.toLowerCase();
+                  const getRefundStatus =  (auction) => {
+
+                    // 1) משתמש שהשתתף, הפסיד והמכרז נסגר → Refunded / Awaiting Refund
+                    if (userParticipated && !userWon && !auctionOpen) {
+                      return auction.isRefunded ? "Refunded" : "Awaiting Refund";
+                    }
+
+                    // 2) המנצח:
+                    //    אם עבר הזמן (נסגר) → "You were charged"
+                    //    אם עדיין פתוח → כלום
+                    if (userWon) {
+                      return auctionOpen ? "" : "You were charged";
+                    }
+
+                    // 3) המנהל:
+                    //    אם עדיין פתוח → כלום
+                    //    אם נסגר:
+                    //       - אם sellerPaid=false → כפתור
+                    //       - אם sellerPaid=true → כלום (לא להציג)
+                    if (isManager && auction.approversCount > 0) {
+                      if (auctionOpen) return "";
+                      return auction.closed
+                        ? "You were paid"
+                        : (
+                          <Button
+                            variant="contained"
+                            color="success"
+                            
+                          >
+                            Get Your money
+                          </Button>
+                        );
+                    }
+
+                    // 4) כל השאר
+                    return "";
+                  };
+
+
 
                   // const refundStatus = userParticipated && !userWon && !auctionOpen
                   //   ? (auction.isRefunded ? "Refunded" : "Awaiting Refund")
                   //   : "N/A";
-                  const currentAddress = window.ethereum?.selectedAddress?.toLowerCase();
 
                   return (
                     <TableRow
@@ -385,7 +436,7 @@ useEffect(() => {
                       >{auction.approversCount}</TableCell>
                       <TableCell
                       sx={getFontStyles(auction, currentAddress)}
-                      align="center">{refundStatus}</TableCell>
+                      align="center">{getRefundStatus(auction)}</TableCell>
                       <TableCell align="center">
                         <Button
                           variant="contained"

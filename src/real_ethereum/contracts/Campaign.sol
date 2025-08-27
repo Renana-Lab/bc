@@ -227,6 +227,7 @@ contract CampaignFactory {
             address user = allUsers[i];
             usersBudget[user] = newBudget;
         }
+        defaultBudget = newBudget;
     }
 
 

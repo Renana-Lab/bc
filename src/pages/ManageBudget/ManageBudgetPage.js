@@ -102,13 +102,13 @@ const handleResetBudget = async () => {
   const userAddress = window.ethereum?.selectedAddress?.toLowerCase();
 
   try {
-    setBudget(DEFAULT_BUDGET);
+    setBudget(0);
 
     await factory.methods
-      .resetAllBudgets(DEFAULT_BUDGET)
+      .resetAllBudgets(0)
       .send({ from: userAddress });
 
-    toast.success("Budget reset to 2000 wei for all users");
+    toast.success("Budget reset for all users");
     navigate("/auctions-list");
   } catch (error) {
     console.error("❌ Error resetting budget:", error);

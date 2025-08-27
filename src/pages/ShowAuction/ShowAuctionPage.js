@@ -132,7 +132,7 @@ function ShowAuctionPage() {
   try {
     const accounts = await window.ethereum.request({ method: "eth_accounts" });
     const auctionInstance = Campaign(address); // אם סינכרוני
-    console.log("Address is:", address);  // אם זה undefined — זו הבעיה.
+    // console.log("Address is:", address);  // אם זה undefined — זו הבעיה.
 
 
     const account = accounts[0] || "";
@@ -240,7 +240,7 @@ function ShowAuctionPage() {
     });
 
     if (account) {
-      console.log("setRemainingBudget is eexecuted in setRemainingBudget(getRemainingBudget(account.toLowerCase()));");
+      // console.log("setRemainingBudget is eexecuted in setRemainingBudget(getRemainingBudget(account.toLowerCase()));");
       const loadBudget = async () => {
     const budget = await getRemainingBudget(account.toLowerCase());
     setRemainingBudget(budget);
@@ -325,9 +325,9 @@ const finalizeAuction = useCallback(async () => {
 
 
           setRemainingBudget(beforeBudget);
-          console.log("setRemainingBudget called in setRemainingBudget(beforeBudget);")
+          // console.log("setRemainingBudget called in setRemainingBudget(beforeBudget);")
           const afterBudget = await getRemainingBudget();  
-          console.log("💸 remainingBudget AFTER update (should match) =", afterBudget);
+          // console.log("💸 remainingBudget AFTER update (should match) =", afterBudget);
 
           await fetchAuctionData();
       } catch (error) {

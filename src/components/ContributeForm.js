@@ -54,15 +54,7 @@ class ContributeForm extends Component {
       });
       return;
     }
-    if (newBid <= userBid) {
-      this.setState({
-        error: true,
-        errorMessage: `Your new bid must be greater than your previous bid of ${userBid} wei`,
-        transactionIsLoading: false,
-      });
-      return;
-    }
-    if (newBid <= highestBid) {
+    if (newBid <= userBid || newBid <= highestBid) {
       this.setState({
         error: true,
         errorMessage: `Your new bid must be greater than the highest bid - ${highestBid} wei`,
@@ -70,10 +62,10 @@ class ContributeForm extends Component {
       });
       return;
     }
-    if (additionalBid > remainingBudget) {
+    if (newBid > remainingBudget) {
       this.setState({
         error: true,
-        errorMessage: `Insufficient budget. You need ${additionalBid} wei, but your remaining budget is ${remainingBudget} wei.`,
+        errorMessage: `Insufficient budget.`,
         transactionIsLoading: false,
       });
       return;
