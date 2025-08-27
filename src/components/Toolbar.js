@@ -21,19 +21,27 @@ const ToolbarComponent = (props) => {
   }, []);
 
 
-    // הבאת תקציב מהבלוקצ'יין
+  // הבאת תקציב מהבלוקצ'יין
   useEffect(() => {
     const fetchBudget = async () => {
       try {
-        const result = await getDefaultBudget(); // ← פונקציה שמביאה את התקציב
+        const result = await getDefaultBudget();
         setBudget(result);
       } catch (err) {
         console.error("❌ Failed to fetch budget:", err);
       }
     };
 
+    // ריצה מיידית
     fetchBudget();
+
+    // ריצה כל שנייה
+    const interval = setInterval(fetchBudget, 1000);
+
+    // ניקוי כאשר הקומפוננטה מתפרקת
+    return () => clearInterval(interval);
   }, []);
+
 
   const formatTime = (date) =>
     date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });

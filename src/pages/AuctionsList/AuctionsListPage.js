@@ -24,22 +24,12 @@ import styles from "./auctions.module.scss";
 import picSrc from "./Illustration_Start.png";
 import { getDefaultBudget } from "../ManageBudget/ManageBudgetPage";
 
-// Initialize userSpendingStore from localStorage
-// export const userSpendingStore = JSON.parse(localStorage.getItem("userSpendingStore")) || {};
 
 export const userAddress = window.ethereum?.selectedAddress?.toLowerCase();
 
 
 export const getRemainingBudget = () => getDefaultBudget();
 
-
-// export const addUserSpending = (userAddress, amount) => {
-//   if (!userSpendingStore[userAddress]) {
-//     userSpendingStore[userAddress] = { totalSpent: 0 };
-//   }
-//   userSpendingStore[userAddress].totalSpent += Number(amount);
-//   localStorage.setItem("userSpendingStore", JSON.stringify(userSpendingStore));
-// };
 
 
 function AuctionsListPage() {
@@ -55,7 +45,6 @@ function AuctionsListPage() {
   const fetchNetworkId = async () => {
     try {
       const id = await web3.eth.net.getId();
-      // console.log("✅ Connected Network ID:", id);
 
     } catch (error) {
       console.error("❌ Error fetching network ID:", error);
@@ -77,7 +66,6 @@ function AuctionsListPage() {
 
           let isRefunded = false;
           const auctionEnded = Number(details[9] + "000") < Date.now();
-          // console.log(auctionEnded);
           const isHighestBidder = details[7].toLowerCase() === currentUserAddress;
           const isManager = details[3].toLowerCase() === currentUserAddress;
           const userInAuction = addresses.map(a => a.toLowerCase()).includes(currentUserAddress);
@@ -328,12 +316,12 @@ useEffect(() => {
               <TableHead>
                 <TableRow>
                   {[
-                    "Address",  
+                    // "Address",  
                     "Data Description",
                     "Auction Status",
                     "Highest Bid",
                     "Number Of Bidders",
-                    "Refund Status",
+                    "Payment Status",
                     "",
                   ].map((title, idx) => (
                     <TableCell
@@ -351,22 +339,29 @@ useEffect(() => {
                   const userWon = hasUserWonAuction(auction);
                   const userParticipated = isUserInAuction(auction);
                   const auctionOpen = isAuctionOpen(auction.endTime);
-                  const refundStatus = userParticipated && !userWon && !auctionOpen
-                    ? (auction.isRefunded ? "Refunded" : "Awaiting Refund")
-                    : "N/A";
+                  const refundStatus =
+                      userParticipated && !userWon && !auctionOpen
+                        ? auction.isRefunded
+                          ? "Refunded"
+                          : "Awaiting Refund"
+                        : isUserMangager(auction)
+                          ? <Button variant="contained" color="success">Get Your money</Button>
+                          : "You were charged";
+
+                  // const refundStatus = userParticipated && !userWon && !auctionOpen
+                  //   ? (auction.isRefunded ? "Refunded" : "Awaiting Refund")
+                  //   : "N/A";
                   const currentAddress = window.ethereum?.selectedAddress?.toLowerCase();
-                  // console.log("auction.isRefunded = ", auction.isRefunded);
-                  // console.log("currentUserAddress =", auction.currentUserAddress);
-                  // console.log("auction.manager =", auction.manager);
+
                   return (
                     <TableRow
                       key={index}
                       onClick={() => navigate(`/auction/${auction.address}`, { state: { remainingBudget } })}
                       sx={getRowStyles(userWon, auctionOpen, auction.isRefunded)}
                     >
-                      <TableCell
+                      {/* <TableCell
                       sx={getFontStyles(auction, currentAddress)}
-                      >{auction.address}</TableCell>
+                      >{auction.address}</TableCell> */}
                       <TableCell
                       sx={getFontStyles(auction, currentAddress)}
                       align="center"
