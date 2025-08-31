@@ -9,6 +9,13 @@ import CircularProgress from "@mui/material/CircularProgress";
 import { Typography } from "@mui/material";
 import toast from "react-hot-toast";
 
+
+  const ERROR_OUTBID = "Your were outbid by another user";
+  const ERROR_DEADLINE = "Your bid was submitted after the deadline";
+  const ERROR_USER_DENIED_CONTRIBUTE = "You decided to cancel your bid";
+  const USER_DENIED_PREFIX = "User denied transaction signature";
+
+
 class ContributeForm extends Component {
   state = {
     bidAmount: "",
@@ -96,6 +103,8 @@ class ContributeForm extends Component {
     }
 
     try {
+
+
       await campaign.methods.contribute().send({
         from: connectedAccount,
         value: additionalBid.toString(),
@@ -108,19 +117,27 @@ class ContributeForm extends Component {
 
       this.setState({ bidAmount: "", transactionIsLoading: false });
     } catch (err) {
-        let flagForOutput = true;
+
         const message = err?.message || "";
-        if (message.includes("User denied transaction signature")) {
-          flagForOutput = false;
-          toast.error("You decided to cancel your bid");
+        console.log(err.message);
+
+        let flagForOutput = false;
+
+        const isAuctionClosed = (Number(endTime + "000") < Date.now());
+
+
+        if (message.includes(USER_DENIED_PREFIX)) {
+          flagForOutput = true;
+          toast.error(ERROR_USER_DENIED_CONTRIBUTE);
         } else {
-          toast.error("Your bid was submitted after the deadline");
+          toast.error(isAuctionClosed ? ERROR_DEADLINE : ERROR_OUTBID);
         }
 
         this.setState({
           transactionIsLoading: false,
           error: true,
-          errorMessage: flagForOutput ? "Your bid was submitted after the deadline" : "You decided to cancel your bid",
+          errorMessage: 
+          flagForOutput ? ERROR_USER_DENIED_CONTRIBUTE : isAuctionClosed ? ERROR_DEADLINE : ERROR_OUTBID,
         });
     }
   };

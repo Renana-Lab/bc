@@ -7,7 +7,6 @@ import factory from "../../real_ethereum/factory"
 
 
 const LOCAL_STORAGE_KEY = "globalBudgetStore";
-const DEFAULT_BUDGET = 2000; // in wei
 const ADMIN_SECRET = "1234"; // ⚠️ Warning: in production, NEVER store secrets like this on the frontend
 
 const getStoredBudget = async () => {
@@ -15,9 +14,8 @@ const getStoredBudget = async () => {
     console.error("MetaMask not found");
     return;
   }
-
   const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
-  const userAddress = accounts[0]?.toLowerCase();
+  const userAddress = accounts[0] || "";
 
   if (!userAddress) {
     console.log("No user connected");

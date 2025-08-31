@@ -56,6 +56,7 @@ function AuctionsListPage() {
 
   const fetchAuctionsList = async () => { 
     try {
+      await web3.eth.getAccounts(); // Ensure budget is reset for new accounts that didn't yet contribute
       const auctions = await factory.methods.getDeployedCampaigns().call();
       const auctionData = await Promise.all(
         auctions.map(async (address) => {

@@ -132,7 +132,6 @@ function ShowAuctionPage() {
   try {
     const accounts = await window.ethereum.request({ method: "eth_accounts" });
     const auctionInstance = Campaign(address); // אם סינכרוני
-    // console.log("Address is:", address);  // אם זה undefined — זו הבעיה.
 
 
     const account = accounts[0] || "";

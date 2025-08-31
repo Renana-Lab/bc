@@ -223,11 +223,11 @@ contract CampaignFactory {
 
 
     function resetAllBudgets(uint256 newBudget) public {
+        defaultBudget = newBudget;
         for (uint256 i = 0; i < allUsers.length; i++) {
             address user = allUsers[i];
-            usersBudget[user] = newBudget;
+            usersBudget[user] = defaultBudget;
         }
-        defaultBudget = newBudget;
     }
 
 
