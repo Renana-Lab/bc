@@ -136,7 +136,7 @@ useEffect(() => {
       // 🔁 2. רענון כל 10 שניות (גיבוי)
       const interval = setInterval(() => {
         fetchAuctionsList();
-      }, 10000);
+      }, 2500);
     }
     }, []);
 
