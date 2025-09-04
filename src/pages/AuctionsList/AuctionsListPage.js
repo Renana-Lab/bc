@@ -38,6 +38,8 @@ function AuctionsListPage() {
   const [auctionsList, setAuctionsList] = useState([]);
   const [loading, setLoading] = useState(true);
   const [currentUser, setCurrentUser] = useState(null);
+  const [isFetching, setIsFetching] = useState(false);
+
   const [remainingBudget, setRemainingBudget] = useState(
     navState?.remainingBudget || (getDefaultBudget() === 0 ? Infinity : getDefaultBudget())
   );
@@ -55,8 +57,10 @@ function AuctionsListPage() {
 
 
   const fetchAuctionsList = async () => { 
+    if (isFetching) return;
+    setIsFetching(true);
     try {
-      await web3.eth.getAccounts(); // Ensure budget is reset for new accounts that didn't yet contribute
+       await window.ethereum.request({ method: "eth_accounts" });
       const auctions = await factory.methods.getDeployedCampaigns().call();
       const auctionData = await Promise.all(
         auctions.map(async (address) => {
@@ -79,6 +83,10 @@ function AuctionsListPage() {
           }
           // 🔹 לשמור sellerPaid אם כבר קיים ב־state
           const prevAuction = auctionsList.find(a => a.address === address);
+
+        const budget = await getDefaultBudget();
+        console.log("budget = ", budget);
+        setRemainingBudget(budget);
 
           return {
               address,
@@ -105,15 +113,44 @@ function AuctionsListPage() {
       console.error("❌ Error fetching auctions:", error);
     } finally {
       setLoading(false);
+      setIsFetching(false);
+
+      const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
+      const userAddress = accounts[0]?.toLowerCase();
+      
     }
+
 
   };
 
 
 useEffect(() => {
+  const interval = setInterval(async () => {
+    try {
+    } catch (err) {
+      console.error("🔁 Failed to update remainingBudget:", err);
+    }
+  }, 2500);
+
+  return () => clearInterval(interval);
+}, [remainingBudget, auctionsList]);
+
+
+useEffect(() => {
+  const interval = setInterval(async () => {
+    fetchAuctionsList();
+  }, 2500);
+
+  return () => clearInterval(interval); // ניקוי אוטומטי
+}, []); // רץ פעם אחת בלבד
+
+
+useEffect(() => {
   if (!window.ethereum) {
+
     navigate("/");
   } else {
+
     const loadData = async () => {
       try {
         const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
@@ -122,8 +159,6 @@ useEffect(() => {
         setCurrentUser(userAddress);
 
 
-        const budget = await getRemainingBudget();
-        setRemainingBudget(budget);
 
         fetchNetworkId();
         fetchAuctionsList();
@@ -133,14 +168,11 @@ useEffect(() => {
       };
       loadData();
 
-      // 🔁 2. רענון כל 10 שניות (גיבוי)
-      const interval = setInterval(() => {
-        fetchAuctionsList();
-      }, 2500);
     }
-    }, []);
+    }, [currentUser]);
 
 useEffect(() => {
+
     const subscriptions = [];
     const listenedAddresses = new Set();
 

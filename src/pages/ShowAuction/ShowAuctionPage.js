@@ -239,7 +239,6 @@ function ShowAuctionPage() {
     });
 
     if (account) {
-      // console.log("setRemainingBudget is eexecuted in setRemainingBudget(getRemainingBudget(account.toLowerCase()));");
       const loadBudget = async () => {
     const budget = await getRemainingBudget(account.toLowerCase());
     setRemainingBudget(budget);
