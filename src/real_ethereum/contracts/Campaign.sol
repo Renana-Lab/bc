@@ -180,6 +180,8 @@ function contribute() public payable onlyBeforeEnd {
 
 contract CampaignFactory {
     event AuctionCreated(address campaignAddress);
+    event BudgetUpdated(address indexed user, uint256 newBudget);
+
     uint256 defaultBudget = 2000;
     address payable[] public deployedCampaigns;
     mapping(address => bool) public isCampaign;
@@ -227,6 +229,8 @@ contract CampaignFactory {
         for (uint256 i = 0; i < allUsers.length; i++) {
             address user = allUsers[i];
             usersBudget[user] = defaultBudget;
+            // 🔔 Emit event for each user whose budget was reset
+            emit BudgetUpdated(user, defaultBudget);
         }
     }
 

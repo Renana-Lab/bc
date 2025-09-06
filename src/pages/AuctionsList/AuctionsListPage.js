@@ -81,8 +81,6 @@ function AuctionsListPage() {
             const balance = await auction.methods.getBid(currentUserAddress).call();
             isRefunded = Number(balance) === 0;
           }
-          // 🔹 לשמור sellerPaid אם כבר קיים ב־state
-          const prevAuction = auctionsList.find(a => a.address === address);
 
         const budget = await getDefaultBudget();
         console.log("budget = ", budget);
@@ -114,62 +112,32 @@ function AuctionsListPage() {
     } finally {
       setLoading(false);
       setIsFetching(false);
-
-      const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
-      const userAddress = accounts[0]?.toLowerCase();
       
     }
 
 
   };
 
+  useEffect(() => {
+    if (!window.ethereum) {
+      navigate("/");
+    } else {
+      const userAddress = window.ethereum.selectedAddress?.toLowerCase();
+      setCurrentUser(userAddress);
+      setRemainingBudget(getRemainingBudget(userAddress));
 
-useEffect(() => {
-  const interval = setInterval(async () => {
-    try {
-    } catch (err) {
-      console.error("🔁 Failed to update remainingBudget:", err);
-    }
-  }, 2500);
+      fetchNetworkId();
+      fetchAuctionsList();
 
-  return () => clearInterval(interval);
-}, [remainingBudget, auctionsList]);
-
-
-useEffect(() => {
-  const interval = setInterval(async () => {
-    fetchAuctionsList();
-  }, 2500);
-
-  return () => clearInterval(interval); // ניקוי אוטומטי
-}, []); // רץ פעם אחת בלבד
-
-
-useEffect(() => {
-  if (!window.ethereum) {
-
-    navigate("/");
-  } else {
-
-    const loadData = async () => {
-      try {
-        const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
-        const userAddress = accounts[0]?.toLowerCase();
-        // console.log("userAddress = ", userAddress);
-        setCurrentUser(userAddress);
-
-
-
-        fetchNetworkId();
+      const interval = setInterval(() => {
         fetchAuctionsList();
-      } catch (err) {
-        console.error("Error in loadData:", err);
-      }
-      };
-      loadData();
+        setRemainingBudget(getRemainingBudget(userAddress));
+        console.log("⏰ Fetching auctions list...");
+      }, 5000);
 
+      return () => clearInterval(interval);
     }
-    }, [currentUser]);
+  }, []);
 
 useEffect(() => {
 
@@ -234,6 +202,27 @@ useEffect(() => {
       subscriptions.forEach((sub) => sub.unsubscribe && sub.unsubscribe());
     };
   }, []); 
+
+
+useEffect(() => {
+  if (!factory || !currentUser) return;
+
+  const me = currentUser.toLowerCase();
+
+  const sub = factory.events.BudgetUpdated()
+    .on("connected", id => console.log("sub connected:", id))
+    .on("data", (event) => {
+      const { user, newBudget } = event.returnValues;
+      if (String(user).toLowerCase() === me) {
+        setRemainingBudget(String(newBudget));
+        console.log("💸 Budget updated:", newBudget);
+      }
+    })
+    .on("error", (err) => console.error("❌ BudgetUpdated error:", err));
+
+  return () => sub.unsubscribe();
+}, [factory, currentUser, setRemainingBudget]);
+
 
 
 
