@@ -206,7 +206,7 @@ useEffect(() => {
 
 useEffect(() => {
   if (!factory || !currentUser) return;
-
+  
   const me = currentUser.toLowerCase();
 
   const sub = factory.events.BudgetUpdated()

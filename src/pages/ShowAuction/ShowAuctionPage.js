@@ -39,6 +39,7 @@ import {
 } from "../AuctionsList/AuctionsListPage";
 
 
+
 const buttonStyle = {
   height: "2.5rem",
   borderRadius: "1rem",
@@ -47,6 +48,7 @@ const buttonStyle = {
   fontWeight: "600",
   border: "1px solid #002884",
 };
+
 
 const initialState = {
   dialogOpen: false,
@@ -68,6 +70,52 @@ const initialState = {
   loading: true,
   error: null,
 };
+
+
+function transactionsToCSV(transactions) {
+  const REQUIRED_KEYS = ["bidder", "bid", "time"];
+
+  // Validation
+  const isValid = transactions.every(
+    (tx) =>
+      typeof tx === "object" &&
+      REQUIRED_KEYS.every((key) => key in tx) &&
+      Object.keys(tx).length === REQUIRED_KEYS.length
+  );
+
+  if (!isValid) {
+    throw new Error("Invalid transaction structure");
+  }
+
+  // Header
+  const header = REQUIRED_KEYS.join(",");
+
+  // Rows
+  const rows = transactions.map((tx) =>
+    REQUIRED_KEYS.map((key) => `"${String(tx[key]).replace(/"/g, '""')}"`).join(",")
+  );
+
+  return [header, ...rows].join("\n");
+}
+
+
+
+function downloadCSV(transactions, filename = "transactions.csv") {
+  const csv = transactionsToCSV(transactions);
+
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+
+  document.body.appendChild(link);
+  link.click();
+
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
 
 
 
@@ -102,6 +150,19 @@ function ShowAuctionPage() {
   useEffect(() => {
   // console.log("🔁 Updated budget:", remainingBudget);
   }, [remainingBudget]);
+
+   const [error, setError] = useState(null);
+
+  const handleExport = () => {
+    try {
+      setError(null);
+      downloadCSV(state.transactions);
+    } catch (err) {
+      toast.error("CSV download not available: invalid transaction format found");
+    }
+  };
+
+
 
   const isAuctionActive = useMemo(
     () => Number(state.endTime + "000") > Date.now(),
@@ -585,7 +646,7 @@ useEffect(() => {
               flexDirection="row-reverse"
               alignItems="center"
               gap="140px"
-            >
+            > 
               <Button onClick={() => dispatch({ type: "TOGGLE_DIALOG" })}>
                 <CloseIcon
                   sx={{
@@ -599,6 +660,14 @@ useEffect(() => {
               <p className={showPageStyles.title}>Bidding History</p>
             </Box>
             <p className={showPageStyles.subTitle}>Auction # {address}</p>
+            <div style={{ display: "flex", justifyContent: "center" }}>
+              <Button
+                style={{ ...buttonStyle, width: "15rem" }}
+                onClick={handleExport}
+              >
+                Export Transactions
+              </Button>
+            </div>
           </DialogTitle>
           <DialogContent>
             <DialogContentText>
