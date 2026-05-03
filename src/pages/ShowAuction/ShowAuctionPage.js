@@ -138,6 +138,7 @@ const reducer = (state, action) => {
 };
 
 function ShowAuctionPage() {
+  const [finalizingPayment, setFinalizingPayment] = useState(false);
   const [state, dispatch] = useReducer(reducer, initialState);
   const { address } = useParams();
   const navigate = useNavigate();
@@ -307,6 +308,25 @@ function ShowAuctionPage() {
   }
 }, [address, navigate]);
 
+const finalizeAuction = useCallback(async () => {
+  if (!state.auction || !state.connectedAccount) return;
+
+  try {
+    setFinalizingPayment(true);
+    await state.auction.methods.finalizeAuctionIfNeeded().send({
+      from: state.connectedAccount,
+    });
+    toast.success("Auction finalized, seller payment sent.");
+    dispatch({ type: "SET_AUCTION_DATA", payload: { closed: true } });
+    await fetchAuctionData();
+  } catch (err) {
+    console.error("Error during finalization:", err);
+    toast.error("Could not finalize payment yet.");
+  } finally {
+    setFinalizingPayment(false);
+  }
+}, [state.auction, state.connectedAccount, fetchAuctionData]);
+
 const claimRefund = useCallback(async () => {
   if (!state.auction || !state.connectedAccount) return;
 
@@ -443,11 +463,13 @@ useEffect(() => {
       isManager &&
       state.transactions.length !== 0 && (
         <Button
+          id="finalize-auction-button"
           variant="contained"
-          disabled
+          disabled={finalizingPayment}
           style={{ ...buttonStyle, marginTop: "2rem", width: "24rem"}}
+          onClick={finalizeAuction}
         >
-          Seller payment pending
+          {finalizingPayment ? "Finalizing payment..." : "Get your money"}
         </Button>
       )}
 
