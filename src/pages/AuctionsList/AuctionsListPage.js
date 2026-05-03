@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import {
   Table,
   TableBody,
@@ -9,222 +9,296 @@ import {
   Button,
   Paper,
   CircularProgress,
-  Typography,
-  Box,
 } from "@mui/material";
 import { useNavigate, useLocation } from "react-router-dom";
 import Countdown from "react-countdown";
-import factory from "../../real_ethereum/factory";
-import { factorySocket, web3Socket } from "../../real_ethereum/socketFactory";
-import CampaignABI from "../../real_ethereum/build/Campaign.json";
-import Campaign from "../../real_ethereum/campaign";
-import web3 from "../../real_ethereum/web3";
+import { readOnlyCall } from "../../real_ethereum/readOnly";
 import Layout from "../../components/Layout";
 import styles from "./auctions.module.scss";
 import picSrc from "./Illustration_Start.png";
-import { getDefaultBudget } from "../ManageBudget/ManageBudgetPage";
 
+const AUCTIONS_PAGE_SIZE = 20;
+const FETCH_CONCURRENCY = 2;
+const POLL_INTERVAL_MS = 30000;
+const CACHE_TTL_MS = 10000;
+
+let auctionListCache = {
+  data: [],
+  total: 0,
+  visibleCount: 0,
+  updatedAt: 0,
+};
+let auctionListInFlight = null;
+const budgetCache = new Map();
+const budgetInFlight = new Map();
 
 export const userAddress = window.ethereum?.selectedAddress?.toLowerCase();
 
+export const getRemainingBudget = async (userAddress) => {
+  if (!window.ethereum) return null;
 
-export const getRemainingBudget = () => getDefaultBudget();
+  const accounts = userAddress
+    ? [userAddress]
+    : await window.ethereum.request({ method: "eth_accounts" });
+  const account = accounts?.[0];
 
+  if (!account) return null;
 
+  const normalizedAccount = account.toLowerCase();
+  const cached = budgetCache.get(normalizedAccount);
+  if (cached && Date.now() - cached.updatedAt < CACHE_TTL_MS) {
+    return cached.budget;
+  }
+
+  if (budgetInFlight.has(normalizedAccount)) {
+    return budgetInFlight.get(normalizedAccount);
+  }
+
+  const request = readOnlyCall(({ factory }) => factory.methods.getBudget(account))
+    .then((budget) => {
+      budgetCache.set(normalizedAccount, { budget, updatedAt: Date.now() });
+      return budget;
+    })
+    .finally(() => {
+      budgetInFlight.delete(normalizedAccount);
+    });
+
+  budgetInFlight.set(normalizedAccount, request);
+  return request;
+};
+
+const mapWithConcurrency = async (items, limit, mapper) => {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+
+  const workers = Array.from(
+    { length: Math.min(limit, items.length) },
+    async () => {
+      while (nextIndex < items.length) {
+        const currentIndex = nextIndex;
+        nextIndex += 1;
+        results[currentIndex] = await mapper(items[currentIndex], currentIndex);
+      }
+    }
+  );
+
+  await Promise.all(workers);
+  return results;
+};
+
+const getCachedAuctions = (visibleAuctionCount) => {
+  if (
+    auctionListCache.data.length &&
+    auctionListCache.visibleCount >= visibleAuctionCount
+  ) {
+    return {
+      data: auctionListCache.data.slice(-visibleAuctionCount),
+      total: auctionListCache.total,
+      fresh: Date.now() - auctionListCache.updatedAt < CACHE_TTL_MS,
+    };
+  }
+
+  return null;
+};
+
+const readAuctionsFromChain = async (visibleAuctionCount, currentUserAddress) => {
+  const auctions = await readOnlyCall(({ factory }) =>
+    factory.methods.getDeployedCampaigns()
+  );
+  const visibleAuctions = auctions.slice(-visibleAuctionCount);
+
+  const auctionData = await mapWithConcurrency(
+    visibleAuctions,
+    FETCH_CONCURRENCY,
+    async (address) => {
+      try {
+        const details = await readOnlyCall(({ campaign }) =>
+          campaign(address).methods.getSummary()
+        );
+        const addresses = details[8];
+        const auctionEnded = Number(details[9]) * 1000 < Date.now();
+        const closed = auctionEnded
+          ? await readOnlyCall(({ campaign }) =>
+              campaign(address).methods.getStatus()
+            )
+          : false;
+
+        let isRefunded = false;
+        const isHighestBidder =
+          currentUserAddress &&
+          details[7].toLowerCase() === currentUserAddress;
+        const isManager =
+          currentUserAddress &&
+          details[3].toLowerCase() === currentUserAddress;
+        const userInAuction =
+          currentUserAddress &&
+          addresses.some(
+            (address) => address.toLowerCase() === currentUserAddress
+          );
+
+        if (userInAuction && auctionEnded && !isHighestBidder && !isManager) {
+          const balance = await readOnlyCall(({ campaign }) =>
+            campaign(address).methods.getBid(currentUserAddress)
+          );
+          isRefunded = Number(balance) === 0;
+        }
+
+        return {
+          address,
+          minimumContribution: details[0],
+          balance: details[1],
+          approversCount: details[2],
+          manager: details[3],
+          highestBid: details[4],
+          dataForSell: details[5],
+          dataDescription: details[6],
+          highestBidder: details[7],
+          addresses,
+          endTime: Number(details[9]) * 1000,
+          isRefunded,
+          closed,
+        };
+      } catch (error) {
+        console.warn("Skipping auction after RPC read failed:", address, error);
+        return null;
+      }
+    }
+  );
+
+  const data = auctionData.filter(Boolean);
+
+  auctionListCache = {
+    data,
+    total: auctions.length,
+    visibleCount: visibleAuctionCount,
+    updatedAt: Date.now(),
+  };
+
+  return auctionListCache;
+};
 
 function AuctionsListPage() {
   const navigate = useNavigate();
   const { state: navState } = useLocation();
   const [auctionsList, setAuctionsList] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [currentUser, setCurrentUser] = useState(null);
-  const [isFetching, setIsFetching] = useState(false);
+  const [visibleAuctionCount, setVisibleAuctionCount] =
+    useState(AUCTIONS_PAGE_SIZE);
+  const [totalAuctionCount, setTotalAuctionCount] = useState(0);
+  const fetchAuctionsListRef = useRef(null);
+  const isFetchingRef = useRef(false);
+  const requestIdRef = useRef(0);
+  const didMountVisibleCountRef = useRef(false);
 
   const [remainingBudget, setRemainingBudget] = useState(
-    navState?.remainingBudget || (getDefaultBudget() === 0 ? Infinity : getDefaultBudget())
+    navState?.remainingBudget || Infinity
   );
 
-  const fetchNetworkId = async () => {
+  const loadRemainingBudget = useCallback(async (account) => {
     try {
-      const id = await web3.eth.net.getId();
-
+      const budget = await getRemainingBudget(account);
+      const isUnlimited =
+        budget === 0 ||
+        budget === "0" ||
+        budget === null ||
+        budget === undefined;
+      setRemainingBudget(isUnlimited ? Infinity : budget);
     } catch (error) {
-      console.error("❌ Error fetching network ID:", error);
+      console.error("Error loading remaining budget:", error);
     }
-  };
+  }, []);
 
+  const fetchAuctionsList = useCallback(async () => {
+    const cached = getCachedAuctions(visibleAuctionCount);
 
+    if (cached?.fresh) {
+      setAuctionsList(cached.data);
+      setTotalAuctionCount(cached.total);
+      setLoading(false);
+      return;
+    }
 
+    if (isFetchingRef.current) return;
 
-  const fetchAuctionsList = async () => { 
-    if (isFetching) return;
-    setIsFetching(true);
+    isFetchingRef.current = true;
+    const requestId = requestIdRef.current + 1;
+    requestIdRef.current = requestId;
+
     try {
-       await window.ethereum.request({ method: "eth_accounts" });
-      const auctions = await factory.methods.getDeployedCampaigns().call();
-      const auctionData = await Promise.all(
-        auctions.map(async (address) => {
-          const auction = Campaign(address);
-          const details = await auction.methods.getSummary().call();
-          const addresses = await auction.methods.getAddresses().call();
-          const currentUserAddress = window.ethereum?.selectedAddress?.toLowerCase();
-          const closed = await auction.methods.getStatus().call();
-
-
-          let isRefunded = false;
-          const auctionEnded = Number(details[9] + "000") < Date.now();
-          const isHighestBidder = details[7].toLowerCase() === currentUserAddress;
-          const isManager = details[3].toLowerCase() === currentUserAddress;
-          const userInAuction = addresses.map(a => a.toLowerCase()).includes(currentUserAddress);
-
-          if (userInAuction && auctionEnded && !isHighestBidder && !isManager) {
-            const balance = await auction.methods.getBid(currentUserAddress).call();
-            isRefunded = Number(balance) === 0;
+      const currentUserAddress = window.ethereum?.selectedAddress?.toLowerCase();
+      auctionListInFlight =
+        auctionListInFlight ||
+        readAuctionsFromChain(visibleAuctionCount, currentUserAddress).finally(
+          () => {
+            auctionListInFlight = null;
           }
+        );
+      const { data, total } = await auctionListInFlight;
 
-        const budget = await getDefaultBudget();
-        console.log("budget = ", budget);
-        setRemainingBudget(budget);
-
-          return {
-              address,
-              minimumContribution: details[0],
-              balance: details[1],
-              approversCount: details[2],
-              manager: details[3],
-              highestBid: details[4],
-              dataForSell: details[5],
-              dataDescription: details[6],
-              highestBidder: details[7],
-              addresses: details[8],
-              endTime: Number(details[9] + "000"), // ← אל תשכח להכפיל ב-1000
-              isRefunded,
-              closed, // 👈 כאן הפתרון
-
-            };
-        })
-      );
-
-      setAuctionsList(auctionData);
-      // console.log(auctionsList);
+      if (requestId === requestIdRef.current) {
+        setAuctionsList(data.slice(-visibleAuctionCount));
+        setTotalAuctionCount(total);
+      }
     } catch (error) {
-      console.error("❌ Error fetching auctions:", error);
+      const stale = getCachedAuctions(visibleAuctionCount);
+      if (stale) {
+        setAuctionsList(stale.data);
+        setTotalAuctionCount(stale.total);
+      }
+      console.error("Error fetching auctions:", error);
     } finally {
       setLoading(false);
-      setIsFetching(false);
-      
+      isFetchingRef.current = false;
+    }
+  }, [visibleAuctionCount]);
+
+  useEffect(() => {
+    fetchAuctionsListRef.current = fetchAuctionsList;
+  }, [fetchAuctionsList]);
+
+  useEffect(() => {
+    if (!didMountVisibleCountRef.current) {
+      didMountVisibleCountRef.current = true;
+      return;
     }
 
-
-  };
+    fetchAuctionsListRef.current?.();
+  }, [visibleAuctionCount]);
 
   useEffect(() => {
     if (!window.ethereum) {
       navigate("/");
-    } else {
-      const userAddress = window.ethereum.selectedAddress?.toLowerCase();
-      setCurrentUser(userAddress);
-      setRemainingBudget(getRemainingBudget(userAddress));
-
-      fetchNetworkId();
-      fetchAuctionsList();
-
-      const interval = setInterval(() => {
-        fetchAuctionsList();
-        setRemainingBudget(getRemainingBudget(userAddress));
-        console.log("⏰ Fetching auctions list...");
-      }, 5000);
-
-      return () => clearInterval(interval);
+      return undefined;
     }
-  }, []);
 
-useEffect(() => {
-
-    const subscriptions = [];
-    const listenedAddresses = new Set();
-
-    const subscribeToCampaignEvents = (address) => {
-      if (listenedAddresses.has(address)) return; // לא להאזין פעמיים
-      listenedAddresses.add(address);
-
-      const campaign = new web3Socket.eth.Contract(CampaignABI.abi, address);
-
-      // 🟢 האזנה ל-BidAdded
-      const bidSub = campaign.events.BidAdded()
-        .on("data", (event) => {
-          console.log("💰 New bid on", address, "by", event.returnValues.contributor);
-          fetchAuctionsList();
-        })
-        .on("error", (err) => console.error("❌ BidAdded error:", err));
-
-      subscriptions.push(bidSub);
-
-      // 🟢 האזנה ל-SellerPaid
-      const sellerSub = campaign.events.SellerPaid()
-        .on("data", (event) => {
-          console.log("💵 Seller paid on", address, ":", event.returnValues.amount, "wei");
-
-          // עדכון הרשימה – מסמן שהמכרז הזה שולם
-
-        })
-        .on("error", (err) => console.error("❌ SellerPaid error:", err));
-
-      subscriptions.push(sellerSub);
-    };
-
-    const init = async () => {
-      try {
-        // 1. מאזינים לקמפיינים קיימים
-        const addresses = await factorySocket.methods.getDeployedCampaigns().call();
-        addresses.forEach(subscribeToCampaignEvents);
-
-        // 2. מאזינים לקמפיינים חדשים
-        const createdSub = factorySocket.events.AuctionCreated()
-          .on("data", (event) => {
-            const addr = event.returnValues.campaignAddress;
-            console.log("📢 New campaign:", addr);
-            fetchAuctionsList(); 
-            subscribeToCampaignEvents(addr);
-          })
-          .on("error", (err) => console.error("AuctionCreated error:", err));
-
-        subscriptions.push(createdSub);
-      } catch (e) {
-        console.error("Failed to subscribe:", e);
+    const setAccount = (accounts) => {
+      const nextAccount =
+        accounts?.[0]?.toLowerCase() ||
+        window.ethereum?.selectedAddress?.toLowerCase() ||
+        null;
+      if (nextAccount) {
+        loadRemainingBudget(nextAccount);
       }
+      fetchAuctionsListRef.current?.();
     };
 
-    init();
+    window.ethereum
+      .request({ method: "eth_accounts" })
+      .then(setAccount)
+      .catch((error) => console.error("Error reading accounts:", error));
 
-    // 🧼 ניקוי
+    const interval = setInterval(() => {
+      if (document.hidden) return;
+      fetchAuctionsListRef.current?.();
+    }, POLL_INTERVAL_MS);
+
+    window.ethereum.on?.("accountsChanged", setAccount);
+
     return () => {
-      subscriptions.forEach((sub) => sub.unsubscribe && sub.unsubscribe());
+      clearInterval(interval);
+      window.ethereum.removeListener?.("accountsChanged", setAccount);
     };
-  }, []); 
-
-
-useEffect(() => {
-  if (!factory || !currentUser) return;
-  
-  const me = currentUser.toLowerCase();
-
-  const sub = factory.events.BudgetUpdated()
-    .on("connected", id => console.log("sub connected:", id))
-    .on("data", (event) => {
-      const { user, newBudget } = event.returnValues;
-      if (String(user).toLowerCase() === me) {
-        setRemainingBudget(String(newBudget));
-        console.log("💸 Budget updated:", newBudget);
-      }
-    })
-    .on("error", (err) => console.error("❌ BudgetUpdated error:", err));
-
-  return () => sub.unsubscribe();
-}, [factory, currentUser, setRemainingBudget]);
-
-
-
+  }, [navigate, loadRemainingBudget]);
 
   const getTimeLeft = (endTime) => {
     return Number(endTime) < Date.now() ? (
@@ -239,16 +313,14 @@ useEffect(() => {
   };
 
   const isHighestBidder = (auction, currentUserAddress) => {
-    // console.log(currentUserAddress, `is the higestbider in ${auction.address} ?`, auction.highestBidder?. toLowerCase() === currentUserAddress);
-    return auction.highestBidder?. toLowerCase() === currentUserAddress;
-  }
-
+    return auction.highestBidder?.toLowerCase() === currentUserAddress;
+  };
 
   const hasUserWonAuction = (auction) => {
     const currentUserAddress = window.ethereum?.selectedAddress?.toLowerCase();
     const auctionEnded = Number(auction.endTime) < Date.now();
-    const _isHighestBidder = isHighestBidder(auction, currentUserAddress);
-    return auctionEnded && _isHighestBidder;
+    const userIsHighestBidder = isHighestBidder(auction, currentUserAddress);
+    return auctionEnded && userIsHighestBidder;
   };
 
   const isUserInAuction = (auction) => {
@@ -258,31 +330,63 @@ useEffect(() => {
     );
   };
 
-  const isUserMangager = (auction) => {
+  const isUserManager = (auction) => {
     const currentUserAddress = window.ethereum?.selectedAddress?.toLowerCase();
-    return  currentUserAddress == auction.manager.toLowerCase();
-  }
-
+    return currentUserAddress === auction.manager.toLowerCase();
+  };
 
   const getRowStyles = (hasWon, isOpen, isRefunded) => ({
-    backgroundColor: hasWon ? "#90EE90" : isOpen ? "#BBDEFB" : isRefunded  ? "#FFD700" : "#E9E9F6",
+    backgroundColor: hasWon
+      ? "#90EE90"
+      : isOpen
+        ? "#BBDEFB"
+        : isRefunded
+          ? "#FFD700"
+          : "#E9E9F6",
     marginBottom: "1rem",
     "&:hover": {
-      backgroundColor: hasWon ? "#77DD77" : isOpen ? "#A3CFFA" : isRefunded ? "#FFC107" : "#D0D0F0",
+      backgroundColor: hasWon
+        ? "#77DD77"
+        : isOpen
+          ? "#A3CFFA"
+          : isRefunded
+            ? "#FFC107"
+            : "#D0D0F0",
       cursor: "pointer",
     },
   });
 
-  const getFontStyles = (auction, currentAddress, isOpen) => (
-    {
-    color : 
-    isHighestBidder(auction, currentAddress) && isAuctionOpen(auction.endTime) ? "#11a811ff" :
-    (isUserInAuction && isAuctionOpen(auction.endTime) && !isUserMangager(auction)) ? "#da0c0cff" :
-    isOpen? 
-    "#D07030D0"
-     :
-    "#0D0D4E"
-  })
+  const getFontStyles = (auction, currentAddress, isOpen) => ({
+    color:
+      isHighestBidder(auction, currentAddress) && isAuctionOpen(auction.endTime)
+        ? "#11a811ff"
+        : isUserInAuction(auction) &&
+            isAuctionOpen(auction.endTime) &&
+            !isUserManager(auction)
+          ? "#da0c0cff"
+          : isOpen
+            ? "#D07030D0"
+            : "#0D0D4E",
+  });
+
+  const getRefundStatus = (auction, userParticipated, userWon, auctionOpen) => {
+    const isManager = isUserManager(auction);
+
+    if (userParticipated && !userWon && !auctionOpen) {
+      return auction.isRefunded ? "Refunded" : "Awaiting Refund";
+    }
+
+    if (userWon) {
+      return auctionOpen ? "" : "You were charged";
+    }
+
+    if (isManager && auction.approversCount > 0) {
+      if (auctionOpen) return "";
+      return auction.closed ? "You were paid" : "Payment pending";
+    }
+
+    return "";
+  };
 
   const handleRowClick = (address, e) => {
     e.stopPropagation();
@@ -333,12 +437,6 @@ useEffect(() => {
           </div>
         </div>
 
-        {/* <Box textAlign="center" sx={{ margin: "1rem 0" }}>
-          <Typography variant="h5" fontStyle={'italic'} fontFamily={'inherit'} >
-            Your Remaining Budget: {remainingBudget === Infinity ? "Unlimited" : `${remainingBudget} wei`}
-          </Typography>
-        </Box> */}
-
         {loading ? (
           <div className={styles.loadingContainer}>
             <CircularProgress size={50} />
@@ -357,7 +455,6 @@ useEffect(() => {
               <TableHead>
                 <TableRow>
                   {[
-                    // "Address",  
                     "Description",
                     "Auction Status",
                     "Highest Bid",
@@ -380,90 +477,68 @@ useEffect(() => {
                   const userWon = hasUserWonAuction(auction);
                   const userParticipated = isUserInAuction(auction);
                   const auctionOpen = isAuctionOpen(auction.endTime);
-                  const isManager = isUserMangager(auction);
-                  const currentAddress = window.ethereum?.selectedAddress?.toLowerCase();
-                  const getRefundStatus =  (auction) => {
-
-                    // 1) משתמש שהשתתף, הפסיד והמכרז נסגר → Refunded / Awaiting Refund
-                    if (userParticipated && !userWon && !auctionOpen) {
-                      return auction.isRefunded ? "Refunded" : "Awaiting Refund";
-                    }
-
-                    // 2) המנצח:
-                    //    אם עבר הזמן (נסגר) → "You were charged"
-                    //    אם עדיין פתוח → כלום
-                    if (userWon) {
-                      return auctionOpen ? "" : "You were charged";
-                    }
-
-                    // 3) המנהל:
-                    //    אם עדיין פתוח → כלום
-                    //    אם נסגר:
-                    //       - אם sellerPaid=false → כפתור
-                    //       - אם sellerPaid=true → כלום (לא להציג)
-                    if (isManager && auction.approversCount > 0) {
-                      if (auctionOpen) return "";
-                      return auction.closed
-                        ? "You were paid"
-                        : (
-                          <Button
-                            variant="contained"
-                            color="success"
-                            
-                          >
-                            Get Your money
-                          </Button>
-                        );
-                    }
-
-                    // 4) כל השאר
-                    return "";
-                  };
-
-
-
-                  // const refundStatus = userParticipated && !userWon && !auctionOpen
-                  //   ? (auction.isRefunded ? "Refunded" : "Awaiting Refund")
-                  //   : "N/A";
+                  const currentAddress =
+                    window.ethereum?.selectedAddress?.toLowerCase();
 
                   return (
                     <TableRow
-                      key={index}
-                      onClick={() => navigate(`/auction/${auction.address}`, { state: { remainingBudget } })}
-                      sx={getRowStyles(userWon, auctionOpen, auction.isRefunded)}
+                      key={`${auction.address}-${index}`}
+                      onClick={() =>
+                        navigate(`/auction/${auction.address}`, {
+                          state: { remainingBudget },
+                        })
+                      }
+                      sx={getRowStyles(
+                        userWon,
+                        auctionOpen,
+                        auction.isRefunded
+                      )}
                     >
-                      {/* <TableCell
-                      sx={getFontStyles(auction, currentAddress)}
-                      >{auction.address}</TableCell> */}
                       <TableCell
-                      sx={getFontStyles(auction, currentAddress)}
-                      align="center"
-                      
-                      >{auction.dataDescription}</TableCell>
+                        sx={getFontStyles(auction, currentAddress)}
+                        align="center"
+                      >
+                        {auction.dataDescription}
+                      </TableCell>
                       <TableCell
                         align="center"
-                    
                         sx={getFontStyles(auction, currentAddress, true)}
-                        style={{fontWeight: "bold" }}
+                        style={{ fontWeight: "bold" }}
                       >
                         {getTimeLeft(auction.endTime)}
                       </TableCell>
                       <TableCell
-                      align="center"
-                      sx={getFontStyles(auction, currentAddress)}
-                      >{auction.highestBid}</TableCell>
+                        align="center"
+                        sx={getFontStyles(auction, currentAddress)}
+                      >
+                        {auction.highestBid}
+                      </TableCell>
                       <TableCell
-                      align="center"
-                      sx={getFontStyles(auction, currentAddress)}
-                      >{auction.approversCount}</TableCell>
+                        align="center"
+                        sx={getFontStyles(auction, currentAddress)}
+                      >
+                        {auction.approversCount}
+                      </TableCell>
                       <TableCell
-                      sx={getFontStyles(auction, currentAddress)}
-                      align="center">{getRefundStatus(auction)}</TableCell>
+                        sx={getFontStyles(auction, currentAddress)}
+                        align="center"
+                      >
+                        {getRefundStatus(
+                          auction,
+                          userParticipated,
+                          userWon,
+                          auctionOpen
+                        )}
+                      </TableCell>
                       <TableCell align="center">
                         <Button
                           variant="contained"
                           style={{
-                            backgroundColor: userWon ? "#2e7d32" : auction.isRefunded ? "#FFD700" : "#9090D0",
+                            backgroundColor: userWon
+                              ? "#2e7d32"
+                              : auction.isRefunded
+                                ? "#FFD700"
+                                : "#9090D0",
                             color: "white",
                             borderRadius: "20px",
                             padding: "6px 20px",
@@ -481,6 +556,32 @@ useEffect(() => {
                 })}
               </TableBody>
             </Table>
+            {visibleAuctionCount < totalAuctionCount && (
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "center",
+                  padding: "1rem",
+                }}
+              >
+                <Button
+                  variant="contained"
+                  style={{
+                    backgroundColor: "#103090",
+                    color: "white",
+                    borderRadius: "20px",
+                    padding: "8px 24px",
+                  }}
+                  onClick={() =>
+                    setVisibleAuctionCount(
+                      (count) => count + AUCTIONS_PAGE_SIZE
+                    )
+                  }
+                >
+                  Load More Auctions
+                </Button>
+              </div>
+            )}
           </TableContainer>
         )}
       </div>

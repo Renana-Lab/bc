@@ -32,14 +32,7 @@ const ToolbarComponent = (props) => {
       }
     };
 
-    // ריצה מיידית
     fetchBudget();
-
-    // ריצה כל שנייה
-    const interval = setInterval(fetchBudget, 1000);
-
-    // ניקוי כאשר הקומפוננטה מתפרקת
-    return () => clearInterval(interval);
   }, []);
 
 

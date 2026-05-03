@@ -1,5 +1,5 @@
 import { Button, TextField, Typography, Box } from "@mui/material";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import Layout from "../../components/Layout";
 import toast from "react-hot-toast";
@@ -38,19 +38,28 @@ export const getDefaultBudget = () => getStoredBudget();
 
 const ManageBudgetPage = () => {
   const navigate = useNavigate();
-  const [budget, setBudget] = useState(getStoredBudget());
+  const [budget, setBudget] = useState(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [pass, setPass] = useState("");
   const [error, setError] = useState("");
 
-    useEffect(() => {
-      if (!window.ethereum) {
-        navigate("/"); // Redirect away if no MetaMask
-        return;
-      }
-    });
+  useEffect(() => {
+    if (!window.ethereum) {
+      navigate("/"); // Redirect away if no MetaMask
+      return;
+    }
 
-  const authenticate = () => {
+    const loadBudget = async () => {
+      const stored = await getStoredBudget();
+      if (stored !== undefined && stored !== null) {
+        setBudget(stored);
+      }
+    };
+
+    loadBudget();
+  }, [navigate]);
+
+  const authenticate = useCallback(() => {
     if (pass === ADMIN_SECRET) {
       setIsAdmin(true);
       setError("");
@@ -58,7 +67,7 @@ const ManageBudgetPage = () => {
     } else {
       setError("Incorrect admin key");
     }
-  };
+  }, [pass]);
 
   const handleBudgetChange = (e) => {
     const value = Number(e.target.value);
@@ -114,16 +123,16 @@ const handleResetBudget = async () => {
   }
 };
 
-  const handleKeyDown = (e) => {
-    if (e.key === "Enter") {
-      authenticate();
-    }
-  };
-
   useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === "Enter") {
+        authenticate();
+      }
+    };
+
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [pass]);
+  }, [authenticate]);
 
   return (
     <Layout>

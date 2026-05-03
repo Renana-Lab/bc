@@ -36,6 +36,8 @@
     "start": "react-scripts start",
     "build": "react-scripts build",
     "test": "react-scripts test",
+    "auto-finalize": "node scripts/autoFinalizeAuctions.js --once",
+    "auto-finalize:watch": "node scripts/autoFinalizeAuctions.js",
     "eject": "react-scripts eject"
   },
   "eslintConfig": {

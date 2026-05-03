@@ -140,22 +140,19 @@ function ShowAuctionPage() {
   const [finalizedClicked, setFinalizedClicked] = useState(false);
   
   const [state, dispatch] = useReducer(reducer, initialState);
-  const [hasHandledAuctionEnd, setHasHandledAuctionEnd] = useState(false);
   const { address } = useParams();
   const navigate = useNavigate();
   const { state: navState } = useLocation();
   const [remainingBudget, setRemainingBudget] = useState(
     navState?.remainingBudget || 0
   );
-  useEffect(() => {
-  // console.log("🔁 Updated budget:", remainingBudget);
-  }, [remainingBudget]);
 
-   const [error, setError] = useState(null);
+  useEffect(() => {
+    // console.log("🔁 Updated budget:", remainingBudget);
+  }, [remainingBudget]);
 
   const handleExport = () => {
     try {
-      setError(null);
       downloadCSV(state.transactions);
     } catch (err) {
       toast.error("CSV download not available: invalid transaction format found");
@@ -200,7 +197,6 @@ function ShowAuctionPage() {
     const summary = await auctionInstance.methods.getSummary().call();
 
     const minimumContribution = summary[0];
-    const balance = summary[1];
     const approversCount = summary[2];
     const manager = summary[3];
     const highestBid = summary[4];
@@ -267,9 +263,6 @@ function ShowAuctionPage() {
       refundsProcessed = !stillOwed.includes(true);
 
       if (refundsProcessed) {
-        const ethBalances = await Promise.all(
-          addresses.map((addr) => web3.eth.getBalance(addr))
-        );
         const contractBalance = BigInt(await web3.eth.getBalance(auctionInstance.options.address));
         const managerBalance = BigInt(await web3.eth.getBalance(manager));
 
@@ -321,7 +314,6 @@ const finalizeAuction = useCallback(async () => {
   try {
     setFinalizedClicked(true); // ✅ לחצו על הכפתור
     console.log("⏳ Finalizing auction from:", state.manager);
-    const summaryBefore = await state.auction.methods.getSummary().call();
     const addresses = await state.auction.methods.getAddresses().call();
 
     const balancesBefore = await Promise.all(
@@ -329,7 +321,9 @@ const finalizeAuction = useCallback(async () => {
     );
     const managerBalanceBefore = await web3.eth.getBalance(state.manager);
 
-    await state.auction.methods.finalizeAuctionIfNeeded().send({ from: state.manager });
+    await state.auction.methods.finalizeAuctionIfNeeded().send({
+      from: state.connectedAccount,
+    });
 
     const managerBalanceAfter = await web3.eth.getBalance(state.manager);
 
@@ -366,7 +360,7 @@ const finalizeAuction = useCallback(async () => {
     console.error("❌ Error during finalization:", err);
     toast.error("Auction did not end!\nYou did not get your money for the data!");
   }
-}, [state.auction, state.manager, fetchAuctionData]);
+}, [state.auction, state.connectedAccount, state.manager, fetchAuctionData]);
 
 
 
@@ -382,11 +376,9 @@ const finalizeAuction = useCallback(async () => {
           const beforeBudget = await getRemainingBudget();
           console.log("💸 remainingBudget BEFORE update =", beforeBudget);
 
-
-          setRemainingBudget(beforeBudget);
-          // console.log("setRemainingBudget called in setRemainingBudget(beforeBudget);")
-          const afterBudget = await getRemainingBudget();  
-          // console.log("💸 remainingBudget AFTER update (should match) =", afterBudget);
+          const afterBudget = await getRemainingBudget();
+          console.log("💸 remainingBudget AFTER update =", afterBudget);
+          setRemainingBudget(afterBudget);
 
           await fetchAuctionData();
       } catch (error) {
@@ -447,7 +439,7 @@ useEffect(() => {
     refundEvent.unsubscribe();    // ← חובה למנוע דליפות זיכרון
     sellerPaidEvent.unsubscribe();
   };
-}, [state.auction]);
+}, [state.auction, fetchAuctionData]);
 
 
 
@@ -495,6 +487,19 @@ useEffect(() => {
           onClick={finalizeAuction}
         >
           Get your money
+        </Button>
+      )}
+
+      {!state.refundsProcessed &&
+      finalizedClicked &&
+      !isAuctionActive &&
+      state.transactions.length !== 0 && (
+        <Button
+          variant="contained"
+          disabled
+          style={{ ...buttonStyle, marginTop: "2rem", width: "24rem"}}
+        >
+          Finalizing payment...
         </Button>
       )}
 

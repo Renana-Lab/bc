@@ -32,7 +32,7 @@ function NewAuctionPage() {
       navigate("/"); // Redirect away if no MetaMask
       return;
     }
-  });
+  }, [navigate]);
 
   const handleChange = (event) => {
     const { name, value } = event.target;
@@ -49,7 +49,7 @@ function NewAuctionPage() {
     setExplanation(explanation === field ? null : field);
   };
 
-  const validateForm = () => {
+  const validateForm = useCallback(() => {
     const isInt = (val) => Number.isInteger(Number(val));
 
     if (
@@ -86,7 +86,7 @@ function NewAuctionPage() {
     }
 
     return true;
-  };
+  }, [formData]);
 
   const handleSubmit = useCallback(
     async (event) => {
@@ -117,7 +117,7 @@ function NewAuctionPage() {
       }
       setLoading(false);
     },
-    [formData]
+    [formData, navigate, validateForm]
   );
 
   const renderTooltip = (field, text) => (
