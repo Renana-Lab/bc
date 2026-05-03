@@ -1,14 +1,24 @@
 const fs = require("fs");
 const path = require("path");
+require("dotenv").config({ path: path.resolve(__dirname, "../../.env") });
 const HDWalletProvider = require("@truffle/hdwallet-provider");
 const Web3 = require("web3");
 const compiledFactory = require("./build/CampaignFactory.json");
 
-// ⚠️ Replace with your own mnemonic & Infura endpoint
-const provider = new HDWalletProvider(
-  "satisfy canoe farm alone talent elder cost minor rich frame keep tomorrow",
-  "https://sepolia.infura.io/v3/b27d53291ceb44bd864dbf7b0eb55581"
-);
+const mnemonic = process.env.DEPLOY_MNEMONIC || process.env.MNEMONIC;
+const rpcUrl =
+  process.env.DEPLOY_RPC_URL ||
+  process.env.RPC_URL ||
+  (process.env.INFURA_KEY ? `https://sepolia.infura.io/v3/${process.env.INFURA_KEY}` : "");
+
+if (!mnemonic || !rpcUrl) {
+  throw new Error("Missing DEPLOY_MNEMONIC/MNEMONIC and DEPLOY_RPC_URL/RPC_URL/INFURA_KEY in .env");
+}
+
+const provider = new HDWalletProvider({
+  mnemonic: { phrase: mnemonic },
+  providerOrUrl: rpcUrl,
+});
 
 const web3 = new Web3(provider);
 
@@ -37,8 +47,8 @@ const deploy = async () => {
     const contractAddress = result.options.address;
     console.log("✅ Contract successfully deployed at:", contractAddress);
 
-    // Update factory.js with the new contract address
-    const factoryPath = path.resolve(__dirname, "factory.js");
+    // Update the shared frontend factory address with the new deployment.
+    const factoryPath = path.resolve(__dirname, "factoryAddress.js");
     let factoryContent = fs.readFileSync(factoryPath, "utf8");
 
     factoryContent = factoryContent.replace(
@@ -47,7 +57,7 @@ const deploy = async () => {
     );
 
     fs.writeFileSync(factoryPath, factoryContent, "utf8");
-    console.log("✅ factory.js updated with new contract address.");
+    console.log("✅ factoryAddress.js updated with new contract address.");
   } catch (error) {
     console.error("❌ Deployment failed:", error);
   } finally {

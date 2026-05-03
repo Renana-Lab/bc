@@ -1,0 +1,43 @@
+name: Auto Finalize Auctions
+
+on:
+  push:
+    branches:
+      - master
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: auto-finalize-auctions
+  cancel-in-progress: false
+
+jobs:
+  auto-finalize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: yarn
+
+      - name: Enable Yarn
+        run: corepack enable
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile --non-interactive
+
+      - name: Finalize ended auctions
+        run: yarn auto-finalize
+        env:
+          RPC_URL: ${{ secrets.RPC_URL }}
+          INFURA_KEY: ${{ secrets.INFURA_KEY }}
+          PRIVATE_KEY: ${{ secrets.AUTO_FINALIZE_PRIVATE_KEY }}
+          AUTO_FINALIZE_CONCURRENCY: 2
+          AUTO_REFUND_BATCH_SIZE: 20

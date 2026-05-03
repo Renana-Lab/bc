@@ -40,6 +40,7 @@ contract Campaign {
     uint256 public highestBid;
     uint256 public endTime;
     bool public closed;
+    uint256 public nextRefundIndex;
 
     modifier onlyBeforeEnd() {
         require(block.timestamp < endTime, "Auction ended");
@@ -110,26 +111,62 @@ function contribute() public payable onlyBeforeEnd {
     function finalizeAuctionIfNeeded() public onlyAfterEnd {
         require(!closed, "Auction already finalized");
 
-        for (uint256 i = 0; i < addresses.length; i++) {
-            address contributor = addresses[i];
-            if (contributor != highestBidder) {
-                uint256 refundAmount = approversMoney[contributor];
-                if (refundAmount > 0) {
-                    approversMoney[contributor] = 0;
-                    payable(contributor).transfer(refundAmount);
-                    emit RefundProcessed(contributor, refundAmount);
-                }
-            }
-        }
+        closed = true;
 
         if (highestBid > 0) {
             require(address(this).balance >= highestBid, "Insufficient balance");
-            payable(manager).transfer(highestBid); 
+            approversMoney[highestBidder] = 0;
+
+            (bool sent, ) = payable(manager).call{value: highestBid}("");
+            require(sent, "Seller payment failed");
+
             factory.changeBudget(manager, highestBid, true);
             emit SellerPaid(manager, highestBid);
         }
+    }
 
-        closed = true;
+    function withdrawRefund() public {
+        require(closed, "Auction not finalized");
+        require(msg.sender != highestBidder, "Winner has no refund");
+
+        uint256 refundAmount = approversMoney[msg.sender];
+        require(refundAmount > 0, "No refund available");
+
+        approversMoney[msg.sender] = 0;
+
+        (bool sent, ) = payable(msg.sender).call{value: refundAmount}("");
+        require(sent, "Refund failed");
+
+        emit RefundProcessed(msg.sender, refundAmount);
+    }
+
+    function processRefunds(uint256 maxRefunds) public {
+        require(closed, "Auction not finalized");
+        require(maxRefunds > 0, "Batch size required");
+
+        uint256 processed = 0;
+
+        while (nextRefundIndex < addresses.length && processed < maxRefunds) {
+            address contributor = addresses[nextRefundIndex];
+            nextRefundIndex++;
+
+            if (contributor == highestBidder) {
+                continue;
+            }
+
+            uint256 refundAmount = approversMoney[contributor];
+            if (refundAmount == 0) {
+                continue;
+            }
+
+            approversMoney[contributor] = 0;
+
+            (bool sent, ) = payable(contributor).call{value: refundAmount}("");
+            require(sent, "Refund failed");
+
+            emit RefundProcessed(contributor, refundAmount);
+            processed++;
+        }
     }
 
     function getStatus() public view returns (bool) {

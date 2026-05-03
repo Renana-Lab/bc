@@ -66,6 +66,7 @@ const initialState = {
   transactions: [],
   contributors: [],
   refundsProcessed: false,
+  closed: false,
   userBid: 0,
   loading: true,
   error: null,
@@ -137,8 +138,6 @@ const reducer = (state, action) => {
 };
 
 function ShowAuctionPage() {
-  const [finalizedClicked, setFinalizedClicked] = useState(false);
-  
   const [state, dispatch] = useReducer(reducer, initialState);
   const { address } = useParams();
   const navigate = useNavigate();
@@ -308,59 +307,20 @@ function ShowAuctionPage() {
   }
 }, [address, navigate]);
 
-const finalizeAuction = useCallback(async () => {
-  if (!state.auction) return;
+const claimRefund = useCallback(async () => {
+  if (!state.auction || !state.connectedAccount) return;
 
   try {
-    setFinalizedClicked(true); // ✅ לחצו על הכפתור
-    console.log("⏳ Finalizing auction from:", state.manager);
-    const addresses = await state.auction.methods.getAddresses().call();
-
-    const balancesBefore = await Promise.all(
-      addresses.map(addr => web3.eth.getBalance(addr))
-    );
-    const managerBalanceBefore = await web3.eth.getBalance(state.manager);
-
-    await state.auction.methods.finalizeAuctionIfNeeded().send({
+    await state.auction.methods.withdrawRefund().send({
       from: state.connectedAccount,
     });
-
-    const managerBalanceAfter = await web3.eth.getBalance(state.manager);
-
-    toast.success(`Auction finalized, you were paid!`);
-
- 
-    const summaryAfter = await state.auction.methods.getSummary().call();
-    const closed = await state.auction.methods.getStatus().call();
-    const balancesAfter = await Promise.all(
-      addresses.map(addr => web3.eth.getBalance(addr))
-    );
-
-    console.log("✅ Auction closed:", closed);
-    console.log("🏆 Highest bidder:", summaryAfter[7]);
-    console.log("💰 Highest bid:", web3.utils.fromWei(summaryAfter[4], "ether"), "ETH");
-
-    console.log("💸 Seller (manager) balance change:",
-      web3.utils.fromWei((BigInt(managerBalanceAfter) - BigInt(managerBalanceBefore)).toString(), "ether"),
-      "ETH"
-    );
-
-    addresses.forEach((addr, i) => {
-      if (addr !== summaryAfter[7]) {
-        const refundAmount = BigInt(balancesAfter[i]) - BigInt(balancesBefore[i]);
-        console.log(`🔁 Refund to ${addr}:`, web3.utils.fromWei(refundAmount.toString(), "ether"), "ETH");
-      }
-    });
-
-    dispatch({ type: "SET_AUCTION_DATA", payload: { refundsProcessed: true } });
+    toast.success("Refund claimed.");
     await fetchAuctionData();
-
   } catch (err) {
-    setFinalizedClicked(false);
-    console.error("❌ Error during finalization:", err);
-    toast.error("Auction did not end!\nYou did not get your money for the data!");
+    console.error("Error claiming refund:", err);
+    toast.error("Refund is not available yet.");
   }
-}, [state.auction, state.connectedAccount, state.manager, fetchAuctionData]);
+}, [state.auction, state.connectedAccount, fetchAuctionData]);
 
 
 
@@ -399,9 +359,13 @@ const finalizeAuction = useCallback(async () => {
   useEffect(() => {
     fetchAuctionData();
     let interval;
-    if (isAuctionActive) interval = setInterval(fetchAuctionData, 2500); // Update every 2.5 seconds
+    if (isAuctionActive) {
+      interval = setInterval(fetchAuctionData, 2500);
+    } else if (!state.closed) {
+      interval = setInterval(fetchAuctionData, 10000);
+    }
     return () => interval && clearInterval(interval);
-  }, [fetchAuctionData, isAuctionActive]);
+  }, [fetchAuctionData, isAuctionActive, state.closed]);
 
 useEffect(() => {
   if (!state.auction) return;
@@ -474,32 +438,29 @@ useEffect(() => {
 
 
 
-      {!state.refundsProcessed &&
-      !finalizedClicked &&
+      {!state.closed &&
       !isAuctionActive &&
       isManager &&
-      state.transactions.length !== 0 && (
-        <Button
-          id="finalize-auction-button"
-          variant="contained"
-          disabled={!state.transactions.length}
-          style={{ ...buttonStyle, marginTop: "2rem", width: "24rem"}}
-          onClick={finalizeAuction}
-        >
-          Get your money
-        </Button>
-      )}
-
-      {!state.refundsProcessed &&
-      finalizedClicked &&
-      !isAuctionActive &&
       state.transactions.length !== 0 && (
         <Button
           variant="contained"
           disabled
           style={{ ...buttonStyle, marginTop: "2rem", width: "24rem"}}
         >
-          Finalizing payment...
+          Seller payment pending
+        </Button>
+      )}
+
+      {state.closed &&
+      !isAuctionActive &&
+      isManager &&
+      state.transactions.length !== 0 && (
+        <Button
+          variant="contained"
+          disabled
+          style={{ ...buttonStyle, marginTop: "2rem", width: "24rem"}}
+        >
+          Seller payment finalized
         </Button>
       )}
 
@@ -633,8 +594,19 @@ useEffect(() => {
             >
               {state.refundsProcessed
                 ? "You did not win the auction. Your bid has been refunded."
-                : "You did not win the auction. Awaiting refund from the manager."}
+                : state.closed
+                  ? "You did not win the auction. Your refund is queued automatically."
+                  : "You did not win the auction. Awaiting auction finalization."}
             </Typography>
+            {state.closed && !state.refundsProcessed && state.userBid > 0 && (
+              <Button
+                variant="contained"
+                style={{ ...buttonStyle, marginTop: "1rem", width: "18rem" }}
+                onClick={claimRefund}
+              >
+                Claim refund now
+              </Button>
+            )}
           </div>
         )}
       </div>

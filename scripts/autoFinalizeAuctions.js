@@ -5,16 +5,33 @@ const Web3 = require("web3");
 const campaignJson = require("../src/real_ethereum/build/Campaign.json");
 const factoryJson = require("../src/real_ethereum/build/CampaignFactory.json");
 
-const RPC_URL = process.env.RPC_URL || `https://sepolia.infura.io/v3/${process.env.INFURA_KEY || ""}`;
-const PRIVATE_KEY = process.env.PRIVATE_KEY;
-const FACTORY_ADDRESS = process.env.FACTORY_ADDRESS;
+const DEFAULT_RPC_URL = "https://ethereum-sepolia-rpc.publicnode.com";
+const factoryAddressPath = path.resolve(__dirname, "../src/real_ethereum/factoryAddress.js");
+
+function loadFactoryAddress() {
+  const factoryAddressSource = require("fs").readFileSync(factoryAddressPath, "utf8");
+  const match = factoryAddressSource.match(/0x[a-fA-F0-9]{40}/);
+
+  if (!match) {
+    throw new Error(`Could not find factory address in ${factoryAddressPath}`);
+  }
+
+  return match[0];
+}
+
+const RPC_URL =
+  process.env.RPC_URL ||
+  (process.env.INFURA_KEY ? `https://sepolia.infura.io/v3/${process.env.INFURA_KEY}` : DEFAULT_RPC_URL);
+const PRIVATE_KEY = process.env.PRIVATE_KEY || process.env.AUTO_FINALIZE_PRIVATE_KEY;
+const FACTORY_ADDRESS = process.env.FACTORY_ADDRESS || loadFactoryAddress();
 const INTERVAL_MS = Number(process.env.AUTO_FINALIZE_INTERVAL_MS || 15000);
 const CONCURRENCY = Number(process.env.AUTO_FINALIZE_CONCURRENCY || 4);
+const REFUND_BATCH_SIZE = Number(process.env.AUTO_REFUND_BATCH_SIZE || 0);
 const RUN_ONCE = process.argv.includes("--once");
 
-if (!RPC_URL || !PRIVATE_KEY || !FACTORY_ADDRESS) {
+if (!PRIVATE_KEY) {
   console.error(
-    "Missing RPC_URL or INFURA_KEY, PRIVATE_KEY, and FACTORY_ADDRESS in .env."
+    "Missing PRIVATE_KEY or AUTO_FINALIZE_PRIVATE_KEY in .env or GitHub Actions secrets."
   );
   process.exit(1);
 }
@@ -29,8 +46,64 @@ web3.eth.defaultAccount = account.address;
 const factory = new web3.eth.Contract(factoryJson.abi, FACTORY_ADDRESS);
 const inFlight = new Set();
 const knownClosed = new Set();
+const refundBatchUnsupported = new Set();
 
 const isEnded = (endTime) => Number(endTime) * 1000 <= Date.now();
+const isAlreadyFinalizedError = (error) => {
+  const message = error?.message || String(error);
+  return message.includes("Auction already finalized") || message.includes("already finalized");
+};
+
+const isMissingRefundBatchSupport = (error, includePlainRevert = false) => {
+  const message = error?.message || String(error);
+  return (
+    message.includes("nextRefundIndex") ||
+    message.includes("processRefunds") ||
+    message.includes("Returned values aren't valid") ||
+    (includePlainRevert && message.includes("execution reverted"))
+  );
+};
+
+async function processRefundBatch(address, campaign) {
+  if (!REFUND_BATCH_SIZE) return null;
+  if (refundBatchUnsupported.has(address)) return null;
+
+  try {
+    let nextRefundIndex;
+    try {
+      nextRefundIndex = await campaign.methods.nextRefundIndex().call();
+    } catch (error) {
+      if (isMissingRefundBatchSupport(error, true)) {
+        refundBatchUnsupported.add(address);
+        return null;
+      }
+
+      throw error;
+    }
+
+    const refundAddresses = await campaign.methods.getAddresses().call();
+
+    if (Number(nextRefundIndex) >= refundAddresses.length) return null;
+
+    const gas = await campaign.methods
+      .processRefunds(REFUND_BATCH_SIZE)
+      .estimateGas({ from: account.address });
+    const receipt = await campaign.methods.processRefunds(REFUND_BATCH_SIZE).send({
+      from: account.address,
+      gas: Math.ceil(Number(gas) * 1.2),
+    });
+
+    return receipt.transactionHash;
+  } catch (error) {
+    if (isMissingRefundBatchSupport(error)) {
+      refundBatchUnsupported.add(address);
+      return null;
+    }
+
+    console.error(`Refund batch skipped for ${address}:`, error.message || error);
+    return null;
+  }
+}
 
 async function mapWithConcurrency(items, limit, mapper) {
   const results = new Array(items.length);
@@ -61,21 +134,22 @@ async function finalizeReadyAuctions() {
     async (address) => {
       if (inFlight.has(address)) return null;
 
-      const campaign = new web3.eth.Contract(campaignJson.abi, address);
-      const [summary, closed] = await Promise.all([
-        campaign.methods.getSummary().call(),
-        campaign.methods.getStatus().call(),
-      ]);
-
-      if (closed) {
-        knownClosed.add(address);
-        return null;
-      }
-
-      if (!isEnded(summary[9])) return null;
-
-      inFlight.add(address);
       try {
+        const campaign = new web3.eth.Contract(campaignJson.abi, address);
+        const [summary, closed] = await Promise.all([
+          campaign.methods.getSummary().call(),
+          campaign.methods.getStatus().call(),
+        ]);
+
+        if (closed) {
+          const refundHash = await processRefundBatch(address, campaign);
+          if (!refundHash) knownClosed.add(address);
+          return refundHash ? { address, refundHash } : null;
+        }
+
+        if (!isEnded(summary[9])) return null;
+
+        inFlight.add(address);
         const gas = await campaign.methods
           .finalizeAuctionIfNeeded()
           .estimateGas({ from: account.address });
@@ -83,11 +157,21 @@ async function finalizeReadyAuctions() {
           from: account.address,
           gas: Math.ceil(Number(gas) * 1.2),
         });
+        const refundHash = await processRefundBatch(address, campaign);
 
         return {
           address,
           hash: receipt.transactionHash,
+          refundHash,
         };
+      } catch (error) {
+        if (isAlreadyFinalizedError(error)) {
+          knownClosed.add(address);
+          return null;
+        }
+
+        console.error(`Finalize skipped for ${address}:`, error.message || error);
+        return null;
       } finally {
         inFlight.delete(address);
       }
@@ -95,7 +179,10 @@ async function finalizeReadyAuctions() {
   );
 
   results.filter(Boolean).forEach((result) => {
-    console.log(`Finalized ${result.address}: ${result.hash}`);
+    if (result.hash) console.log(`Finalized ${result.address}: ${result.hash}`);
+    if (result.refundHash) {
+      console.log(`Processed refund batch for ${result.address}: ${result.refundHash}`);
+    }
   });
 }
 

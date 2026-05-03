@@ -68,3 +68,30 @@ This section has moved here: [https://facebook.github.io/create-react-app/docs/d
 ### `npm run build` fails to minify
 
 This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+
+## Automatic seller payouts
+
+Seller payouts do not require the seller to confirm a MetaMask transaction. The contract exposes `finalizeAuctionIfNeeded()` as a public function, so a keeper wallet can pay gas and finalize ended auctions for everyone.
+
+The repo includes a scheduled GitHub Action in `.github/workflows/auto-finalize-auctions.yml`. Add this repository secret before enabling it:
+
+- `AUTO_FINALIZE_PRIVATE_KEY`: private key for a keeper wallet funded with Sepolia ETH for gas only.
+
+`FACTORY_ADDRESS` is read from `src/real_ethereum/factoryAddress.js`, so keep that file updated after deploy. `RPC_URL` is optional; if it is not set, the keeper uses a public Sepolia RPC fallback. You can still add `RPC_URL` or `INFURA_KEY` as GitHub secrets if the public RPC becomes rate-limited.
+
+The action runs every 5 minutes and can also be started manually from GitHub Actions. Locally, create `.env` with the same values and run:
+
+```sh
+yarn auto-finalize
+```
+
+For new deployments, `finalizeAuctionIfNeeded()` closes the auction and pays the seller first in one small transaction. Losing bidders can withdraw refunds themselves, and a keeper can process refunds in bounded batches later without blocking seller payment.
+
+After changing `Campaign.sol`, compile and redeploy the factory so new auctions use the updated payout logic:
+
+```sh
+node src/real_ethereum/compile.js
+node src/real_ethereum/deploy.js
+```
+
+`deploy.js` reads `DEPLOY_MNEMONIC` and `DEPLOY_RPC_URL` from `.env`, then writes the new factory address to `src/real_ethereum/factoryAddress.js`.
