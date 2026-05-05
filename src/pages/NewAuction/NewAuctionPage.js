@@ -1,4 +1,4 @@
-import React, { useCallback, useState, useEffect } from "react";
+import React, { useCallback, useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import Layout from "../../components/Layout";
 import factory from "../../real_ethereum/factory";
@@ -25,6 +25,7 @@ function NewAuctionPage() {
   });
   const [explanation, setExplanation] = useState(null);
   const [loading, setLoading] = useState(false);
+  const submittingRef = useRef(false);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -91,8 +92,10 @@ function NewAuctionPage() {
   const handleSubmit = useCallback(
     async (event) => {
       event.preventDefault();
+      if (submittingRef.current) return;
       if (!validateForm()) return;
 
+      submittingRef.current = true;
       setLoading(true);
       const toastId = toast.loading("⏳ Creating auction...");
 
@@ -111,11 +114,19 @@ function NewAuctionPage() {
         navigate("/auctions-list");
       } catch (err) {
         console.error("Auction creation failed:", err);
-        toast.error("Auction creation failed. Please try again.", {
-          id: toastId,
-        });
+        const message = JSON.stringify(err?.message || err || "");
+        const isUnderpriced = message.includes("replacement transaction underpriced");
+
+        toast.error(
+          isUnderpriced
+            ? "MetaMask already has a pending transaction. Wait for it, or cancel/speed it up in MetaMask Activity."
+            : "Auction creation failed. Please try again.",
+          { id: toastId }
+        );
+      } finally {
+        submittingRef.current = false;
+        setLoading(false);
       }
-      setLoading(false);
     },
     [formData, navigate, validateForm]
   );
@@ -142,6 +153,7 @@ function NewAuctionPage() {
       <div className={styles.direction}>
         <img className={styles.Image} src={picSrc} alt="Auction Preview" />
         <FormControl
+          component="form"
           style={{
             padding: "20px 0px 20px 220px",
             marginTop: "2rem",
@@ -206,7 +218,6 @@ function NewAuctionPage() {
               }}
               type="submit"
               variant="contained"
-              onClick={handleSubmit}
               disabled={loading}
             >
               {loading ? <CircularProgress size={20} /> : "Create Auction"}

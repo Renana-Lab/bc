@@ -8,6 +8,7 @@ const DEFAULT_RPC_URLS = [
   "https://sepolia.drpc.org",
   "https://1rpc.io/sepolia",
 ];
+const HTTP_TIMEOUT_MS = Number(process.env.REACT_APP_RPC_TIMEOUT_MS || 9000);
 
 const RPC_URLS = (
   process.env.REACT_APP_RPC_URLS ||
@@ -28,7 +29,12 @@ const isRateLimitError = (error) => {
 };
 
 const readOnlyWeb3s = RPC_URLS.map(
-  (url) => new Web3(new Web3.providers.HttpProvider(url))
+  (url) =>
+    new Web3(
+      new Web3.providers.HttpProvider(url, {
+        timeout: HTTP_TIMEOUT_MS,
+      })
+    )
 );
 
 let nextProviderIndex = 0;
@@ -63,6 +69,88 @@ export const readOnlyCall = async (createCall, retries = RPC_URLS.length + 1) =>
         factory: createFactory(web3Instance),
         campaign: (address) => createCampaign(web3Instance, address),
       }).call();
+    } catch (error) {
+      lastError = error;
+
+      if (!isRateLimitError(error) || attempt === retries - 1) {
+        throw error;
+      }
+
+      nextProviderIndex = (nextProviderIndex + 1) % readOnlyWeb3s.length;
+      await wait(RETRY_DELAY_MS * (attempt + 1));
+    }
+  }
+
+  throw lastError;
+};
+
+export const readOnlyBatchCall = async (
+  createCalls,
+  retries = RPC_URLS.length + 1
+) => {
+  let lastError;
+
+  for (let attempt = 0; attempt < retries; attempt += 1) {
+    const web3Instance = getWeb3(attempt);
+
+    try {
+      const calls = createCalls({
+        factory: createFactory(web3Instance),
+        campaign: (address) => createCampaign(web3Instance, address),
+      });
+
+      if (!calls.length) return [];
+
+      const results = await new Promise((resolve, reject) => {
+        const batch = new web3Instance.BatchRequest();
+        const responses = new Array(calls.length);
+        let remaining = calls.length;
+
+        calls.forEach((call, index) => {
+          const onResponse = (error, result) => {
+            responses[index] = error
+              ? { status: "rejected", reason: error }
+              : { status: "fulfilled", value: result };
+            remaining -= 1;
+
+            if (remaining === 0) {
+              resolve(responses);
+            }
+          };
+
+          if (typeof call?.call?.request === "function") {
+            batch.add(call.call.request({}, onResponse));
+            return;
+          }
+
+          if (typeof call?.request === "function") {
+            batch.add(call.request(onResponse));
+            return;
+          }
+
+          onResponse(new TypeError("Unsupported batch call object"));
+        });
+
+        try {
+          batch.execute();
+        } catch (error) {
+          reject(error);
+        }
+      });
+
+      const rateLimited = results.some(
+        (result) =>
+          result?.status === "rejected" && isRateLimitError(result.reason)
+      );
+
+      if (rateLimited && attempt < retries - 1) {
+        throw results.find(
+          (result) =>
+            result?.status === "rejected" && isRateLimitError(result.reason)
+        ).reason;
+      }
+
+      return results;
     } catch (error) {
       lastError = error;
 

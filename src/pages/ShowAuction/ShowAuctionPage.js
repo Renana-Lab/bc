@@ -1,5 +1,5 @@
 /* eslint-env es2020 */
-import { useReducer, useEffect, useMemo, useCallback, useState } from "react";
+import { useReducer, useEffect, useMemo, useCallback, useState, useRef } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import moment from "moment";
 import Layout from "../../components/Layout";
@@ -7,7 +7,8 @@ import Campaign from "../../real_ethereum/campaign";
 import ContributeForm from "../../components/ContributeForm";
 import Countdown from "react-countdown";
 import toast from "react-hot-toast";
-import web3 from "../../real_ethereum/web3.js";
+import { readOnlyCall } from "../../real_ethereum/readOnly";
+import { campaignSocket } from "../../real_ethereum/socketFactory";
 import {
   Box,
   Button,
@@ -49,6 +50,9 @@ const buttonStyle = {
   border: "1px solid #002884",
 };
 
+const ACTIVE_AUCTION_POLL_INTERVAL_MS = 15000;
+const ENDED_AUCTION_POLL_INTERVAL_MS = 45000;
+
 
 const initialState = {
   dialogOpen: false,
@@ -74,14 +78,19 @@ const initialState = {
 
 
 function transactionsToCSV(transactions) {
-  const REQUIRED_KEYS = ["bidder", "bid", "time"];
+  const CSV_COLUMNS = [
+    { key: "bidder", label: "Bidder Address" },
+    { key: "transactionAmount", label: "Transaction Amount (wei)" },
+    { key: "bid", label: "Cumulative Bid (wei)" },
+    { key: "time", label: "Bid Time" },
+  ];
+  const requiredKeys = CSV_COLUMNS.map(({ key }) => key);
 
   // Validation
   const isValid = transactions.every(
     (tx) =>
       typeof tx === "object" &&
-      REQUIRED_KEYS.every((key) => key in tx) &&
-      Object.keys(tx).length === REQUIRED_KEYS.length
+      requiredKeys.every((key) => key in tx)
   );
 
   if (!isValid) {
@@ -89,11 +98,11 @@ function transactionsToCSV(transactions) {
   }
 
   // Header
-  const header = REQUIRED_KEYS.join(",");
+  const header = CSV_COLUMNS.map(({ label }) => label).join(",");
 
   // Rows
   const rows = transactions.map((tx) =>
-    REQUIRED_KEYS.map((key) => `"${String(tx[key]).replace(/"/g, '""')}"`).join(",")
+    CSV_COLUMNS.map(({ key }) => `"${String(tx[key]).replace(/"/g, '""')}"`).join(",")
   );
 
   return [header, ...rows].join("\n");
@@ -140,6 +149,8 @@ const reducer = (state, action) => {
 function ShowAuctionPage() {
   const [finalizingPayment, setFinalizingPayment] = useState(false);
   const [state, dispatch] = useReducer(reducer, initialState);
+  const fetchInFlightRef = useRef(false);
+  const eventRefreshTimerRef = useRef(null);
   const { address } = useParams();
   const navigate = useNavigate();
   const { state: navState } = useLocation();
@@ -186,6 +197,9 @@ function ShowAuctionPage() {
 
   const fetchAuctionData = useCallback(async () => {
   if (!window.ethereum) return navigate("/");
+  if (fetchInFlightRef.current) return;
+
+  fetchInFlightRef.current = true;
 
   try {
     const accounts = await window.ethereum.request({ method: "eth_accounts" });
@@ -194,23 +208,68 @@ function ShowAuctionPage() {
 
     const account = accounts[0] || "";
 
-    const summary = await auctionInstance.methods.getSummary().call();
+    let summary;
+    let summaryIsLight = true;
+
+    try {
+      summary = await readOnlyCall(({ campaign }) =>
+        campaign(address).methods.getListSummary()
+      );
+    } catch (error) {
+      summaryIsLight = false;
+      summary = await readOnlyCall(({ campaign }) =>
+        campaign(address).methods.getSummary()
+      );
+    }
 
     const minimumContribution = summary[0];
     const approversCount = summary[2];
     const manager = summary[3];
     const highestBid = summary[4];
-    const dataForSell = summary[5];
-    const dataDescription = summary[6];
-    const highestBidder = summary[7];
-    const addresses = summary[8];
-    const endTime = summary[9];
+    let dataForSell = summaryIsLight ? "" : summary[5];
+    const dataDescription = summaryIsLight ? summary[5] : summary[6];
+    const highestBidder = summaryIsLight ? summary[6] : summary[7];
+    const addresses = summaryIsLight ? [] : summary[8];
+    const endTime = summaryIsLight ? summary[7] : summary[9];
+    const closedFromSummary = summaryIsLight ? Boolean(summary[8]) : null;
+    const auctionEnded = Number(endTime) * 1000 < Date.now();
+    const accountKey = account.toLowerCase();
+    const highestBidderKey = (highestBidder || "").toLowerCase();
+    const userIsHighestBidder =
+      Boolean(accountKey) && accountKey === highestBidderKey;
 
-    const [rawTransactions, userBid, closed] = await Promise.all([
-      auctionInstance.methods.getTransactions().call(),
-      account ? auctionInstance.methods.getBid(account).call() : Promise.resolve(0),
-      auctionInstance.methods.getStatus().call(),
+    const [rawTransactions, userStatus, fallbackUserBid, closed] = await Promise.all([
+      auctionEnded
+        ? readOnlyCall(({ campaign }) => campaign(address).methods.getTransactions())
+        : Promise.resolve([]),
+      summaryIsLight && account
+        ? readOnlyCall(({ campaign }) =>
+            campaign(address).methods.getUserAuctionStatus(account)
+          ).catch(() => null)
+        : Promise.resolve(null),
+      account
+        ? summaryIsLight
+          ? Promise.resolve(0)
+          : readOnlyCall(({ campaign }) => campaign(address).methods.getBid(account))
+        : Promise.resolve(0),
+      summaryIsLight
+        ? Promise.resolve(closedFromSummary)
+        : auctionEnded
+        ? readOnlyCall(({ campaign }) => campaign(address).methods.getStatus())
+        : Promise.resolve(false),
     ]);
+    const userBid = userStatus ? userStatus[1] : fallbackUserBid;
+    const userParticipated = userStatus
+      ? Boolean(userStatus[0])
+      : addresses.some((addr) => addr.toLowerCase() === accountKey);
+    const contributors = summaryIsLight && userParticipated ? [account] : addresses;
+
+    if (auctionEnded && userIsHighestBidder && !dataForSell) {
+      dataForSell = await auctionInstance.methods
+        .getData()
+        .call({ from: account })
+        .catch(() => "");
+    }
 
     // rawTransactions: [{ bidderAddress, value, time }, ...]   // time in SECONDS (string/number)
     const norm = rawTransactions.map((tx, idx) => ({         // 1) normalize each tx and remember its original index
@@ -239,37 +298,30 @@ function ShowAuctionPage() {
       cumIncl[tx.idx] = next;                                //    write the result at the ORIGINAL index position
     }
 
+    const highestBidValue = BigInt(highestBid || 0);
     const transactions = norm.map((tx, i) => ({              // 6) build your display-friendly array in original order
       bidder: tx.bidder,                                     //    original-cased address for display
+      transactionAmount: tx.value.toString(),                //    raw amount sent in this transaction, as Etherscan displays it
       bid: cumIncl[i].toString(),                            //    cumulative (≤ current time), BigInt → string for UI
       time: moment.unix(Number(tx.time)).format(             //    format seconds timestamp to "DD-MM-YYYY HH:mm:ss"
         "DD-MM-YYYY HH:mm:ss"
       ),
+      isHighestBid:
+        Boolean(highestBidderKey) &&
+        tx.key === highestBidderKey &&
+        cumIncl[i] === highestBidValue,
     }));
     transactions.reverse();
 
 
-    let refundsProcessed = false;
-
-    if (closed) {
-      const stillOwed = await Promise.all(
-        addresses
-          .filter((addr) => addr.toLowerCase() !== highestBidder.toLowerCase())
-          .map(async (addr) => {
-            const owed = await auctionInstance.methods.getBid(addr).call();
-            return Number(owed) > 0;
-          })
-      );
-      refundsProcessed = !stillOwed.includes(true);
-
-      if (refundsProcessed) {
-        const contractBalance = BigInt(await web3.eth.getBalance(auctionInstance.options.address));
-        const managerBalance = BigInt(await web3.eth.getBalance(manager));
-
-        if (contractBalance !== 0n) refundsProcessed = false;
-        if (managerBalance < BigInt(highestBid)) refundsProcessed = false;
-      }
-    }
+    const refundsProcessed =
+      userStatus
+        ? Boolean(userStatus[2])
+        : closed &&
+          Boolean(accountKey) &&
+          accountKey !== highestBidderKey &&
+          userParticipated &&
+          Number(userBid) === 0;
 
     dispatch({
       type: "SET_AUCTION_DATA",
@@ -285,14 +337,14 @@ function ShowAuctionPage() {
         endTime,
         highestBidder,
         transactions,
-        contributors: addresses,
+        contributors,
         refundsProcessed,
         userBid: Number(userBid),
         closed,
       },
     });
 
-    if (account) {
+    if (account && !auctionEnded) {
       const loadBudget = async () => {
     const budget = await getRemainingBudget(account.toLowerCase());
     setRemainingBudget(budget);
@@ -305,6 +357,8 @@ function ShowAuctionPage() {
     console.error(err);
     dispatch({ type: "SET_ERROR", payload: "Error fetching auction data" });
     toast.error("Error fetching auction data");
+  } finally {
+    fetchInFlightRef.current = false;
   }
 }, [address, navigate]);
 
@@ -342,27 +396,29 @@ const claimRefund = useCallback(async () => {
   }
 }, [state.auction, state.connectedAccount, fetchAuctionData]);
 
+const scheduleEventRefresh = useCallback(() => {
+  if (document.hidden) return;
+
+  window.clearTimeout(eventRefreshTimerRef.current);
+  eventRefreshTimerRef.current = window.setTimeout(() => {
+    fetchAuctionData();
+  }, 800);
+}, [fetchAuctionData]);
+
 
 
   const handleSuccessfulBid = useCallback(
     async (newBidAmount) => {
-      console.log("🚨 handleSuccessfulBid triggered", newBidAmount);
       const account = state.connectedAccount?.toLowerCase();
       if (!account || !address) {
          toast.error("Missing account or campaign address");
-         console.warn("❌ Missing account or address", account, address);
       }
       try {
-          const beforeBudget = await getRemainingBudget();
-          console.log("💸 remainingBudget BEFORE update =", beforeBudget);
-
-          const afterBudget = await getRemainingBudget();
-          console.log("💸 remainingBudget AFTER update =", afterBudget);
+          const afterBudget = await getRemainingBudget(account);
           setRemainingBudget(afterBudget);
 
           await fetchAuctionData();
       } catch (error) {
-        console.log(error.message);
         toast.error("Error updating bid info: " + error.message);
       }
     },
@@ -380,52 +436,52 @@ const claimRefund = useCallback(async () => {
     fetchAuctionData();
     let interval;
     if (isAuctionActive) {
-      interval = setInterval(fetchAuctionData, 2500);
+      interval = setInterval(() => {
+        if (!document.hidden) fetchAuctionData();
+      }, ACTIVE_AUCTION_POLL_INTERVAL_MS);
     } else if (!state.closed) {
-      interval = setInterval(fetchAuctionData, 10000);
+      interval = setInterval(() => {
+        if (!document.hidden) fetchAuctionData();
+      }, ENDED_AUCTION_POLL_INTERVAL_MS);
     }
     return () => interval && clearInterval(interval);
   }, [fetchAuctionData, isAuctionActive, state.closed]);
 
-useEffect(() => {
-  if (!state.auction) return;
+  useEffect(() => {
+    let bidEvent;
+    let refundEvent;
+    let sellerPaidEvent;
 
-  const auction = state.auction;
+    try {
+      const auctionEvents = campaignSocket(address);
+      bidEvent = auctionEvents.events.BidAdded();
+      refundEvent = auctionEvents.events.RefundProcessed();
+      sellerPaidEvent = auctionEvents.events.SellerPaid();
 
+      bidEvent.on("data", scheduleEventRefresh);
+      refundEvent.on("data", scheduleEventRefresh);
+      sellerPaidEvent.on("data", scheduleEventRefresh);
 
-  fetchAuctionData();  
+      bidEvent.on("error", (error) =>
+        console.warn("Bid event subscription failed:", error)
+      );
+      refundEvent.on("error", (error) =>
+        console.warn("Refund event subscription failed:", error)
+      );
+      sellerPaidEvent.on("error", (error) =>
+        console.warn("Seller payment event subscription failed:", error)
+      );
+    } catch (error) {
+      console.warn("Auction event subscriptions are unavailable:", error);
+    }
 
-  // 🟢 Handlers for the events
-  const handleRefundProcessed = (contributor, amount) => {
-    console.log(`Refund: ${contributor} got ${amount} wei`);
-    fetchAuctionData(); // טען מחדש את הדאטה
-  };
-
-  const handleSellerPaid = (seller, amount) => {
-    console.log(`Seller paid: ${seller} got ${amount} wei`);
-    fetchAuctionData(); // גם כאן רענון
-  };
-
-  // 🟡 Create subscriptions
-  const refundEvent = auction.events.RefundProcessed();
-  const sellerPaidEvent = auction.events.SellerPaid();
-
-  refundEvent.on("data", (event) =>
-    handleRefundProcessed(event.returnValues.contributor, event.returnValues.amount)
-  );
-
-  sellerPaidEvent.on("data", (event) =>
-    handleSellerPaid(event.returnValues.seller, event.returnValues.amount)
-  );
-
-  // 🔴 Cleanup on unmount!
-  return () => {
-    refundEvent.unsubscribe();    // ← חובה למנוע דליפות זיכרון
-    sellerPaidEvent.unsubscribe();
-  };
-}, [state.auction, fetchAuctionData]);
-
-
+    return () => {
+      window.clearTimeout(eventRefreshTimerRef.current);
+      bidEvent?.unsubscribe?.();
+      refundEvent?.unsubscribe?.();
+      sellerPaidEvent?.unsubscribe?.();
+    };
+  }, [address, scheduleEventRefresh]);
 
   const renderAuctionInfo = () => (
       <DialogActions>
@@ -659,6 +715,15 @@ useEffect(() => {
               <p className={showPageStyles.title}>Bidding History</p>
             </Box>
             <p className={showPageStyles.subTitle}>Auction # {address}</p>
+            <p className={showPageStyles.subTitle}>
+              Highest bid: {state.highestBid} wei
+            </p>
+            <p
+              className={showPageStyles.subTitle}
+              style={{ wordBreak: "break-all" }}
+            >
+              Highest bidder: {state.highestBidder || "None"}
+            </p>
             <div style={{ display: "flex", justifyContent: "center" }}>
               <Button
                 style={{ ...buttonStyle, width: "15rem" }}
@@ -672,7 +737,7 @@ useEffect(() => {
             <DialogContentText>
               {state.transactions.length ? (
                 <TableContainer component={Paper}>
-                  <Table sx={{ minWidth: 400 }} aria-label="bids">
+                  <Table sx={{ minWidth: 650 }} aria-label="bids">
                     <TableHead>
                       <TableRow>
                         <TableCell className={showPageStyles.headerCell}>
@@ -682,7 +747,19 @@ useEffect(() => {
                           className={showPageStyles.headerCell}
                           align="center"
                         >
-                          Bid Amount
+                          Tx Amount
+                        </TableCell>
+                        <TableCell
+                          className={showPageStyles.headerCell}
+                          align="center"
+                        >
+                          Cumulative Bid
+                        </TableCell>
+                        <TableCell
+                          className={showPageStyles.headerCell}
+                          align="center"
+                        >
+                          Contract Status
                         </TableCell>
                         <TableCell
                           className={showPageStyles.headerCell}
@@ -694,9 +771,22 @@ useEffect(() => {
                     </TableHead>
                     <TableBody>
                       {state.transactions.map((row, index) => (
-                        <TableRow key={index}>
+                        <TableRow
+                          key={index}
+                          sx={
+                            row.isHighestBid
+                              ? { backgroundColor: "#E8F5E9" }
+                              : undefined
+                          }
+                        >
                           <TableCell align="center">{row.bidder}</TableCell>
+                          <TableCell align="center">
+                            {row.transactionAmount}
+                          </TableCell>
                           <TableCell align="center">{row.bid}</TableCell>
+                          <TableCell align="center">
+                            {row.isHighestBid ? "Highest bid" : ""}
+                          </TableCell>
                           <TableCell align="center">{row.time}</TableCell>
                         </TableRow>
                       ))}

@@ -1,4 +1,4 @@
-import React, { createContext, useState, useContext, useEffect } from 'react';
+import React, { createContext, useCallback, useState, useContext, useEffect } from 'react';
 
 // Create the context
 const MetaMaskContext = createContext();
@@ -20,17 +20,16 @@ export const MetaMaskProvider = ({ children }) => {
   }, []);
 
   // Check MetaMask connection status and update localStorage
-  const checkIfConnected = async () => {
+  const checkIfConnected = useCallback(async () => {
 
     try {
       const accounts = await window.ethereum.request({ method: "eth_accounts" });
-      console.log("Connected Accounts:", accounts);
       const isNotConnected = accounts.length === 0;
       localStorage.setItem('notConnected', isNotConnected);
     } catch (error) {
       console.error("Error checking MetaMask connection:", error);
     }
-  };
+  }, []);
 
   return (
     <MetaMaskContext.Provider value={{ isMetaMaskInstalled, checkIfConnected }}>

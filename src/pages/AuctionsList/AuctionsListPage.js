@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   Table,
   TableBody,
@@ -9,18 +9,30 @@ import {
   Button,
   Paper,
   CircularProgress,
+  TextField,
+  InputAdornment,
+  IconButton,
 } from "@mui/material";
+import SearchIcon from "@mui/icons-material/Search";
+import CloseIcon from "@mui/icons-material/Close";
 import { useNavigate, useLocation } from "react-router-dom";
 import Countdown from "react-countdown";
-import { readOnlyCall } from "../../real_ethereum/readOnly";
+import { readOnlyBatchCall, readOnlyCall } from "../../real_ethereum/readOnly";
+import { campaignSocket, factorySocket } from "../../real_ethereum/socketFactory";
 import Layout from "../../components/Layout";
 import styles from "./auctions.module.scss";
 import picSrc from "./Illustration_Start.png";
 
 const AUCTIONS_PAGE_SIZE = 20;
-const FETCH_CONCURRENCY = 2;
+const FETCH_CONCURRENCY = 5;
 const POLL_INTERVAL_MS = 30000;
-const CACHE_TTL_MS = 10000;
+const CACHE_TTL_MS = 15000;
+const DEPLOYED_CAMPAIGNS_TTL_MS = 60000;
+const USER_STATUS_TTL_MS = 15000;
+const AUCTIONS_API_URL = (process.env.REACT_APP_AUCTION_API_URL || "").replace(
+  /\/$/,
+  ""
+);
 
 let auctionListCache = {
   data: [],
@@ -28,11 +40,103 @@ let auctionListCache = {
   visibleCount: 0,
   updatedAt: 0,
 };
+let deployedCampaignsCache = {
+  data: [],
+  updatedAt: 0,
+};
 let auctionListInFlight = null;
 const budgetCache = new Map();
 const budgetInFlight = new Map();
+const userAuctionStatusCache = new Map();
+let userAuctionStatusInFlight = null;
 
-export const userAddress = window.ethereum?.selectedAddress?.toLowerCase();
+const normalizeSearchText = (value) =>
+  String(value ?? "")
+    .toLowerCase()
+    .replace(/\bwei\b/g, " ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+
+const normalizeAddressText = (value) =>
+  String(value ?? "")
+    .toLowerCase()
+    .replace(/[^a-f0-9x]+/g, "");
+
+const getSearchKind = (rawQuery) => {
+  const query = rawQuery.trim().toLowerCase();
+  const withoutWei = query.replace(/\bwei\b/g, "").trim();
+
+  if (/^\d+$/.test(withoutWei)) {
+    return { kind: "number", value: withoutWei };
+  }
+
+  if (
+    query.startsWith("0x") ||
+    /^[a-f0-9]{6,}$/i.test(query.replace(/\s+/g, ""))
+  ) {
+    return { kind: "address", value: normalizeAddressText(query) };
+  }
+
+  const normalized = normalizeSearchText(query);
+  return {
+    kind: "text",
+    value: normalized,
+    tokens: normalized.split(/\s+/).filter(Boolean),
+  };
+};
+
+const normalizeAuction = (auction) => ({
+  ...auction,
+  endTime: Number(auction.endTime),
+  listOrder: Number(auction.listOrder ?? 0),
+  addresses: auction.addresses || [],
+  isRefunded: Boolean(auction.isRefunded),
+  closed: Boolean(auction.closed),
+});
+
+const sortNewestFirst = (auctions) =>
+  [...auctions].sort((a, b) => {
+    if (b.listOrder !== a.listOrder) return b.listOrder - a.listOrder;
+    return String(b.address).localeCompare(String(a.address));
+  });
+
+const cacheAuctionList = ({ data, total, visibleCount, updatedAt }) => {
+  const orderedData = sortNewestFirst(data || []);
+
+  auctionListCache = {
+    data: orderedData,
+    total: Number(total ?? orderedData.length),
+    visibleCount: Number(visibleCount ?? orderedData.length),
+    updatedAt: updatedAt || Date.now(),
+  };
+
+  return auctionListCache;
+};
+
+const invalidateAuctionCaches = () => {
+  auctionListCache.updatedAt = 0;
+  deployedCampaignsCache.updatedAt = 0;
+};
+
+const getDeployedCampaigns = async () => {
+  if (
+    deployedCampaignsCache.data.length &&
+    Date.now() - deployedCampaignsCache.updatedAt < DEPLOYED_CAMPAIGNS_TTL_MS
+  ) {
+    return deployedCampaignsCache.data;
+  }
+
+  const data = await readOnlyCall(({ factory }) =>
+    factory.methods.getDeployedCampaigns()
+  );
+
+  deployedCampaignsCache = {
+    data,
+    updatedAt: Date.now(),
+  };
+
+  return data;
+};
 
 export const getRemainingBudget = async (userAddress) => {
   if (!window.ethereum) return null;
@@ -91,8 +195,10 @@ const getCachedAuctions = (visibleAuctionCount) => {
     auctionListCache.data.length &&
     auctionListCache.visibleCount >= visibleAuctionCount
   ) {
+    const orderedData = sortNewestFirst(auctionListCache.data);
+
     return {
-      data: auctionListCache.data.slice(-visibleAuctionCount),
+      data: orderedData.slice(0, visibleAuctionCount),
       total: auctionListCache.total,
       fresh: Date.now() - auctionListCache.updatedAt < CACHE_TTL_MS,
     };
@@ -101,80 +207,320 @@ const getCachedAuctions = (visibleAuctionCount) => {
   return null;
 };
 
-const readAuctionsFromChain = async (visibleAuctionCount, currentUserAddress) => {
-  const auctions = await readOnlyCall(({ factory }) =>
-    factory.methods.getDeployedCampaigns()
+const readAuctionsFromApi = async (visibleAuctionCount, currentUserAddress) => {
+  if (!AUCTIONS_API_URL) return null;
+
+  const params = new URLSearchParams({ limit: String(visibleAuctionCount) });
+  if (currentUserAddress) params.set("user", currentUserAddress);
+
+  const response = await fetch(`${AUCTIONS_API_URL}/auctions?${params}`);
+  if (!response.ok) {
+    throw new Error(`Auction API failed with status ${response.status}`);
+  }
+
+  const payload = await response.json();
+  const auctions = payload.data || payload.auctions || [];
+  const total = Number(payload.total ?? payload.count ?? auctions.length);
+  const firstVisibleIndex = Math.max(0, total - auctions.length);
+  const data = auctions.map((auction, index) =>
+    normalizeAuction({
+      ...auction,
+      listOrder: auction.listOrder ?? firstVisibleIndex + index,
+    })
   );
-  const visibleAuctions = auctions.slice(-visibleAuctionCount);
 
-  const auctionData = await mapWithConcurrency(
-    visibleAuctions,
-    FETCH_CONCURRENCY,
-    async (address) => {
+  return cacheAuctionList({
+    data,
+    total,
+    visibleCount: visibleAuctionCount,
+    updatedAt: Date.now(),
+  });
+};
+
+const readAuctionFromChain = async (address, currentUserAddress, listOrder = 0) => {
+  try {
+    const details = await readOnlyCall(({ campaign }) =>
+      campaign(address).methods.getListSummary()
+    );
+
+    let isRefunded = false;
+    let addresses = [];
+
+    if (currentUserAddress) {
       try {
-        const details = await readOnlyCall(({ campaign }) =>
-          campaign(address).methods.getSummary()
+        const userStatus = await readOnlyCall(({ campaign }) =>
+          campaign(address).methods.getUserAuctionStatus(currentUserAddress)
         );
-        const addresses = details[8];
-        const auctionEnded = Number(details[9]) * 1000 < Date.now();
-        const closed = auctionEnded
-          ? await readOnlyCall(({ campaign }) =>
-              campaign(address).methods.getStatus()
-            )
-          : false;
-
-        let isRefunded = false;
-        const isHighestBidder =
-          currentUserAddress &&
-          details[7].toLowerCase() === currentUserAddress;
-        const isManager =
-          currentUserAddress &&
-          details[3].toLowerCase() === currentUserAddress;
-        const userInAuction =
-          currentUserAddress &&
-          addresses.some(
-            (address) => address.toLowerCase() === currentUserAddress
-          );
-
-        if (userInAuction && auctionEnded && !isHighestBidder && !isManager) {
-          const balance = await readOnlyCall(({ campaign }) =>
-            campaign(address).methods.getBid(currentUserAddress)
-          );
-          isRefunded = Number(balance) === 0;
-        }
-
-        return {
-          address,
-          minimumContribution: details[0],
-          balance: details[1],
-          approversCount: details[2],
-          manager: details[3],
-          highestBid: details[4],
-          dataForSell: details[5],
-          dataDescription: details[6],
-          highestBidder: details[7],
-          addresses,
-          endTime: Number(details[9]) * 1000,
-          isRefunded,
-          closed,
-        };
+        const userParticipated = Boolean(userStatus[0]);
+        isRefunded = Boolean(userStatus[2]);
+        addresses = userParticipated ? [currentUserAddress] : [];
       } catch (error) {
-        console.warn("Skipping auction after RPC read failed:", address, error);
-        return null;
+        console.warn("User auction status read failed:", address, error);
       }
     }
+
+    return normalizeAuction({
+      address,
+      listOrder,
+      minimumContribution: details[0],
+      balance: details[1],
+      approversCount: details[2],
+      manager: details[3],
+      highestBid: details[4],
+      dataForSell: "",
+      dataDescription: details[5],
+      highestBidder: details[6],
+      addresses,
+      endTime: Number(details[7]) * 1000,
+      isRefunded,
+      closed: details[8],
+    });
+  } catch (error) {
+    const details = await readOnlyCall(({ campaign }) =>
+      campaign(address).methods.getSummary()
+    );
+    const addresses = details[8];
+    const auctionEnded = Number(details[9]) * 1000 < Date.now();
+    const closed = auctionEnded
+      ? await readOnlyCall(({ campaign }) => campaign(address).methods.getStatus())
+      : false;
+
+    let isRefunded = false;
+    const isHighestBidder =
+      currentUserAddress && details[7].toLowerCase() === currentUserAddress;
+    const isManager =
+      currentUserAddress && details[3].toLowerCase() === currentUserAddress;
+    const userInAuction =
+      currentUserAddress &&
+      addresses.some((address) => address.toLowerCase() === currentUserAddress);
+
+    if (userInAuction && auctionEnded && !isHighestBidder && !isManager) {
+      const balance = await readOnlyCall(({ campaign }) =>
+        campaign(address).methods.getBid(currentUserAddress)
+      );
+      isRefunded = Number(balance) === 0;
+    }
+
+    return normalizeAuction({
+      address,
+      listOrder,
+      minimumContribution: details[0],
+      balance: details[1],
+      approversCount: details[2],
+      manager: details[3],
+      highestBid: details[4],
+      dataForSell: details[5],
+      dataDescription: details[6],
+      highestBidder: details[7],
+      addresses,
+      endTime: Number(details[9]) * 1000,
+      isRefunded,
+      closed,
+    });
+  }
+};
+
+const readLightAuctionsFromChain = async (
+  visibleAuctions,
+  firstVisibleIndex
+) => {
+  const summaryResults = await readOnlyBatchCall(({ campaign }) =>
+    visibleAuctions.map((address) => campaign(address).methods.getListSummary())
   );
 
-  const data = auctionData.filter(Boolean);
+  return summaryResults.map((result, index) => {
+    if (result.status !== "fulfilled") return null;
 
-  auctionListCache = {
-    data,
+    const address = visibleAuctions[index];
+    const details = result.value;
+
+    return normalizeAuction({
+      address,
+      listOrder: firstVisibleIndex + index,
+      minimumContribution: details[0],
+      balance: details[1],
+      approversCount: details[2],
+      manager: details[3],
+      highestBid: details[4],
+      dataForSell: "",
+      dataDescription: details[5],
+      highestBidder: details[6],
+      addresses: [],
+      endTime: Number(details[7]) * 1000,
+      isRefunded: false,
+      closed: details[8],
+    });
+  });
+};
+
+const readAuctionsFromChain = async (visibleAuctionCount) => {
+  const auctions = await getDeployedCampaigns();
+  const firstVisibleIndex = Math.max(0, auctions.length - visibleAuctionCount);
+  const visibleAuctions = auctions.slice(firstVisibleIndex);
+
+  let auctionData;
+
+  try {
+    auctionData = await readLightAuctionsFromChain(
+      visibleAuctions,
+      firstVisibleIndex
+    );
+
+    const missingIndexes = auctionData
+      .map((auction, index) => (auction ? null : index))
+      .filter((index) => index !== null);
+
+    if (missingIndexes.length) {
+      const fallbackAuctions = await mapWithConcurrency(
+        missingIndexes,
+        FETCH_CONCURRENCY,
+        async (index) => {
+          const address = visibleAuctions[index];
+
+          try {
+            return {
+              index,
+              auction: await readAuctionFromChain(
+                address,
+                "",
+                firstVisibleIndex + index
+              ),
+            };
+          } catch (error) {
+            console.warn("Skipping auction after RPC read failed:", address, error);
+            return { index, auction: null };
+          }
+        }
+      );
+
+      fallbackAuctions.forEach(({ index, auction }) => {
+        auctionData[index] = auction;
+      });
+    }
+  } catch (error) {
+    console.warn("Batched auction read failed, falling back:", error);
+    auctionData = await mapWithConcurrency(
+      visibleAuctions,
+      FETCH_CONCURRENCY,
+      async (address, index) => {
+        try {
+          return await readAuctionFromChain(
+            address,
+            "",
+            firstVisibleIndex + index
+          );
+        } catch (readError) {
+          console.warn("Skipping auction after RPC read failed:", address, readError);
+          return null;
+        }
+      }
+    );
+  }
+
+  return cacheAuctionList({
+    data: auctionData.filter(Boolean),
     total: auctions.length,
     visibleCount: visibleAuctionCount,
     updatedAt: Date.now(),
-  };
+  });
+};
 
-  return auctionListCache;
+const getUserStatusCacheKey = (auctionAddress, userAddress) =>
+  `${userAddress.toLowerCase()}:${auctionAddress.toLowerCase()}`;
+
+const applyUserStatusesToAuctions = (auctions, statuses, userAddress) => {
+  let changed = false;
+  const normalizedUserAddress = userAddress.toLowerCase();
+
+  const nextAuctions = auctions.map((auction) => {
+    const status = statuses.get(auction.address.toLowerCase());
+    if (!status) return auction;
+
+    const nextAddresses = status.participated ? [normalizedUserAddress] : [];
+
+    if (
+      auction.isRefunded === status.isRefunded &&
+      auction.addresses.length === nextAddresses.length &&
+      auction.addresses[0]?.toLowerCase() === nextAddresses[0]
+    ) {
+      return auction;
+    }
+
+    changed = true;
+    return {
+      ...auction,
+      addresses: nextAddresses,
+      isRefunded: status.isRefunded,
+    };
+  });
+
+  return { changed, auctions: changed ? nextAuctions : auctions };
+};
+
+const readUserStatusesForAuctions = async (auctions, userAddress) => {
+  if (!userAddress || !auctions.length) return new Map();
+
+  const userKey = userAddress.toLowerCase();
+  const now = Date.now();
+  const statuses = new Map();
+  const misses = [];
+
+  auctions.forEach((auction) => {
+    const addressKey = auction.address.toLowerCase();
+    const cacheKey = getUserStatusCacheKey(addressKey, userKey);
+    const cached = userAuctionStatusCache.get(cacheKey);
+
+    if (cached && now - cached.updatedAt < USER_STATUS_TTL_MS) {
+      statuses.set(addressKey, cached.value);
+      return;
+    }
+
+    misses.push(auction);
+  });
+
+  if (!misses.length) return statuses;
+
+  if (userAuctionStatusInFlight) {
+    await userAuctionStatusInFlight.catch(() => {});
+    return readUserStatusesForAuctions(auctions, userAddress);
+  }
+
+  userAuctionStatusInFlight = readOnlyBatchCall(({ campaign }) =>
+    misses.map((auction) =>
+      campaign(auction.address).methods.getUserAuctionStatus(userAddress)
+    )
+  ).finally(() => {
+    userAuctionStatusInFlight = null;
+  });
+
+  const results = await userAuctionStatusInFlight;
+
+  results.forEach((result, index) => {
+    if (result.status !== "fulfilled") return;
+
+    const auction = misses[index];
+    const addressKey = auction.address.toLowerCase();
+    const participated = Boolean(result.value[0]);
+    const bid = Number(result.value[1] || 0);
+    const isHighestBidder = Boolean(result.value[4]);
+    const auctionClosed =
+      Boolean(auction.closed) || Number(auction.endTime) <= Date.now();
+    const isRefunded =
+      Boolean(result.value[2]) ||
+      (auctionClosed && participated && !isHighestBidder && bid === 0);
+    const value = {
+      participated,
+      isRefunded,
+    };
+
+    userAuctionStatusCache.set(getUserStatusCacheKey(addressKey, userKey), {
+      value,
+      updatedAt: Date.now(),
+    });
+    statuses.set(addressKey, value);
+  });
+
+  return statuses;
 };
 
 function AuctionsListPage() {
@@ -182,17 +528,29 @@ function AuctionsListPage() {
   const { state: navState } = useLocation();
   const [auctionsList, setAuctionsList] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [now, setNow] = useState(Date.now());
+  const [connectedAccount, setConnectedAccount] = useState(
+    window.ethereum?.selectedAddress?.toLowerCase() || ""
+  );
   const [visibleAuctionCount, setVisibleAuctionCount] =
     useState(AUCTIONS_PAGE_SIZE);
   const [totalAuctionCount, setTotalAuctionCount] = useState(0);
   const fetchAuctionsListRef = useRef(null);
   const isFetchingRef = useRef(false);
+  const pendingFetchRef = useRef(false);
   const requestIdRef = useRef(0);
+  const visibleAuctionCountRef = useRef(AUCTIONS_PAGE_SIZE);
+  const normalAuctionOrderRef = useRef([]);
   const didMountVisibleCountRef = useRef(false);
+  const eventRefreshTimerRef = useRef(null);
 
   const [remainingBudget, setRemainingBudget] = useState(
     navState?.remainingBudget || Infinity
   );
+  const currentUserAddress = connectedAccount;
+  const searchIsActive = Boolean(searchQuery.trim());
 
   const loadRemainingBudget = useCallback(async (account) => {
     try {
@@ -208,17 +566,71 @@ function AuctionsListPage() {
     }
   }, []);
 
+  const keepNormalAuctionOrder = useCallback((nextAuctions, limit) => {
+    const incomingAuctions = sortNewestFirst(nextAuctions || []);
+    const incomingByAddress = new Map(
+      incomingAuctions.map((auction) => [auction.address.toLowerCase(), auction])
+    );
+    const incomingAddresses = incomingAuctions.map((auction) =>
+      auction.address.toLowerCase()
+    );
+
+    if (!normalAuctionOrderRef.current.length) {
+      normalAuctionOrderRef.current = incomingAddresses.slice(0, limit);
+      return normalAuctionOrderRef.current
+        .map((address) => incomingByAddress.get(address))
+        .filter(Boolean);
+    }
+
+    const existingOrder = normalAuctionOrderRef.current.filter((address) =>
+      incomingByAddress.has(address)
+    );
+    const existingSet = new Set(existingOrder);
+    const highestKnownListOrder = existingOrder.reduce((highest, address) => {
+      const auction = incomingByAddress.get(address);
+      return Math.max(highest, Number(auction?.listOrder ?? -1));
+    }, -1);
+
+    const newAddresses = incomingAddresses.filter(
+      (address) => !existingSet.has(address)
+    );
+    const newerAddresses = newAddresses.filter((address) => {
+      const auction = incomingByAddress.get(address);
+      return Number(auction?.listOrder ?? -1) > highestKnownListOrder;
+    });
+    const olderAddresses = newAddresses.filter(
+      (address) => !newerAddresses.includes(address)
+    );
+
+    normalAuctionOrderRef.current = [
+      ...newerAddresses,
+      ...existingOrder,
+      ...olderAddresses,
+    ].slice(0, limit);
+
+    return normalAuctionOrderRef.current
+      .map((address) => incomingByAddress.get(address))
+      .filter(Boolean);
+  }, []);
+
   const fetchAuctionsList = useCallback(async () => {
+    const visibleCountForRequest = visibleAuctionCount;
     const cached = getCachedAuctions(visibleAuctionCount);
 
     if (cached?.fresh) {
-      setAuctionsList(cached.data);
+      setAuctionsList(
+        keepNormalAuctionOrder(cached.data, visibleCountForRequest)
+      );
       setTotalAuctionCount(cached.total);
       setLoading(false);
+      setLoadingMore(false);
       return;
     }
 
-    if (isFetchingRef.current) return;
+    if (isFetchingRef.current) {
+      pendingFetchRef.current = true;
+      return;
+    }
 
     isFetchingRef.current = true;
     const requestId = requestIdRef.current + 1;
@@ -226,35 +638,89 @@ function AuctionsListPage() {
 
     try {
       const currentUserAddress = window.ethereum?.selectedAddress?.toLowerCase();
-      auctionListInFlight =
-        auctionListInFlight ||
-        readAuctionsFromChain(visibleAuctionCount, currentUserAddress).finally(
-          () => {
+      const requestKey = [
+        AUCTIONS_API_URL || "chain",
+        visibleCountForRequest,
+        AUCTIONS_API_URL ? currentUserAddress || "" : "market",
+      ].join(":");
+
+      if (!auctionListInFlight || auctionListInFlight.key !== requestKey) {
+        const promise = (async () => {
+          if (AUCTIONS_API_URL) {
+            try {
+              return await readAuctionsFromApi(
+                visibleCountForRequest,
+                currentUserAddress
+              );
+            } catch (apiError) {
+              console.warn("Auction API unavailable, falling back to chain:", apiError);
+            }
+          }
+
+          return readAuctionsFromChain(visibleCountForRequest);
+        })().finally(() => {
+          if (auctionListInFlight?.key === requestKey) {
             auctionListInFlight = null;
           }
-        );
-      const { data, total } = await auctionListInFlight;
+        });
 
-      if (requestId === requestIdRef.current) {
-        setAuctionsList(data.slice(-visibleAuctionCount));
+        auctionListInFlight = { key: requestKey, promise };
+      }
+
+      const { data, total } = await auctionListInFlight.promise;
+
+      if (
+        requestId === requestIdRef.current &&
+        visibleCountForRequest === visibleAuctionCountRef.current
+      ) {
+        setAuctionsList(keepNormalAuctionOrder(data, visibleCountForRequest));
         setTotalAuctionCount(total);
       }
     } catch (error) {
       const stale = getCachedAuctions(visibleAuctionCount);
       if (stale) {
-        setAuctionsList(stale.data);
+        setAuctionsList(
+          keepNormalAuctionOrder(stale.data, visibleCountForRequest)
+        );
         setTotalAuctionCount(stale.total);
       }
       console.error("Error fetching auctions:", error);
     } finally {
       setLoading(false);
+      setLoadingMore(false);
       isFetchingRef.current = false;
+      if (pendingFetchRef.current) {
+        pendingFetchRef.current = false;
+        window.setTimeout(() => fetchAuctionsListRef.current?.(), 0);
+      }
     }
-  }, [visibleAuctionCount]);
+  }, [keepNormalAuctionOrder, visibleAuctionCount]);
 
   useEffect(() => {
     fetchAuctionsListRef.current = fetchAuctionsList;
   }, [fetchAuctionsList]);
+
+  useEffect(() => {
+    visibleAuctionCountRef.current = visibleAuctionCount;
+  }, [visibleAuctionCount]);
+
+  const scheduleEventRefresh = useCallback(() => {
+    if (document.hidden) return;
+
+    window.clearTimeout(eventRefreshTimerRef.current);
+    eventRefreshTimerRef.current = window.setTimeout(() => {
+      invalidateAuctionCaches();
+      fetchAuctionsListRef.current?.();
+    }, 800);
+  }, []);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      if (!document.hidden) setNow(Date.now());
+    }, 30000);
+
+    return () => window.clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     if (!didMountVisibleCountRef.current) {
@@ -276,16 +742,18 @@ function AuctionsListPage() {
         accounts?.[0]?.toLowerCase() ||
         window.ethereum?.selectedAddress?.toLowerCase() ||
         null;
+      setConnectedAccount(nextAccount || "");
       if (nextAccount) {
         loadRemainingBudget(nextAccount);
       }
-      fetchAuctionsListRef.current?.();
     };
 
     window.ethereum
       .request({ method: "eth_accounts" })
       .then(setAccount)
       .catch((error) => console.error("Error reading accounts:", error));
+
+    fetchAuctionsListRef.current?.();
 
     const interval = setInterval(() => {
       if (document.hidden) return;
@@ -300,38 +768,133 @@ function AuctionsListPage() {
     };
   }, [navigate, loadRemainingBudget]);
 
+  useEffect(() => {
+    if (!currentUserAddress || !auctionsList.length) return undefined;
+
+    let cancelled = false;
+    const visibleAuctions = auctionsList.slice(0, visibleAuctionCount);
+
+    readUserStatusesForAuctions(visibleAuctions, currentUserAddress)
+      .then((statuses) => {
+        if (cancelled || !statuses.size) return;
+
+        setAuctionsList((currentAuctions) => {
+          const result = applyUserStatusesToAuctions(
+            currentAuctions,
+            statuses,
+            currentUserAddress
+          );
+
+          if (result.changed && auctionListCache.data.length) {
+            auctionListCache = {
+              ...auctionListCache,
+              data: applyUserStatusesToAuctions(
+                auctionListCache.data,
+                statuses,
+                currentUserAddress
+              ).auctions,
+            };
+          }
+
+          return result.auctions;
+        });
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          console.warn("User auction status batch failed:", error);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [auctionsList, currentUserAddress, visibleAuctionCount]);
+
+  useEffect(() => {
+    if (AUCTIONS_API_URL) return undefined;
+
+    let createdEvent;
+
+    try {
+      createdEvent = factorySocket.events.AuctionCreated();
+      createdEvent.on("data", scheduleEventRefresh);
+      createdEvent.on("error", (error) =>
+        console.warn("AuctionCreated subscription failed:", error)
+      );
+    } catch (error) {
+      console.warn("Factory event subscriptions are unavailable:", error);
+    }
+
+    return () => {
+      window.clearTimeout(eventRefreshTimerRef.current);
+      createdEvent?.unsubscribe?.();
+    };
+  }, [scheduleEventRefresh]);
+
+  const bidSubscriptionKey = useMemo(
+    () =>
+      auctionsList
+        .slice(0, AUCTIONS_PAGE_SIZE)
+        .filter((auction) => Number(auction.endTime) > now)
+        .map((auction) => auction.address)
+        .join("|"),
+    [auctionsList, now]
+  );
+
+  useEffect(() => {
+    if (AUCTIONS_API_URL) return undefined;
+
+    const bidEvents = [];
+    const bidSubscriptionAddresses = bidSubscriptionKey
+      ? bidSubscriptionKey.split("|")
+      : [];
+
+    try {
+      bidSubscriptionAddresses.forEach((address) => {
+        const bidEvent = campaignSocket(address).events.BidAdded();
+        bidEvent.on("data", scheduleEventRefresh);
+        bidEvent.on("error", (error) =>
+          console.warn("Bid subscription failed:", address, error)
+        );
+        bidEvents.push(bidEvent);
+      });
+    } catch (error) {
+      console.warn("Visible auction event subscriptions are unavailable:", error);
+    }
+
+    return () => {
+      bidEvents.forEach((event) => event.unsubscribe?.());
+    };
+  }, [bidSubscriptionKey, scheduleEventRefresh]);
+
   const getTimeLeft = (endTime) => {
-    return Number(endTime) < Date.now() ? (
-      <div>Closed</div>
-    ) : (
-      <Countdown date={endTime} />
-    );
+    const millisecondsLeft = Number(endTime) - now;
+    if (millisecondsLeft <= 0) return "Closed";
+
+    return <Countdown date={Number(endTime)} />;
   };
 
   const isAuctionOpen = (endTime) => {
-    return Number(endTime) > Date.now();
+    return Number(endTime) > now;
   };
 
   const isHighestBidder = (auction, currentUserAddress) => {
     return auction.highestBidder?.toLowerCase() === currentUserAddress;
   };
 
-  const hasUserWonAuction = (auction) => {
-    const currentUserAddress = window.ethereum?.selectedAddress?.toLowerCase();
-    const auctionEnded = Number(auction.endTime) < Date.now();
+  const hasUserWonAuction = (auction, currentUserAddress) => {
+    const auctionEnded = Number(auction.endTime) < now;
     const userIsHighestBidder = isHighestBidder(auction, currentUserAddress);
     return auctionEnded && userIsHighestBidder;
   };
 
-  const isUserInAuction = (auction) => {
-    const currentUserAddress = window.ethereum?.selectedAddress?.toLowerCase();
+  const isUserInAuction = (auction, currentUserAddress) => {
     return !!auction?.addresses?.some(
       (address) => address.toLowerCase() === currentUserAddress
     );
   };
 
-  const isUserManager = (auction) => {
-    const currentUserAddress = window.ethereum?.selectedAddress?.toLowerCase();
+  const isUserManager = (auction, currentUserAddress) => {
     return currentUserAddress === auction.manager.toLowerCase();
   };
 
@@ -360,9 +923,9 @@ function AuctionsListPage() {
     color:
       isHighestBidder(auction, currentAddress) && isAuctionOpen(auction.endTime)
         ? "#11a811ff"
-        : isUserInAuction(auction) &&
+        : isUserInAuction(auction, currentAddress) &&
             isAuctionOpen(auction.endTime) &&
-            !isUserManager(auction)
+            !isUserManager(auction, currentAddress)
           ? "#da0c0cff"
           : isOpen
             ? "#D07030D0"
@@ -370,7 +933,7 @@ function AuctionsListPage() {
   });
 
   const getRefundStatus = (auction, userParticipated, userWon, auctionOpen) => {
-    const isManager = isUserManager(auction);
+    const isManager = isUserManager(auction, currentUserAddress);
 
     if (userParticipated && !userWon && !auctionOpen) {
       return auction.isRefunded ? "Refunded" : "Awaiting Refund";
@@ -386,6 +949,82 @@ function AuctionsListPage() {
     }
 
     return "";
+  };
+
+  const auctionSearchRows = useMemo(
+    () =>
+      auctionsList.map((auction) => {
+      const textFields = [
+        auction.dataDescription,
+        auction.dataForSell,
+        Number(auction.endTime) > now ? "open active" : "closed ended",
+      ];
+      const addressFields = [
+        auction.address,
+        auction.manager,
+        auction.highestBidder,
+        ...(auction.addresses || []),
+      ];
+      const numberFields = [
+        auction.highestBid,
+        auction.minimumContribution,
+        auction.approversCount,
+      ];
+
+        return {
+          auction,
+          text: normalizeSearchText(textFields.join(" ")),
+          address: normalizeAddressText(addressFields.join(" ")),
+          numbers: new Set(numberFields.map((value) => String(value))),
+        };
+      }),
+    [auctionsList, now]
+  );
+
+  const filteredAuctions = useMemo(() => {
+    const query = getSearchKind(searchQuery);
+    if (!query.value) return auctionsList;
+
+    return auctionSearchRows
+      .filter(({ text, address, numbers }) => {
+      if (query.kind === "number") {
+          return numbers.has(query.value);
+      }
+
+      if (query.kind === "address") {
+          return address.includes(query.value);
+      }
+
+      return (
+          text.includes(query.value) ||
+          query.tokens.every((token) => text.includes(token))
+      );
+      })
+      .map(({ auction }) => auction);
+  }, [auctionSearchRows, auctionsList, searchQuery]);
+
+  const displayedAuctions = useMemo(
+    () => {
+      return searchIsActive
+        ? filteredAuctions
+        : filteredAuctions.slice(0, visibleAuctionCount);
+    },
+    [filteredAuctions, searchIsActive, visibleAuctionCount]
+  );
+
+  const handleSearchChange = (event) => {
+    setSearchQuery(event.target.value);
+  };
+
+  const clearSearch = () => {
+    setSearchQuery("");
+  };
+
+  const loadMoreAuctions = () => {
+    setLoadingMore(true);
+    setVisibleAuctionCount((count) => {
+      return count + AUCTIONS_PAGE_SIZE;
+    });
   };
 
   const handleRowClick = (address, e) => {
@@ -451,6 +1090,36 @@ function AuctionsListPage() {
               width: "100%",
             }}
           >
+            <div className={styles.searchBar}>
+              <TextField
+                fullWidth
+                className={styles.searchInput}
+                value={searchQuery}
+                onChange={handleSearchChange}
+                placeholder="Search auctions by description, wallet, address, or exact bid"
+                variant="outlined"
+                size="small"
+                InputProps={{
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <SearchIcon className={styles.searchIcon} />
+                    </InputAdornment>
+                  ),
+                  endAdornment: searchQuery ? (
+                    <InputAdornment position="end">
+                      <IconButton
+                        aria-label="Clear search"
+                        size="small"
+                        onClick={clearSearch}
+                        className={styles.clearSearchIcon}
+                      >
+                        <CloseIcon fontSize="small" />
+                      </IconButton>
+                    </InputAdornment>
+                  ) : null,
+                }}
+              />
+            </div>
             <Table aria-label="auctions table">
               <TableHead>
                 <TableRow>
@@ -473,16 +1142,17 @@ function AuctionsListPage() {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {auctionsList.slice().reverse().map((auction, index) => {
-                  const userWon = hasUserWonAuction(auction);
-                  const userParticipated = isUserInAuction(auction);
+                {displayedAuctions.map((auction, index) => {
+                  const userWon = hasUserWonAuction(auction, currentUserAddress);
+                  const userParticipated = isUserInAuction(
+                    auction,
+                    currentUserAddress
+                  );
                   const auctionOpen = isAuctionOpen(auction.endTime);
-                  const currentAddress =
-                    window.ethereum?.selectedAddress?.toLowerCase();
 
                   return (
                     <TableRow
-                      key={`${auction.address}-${index}`}
+                      key={auction.address}
                       onClick={() =>
                         navigate(`/auction/${auction.address}`, {
                           state: { remainingBudget },
@@ -495,32 +1165,32 @@ function AuctionsListPage() {
                       )}
                     >
                       <TableCell
-                        sx={getFontStyles(auction, currentAddress)}
+                        sx={getFontStyles(auction, currentUserAddress)}
                         align="center"
                       >
                         {auction.dataDescription}
                       </TableCell>
                       <TableCell
                         align="center"
-                        sx={getFontStyles(auction, currentAddress, true)}
+                        sx={getFontStyles(auction, currentUserAddress, true)}
                         style={{ fontWeight: "bold" }}
                       >
                         {getTimeLeft(auction.endTime)}
                       </TableCell>
                       <TableCell
                         align="center"
-                        sx={getFontStyles(auction, currentAddress)}
+                        sx={getFontStyles(auction, currentUserAddress)}
                       >
                         {auction.highestBid}
                       </TableCell>
                       <TableCell
                         align="center"
-                        sx={getFontStyles(auction, currentAddress)}
+                        sx={getFontStyles(auction, currentUserAddress)}
                       >
                         {auction.approversCount}
                       </TableCell>
                       <TableCell
-                        sx={getFontStyles(auction, currentAddress)}
+                        sx={getFontStyles(auction, currentUserAddress)}
                         align="center"
                       >
                         {getRefundStatus(
@@ -556,6 +1226,11 @@ function AuctionsListPage() {
                 })}
               </TableBody>
             </Table>
+            {searchQuery && !filteredAuctions.length && (
+              <div className={styles.emptySearch}>
+                No auctions match your search.
+              </div>
+            )}
             {visibleAuctionCount < totalAuctionCount && (
               <div
                 style={{
@@ -571,14 +1246,16 @@ function AuctionsListPage() {
                     color: "white",
                     borderRadius: "20px",
                     padding: "8px 24px",
+                    minWidth: "180px",
                   }}
-                  onClick={() =>
-                    setVisibleAuctionCount(
-                      (count) => count + AUCTIONS_PAGE_SIZE
-                    )
-                  }
+                  onClick={loadMoreAuctions}
+                  disabled={loadingMore}
                 >
-                  Load More Auctions
+                  {loadingMore ? (
+                    <CircularProgress size={20} style={{ color: "white" }} />
+                  ) : (
+                    "Load More Auctions"
+                  )}
                 </Button>
               </div>
             )}

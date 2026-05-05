@@ -59,6 +59,78 @@
   font-size: larger;
 }
 
+.searchBar {
+  display: flex;
+  align-items: center;
+  padding: 1rem 0 1.25rem;
+}
+
+.searchInput {
+  :global(.MuiOutlinedInput-root) {
+    background: linear-gradient(180deg, #ffffff 0%, #f7f8ff 100%);
+    border-radius: 14px;
+    color: #0d0d4e;
+    font-size: 0.98rem;
+    box-shadow: 0 8px 22px rgba(16, 48, 144, 0.08);
+    transition:
+      box-shadow 160ms ease,
+      background-color 160ms ease;
+
+    :global(fieldset) {
+      border-color: rgba(16, 48, 144, 0.18);
+    }
+
+    &:hover {
+      box-shadow: 0 10px 26px rgba(16, 48, 144, 0.10);
+
+      :global(fieldset) {
+        border-color: rgba(16, 48, 144, 0.35);
+      }
+    }
+
+    &:global(.Mui-focused) {
+      background: #ffffff;
+      box-shadow: 0 12px 28px rgba(16, 48, 144, 0.16);
+
+      :global(fieldset) {
+        border-color: #103090;
+        border-width: 1px;
+      }
+    }
+  }
+
+  :global(.MuiInputBase-input) {
+    padding: 0.82rem 0.2rem;
+
+    &::placeholder {
+      color: rgba(13, 13, 78, 0.55);
+      opacity: 1;
+    }
+  }
+}
+
+.searchIcon {
+  color: #103090;
+  font-size: 1.25rem;
+}
+
+.clearSearchIcon {
+  color: #103090 !important;
+  background-color: rgba(16, 48, 144, 0.08) !important;
+
+  &:hover {
+    background-color: rgba(16, 48, 144, 0.15) !important;
+  }
+}
+
+.emptySearch {
+  color: #0d0d4e;
+  font-size: 1rem;
+  font-weight: 600;
+  padding: 1.5rem;
+  text-align: center;
+}
+
 
 .viewAuctionBtn{
   border-radius: 20px;

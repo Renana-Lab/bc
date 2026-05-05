@@ -1,9 +1,9 @@
-import React, { useEffect, useState } from "react";
+import React, { memo, useEffect, useState } from "react";
 import { AppBar, Button, Toolbar, Typography } from "@mui/material";
 import MenuIcon from "@mui/icons-material/Menu";
 import HomeIcon from "@mui/icons-material/Home";
 import { useNavigate } from "react-router-dom";
-import { getDefaultBudget } from "../pages/ManageBudget/ManageBudgetPage";
+import { getDefaultBudget } from "../real_ethereum/budget";
 import componentStyles from "./../styles/components.module.scss";
 
 const ToolbarComponent = (props) => {
@@ -12,7 +12,7 @@ const ToolbarComponent = (props) => {
   const [budget, setBudget] = useState(null); // ✅ בתוך ToolbarComponent
 
 
-  // Update clock every second
+  // The header displays seconds, so keep it ticking once per second.
   useEffect(() => {
     const interval = setInterval(() => {
       setCurrentTime(new Date());
@@ -96,4 +96,4 @@ const ToolbarComponent = (props) => {
   );
 };
 
-export default ToolbarComponent;
+export default memo(ToolbarComponent);

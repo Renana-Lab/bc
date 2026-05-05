@@ -4,6 +4,7 @@ import TextField from "@mui/material/TextField";
 import Button from "@mui/material/Button";
 import Alert from "@mui/material/Alert";
 import Campaign from "../real_ethereum/campaign";
+import { readOnlyCall } from "../real_ethereum/readOnly";
 import styles from "./../styles/components.module.scss";
 import CircularProgress from "@mui/material/CircularProgress";
 import { Typography } from "@mui/material";
@@ -40,14 +41,26 @@ class ContributeForm extends Component {
       userBid = 0,
     } = this.props;
     const campaign = Campaign(address);
-    const summary = await campaign.methods.getSummary().call();
+    let summary;
+    let summaryIsLight = true;
+
+    try {
+      summary = await readOnlyCall(({ campaign: readOnlyCampaign }) =>
+        readOnlyCampaign(address).methods.getListSummary()
+      );
+    } catch (error) {
+      summaryIsLight = false;
+      summary = await readOnlyCall(({ campaign: readOnlyCampaign }) =>
+        readOnlyCampaign(address).methods.getSummary()
+      );
+    }
+
     const minimumContribution = summary[0];
-    const endTime = summary[9];
     const manager = summary[3];
     const highestBid = summary[4];
+    const endTime = summaryIsLight ? summary[7] : summary[9];
     const accounts = await window.ethereum.request({ method: "eth_accounts" });
     const connectedAccount = accounts[0];
-    console.log("connectedAccount = ", connectedAccount);
 
     const newBid = Number(this.state.bidAmount);
     const additionalBid = newBid - userBid;
@@ -119,8 +132,6 @@ class ContributeForm extends Component {
     } catch (err) {
 
         const message = err?.message || "";
-        console.log(err.message);
-
         let flagForOutput = false;
 
         const isAuctionClosed = (Number(endTime + "000") < Date.now());

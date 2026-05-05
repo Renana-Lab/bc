@@ -1,27 +1,28 @@
-import React, { useState, useEffect } from "react";
+import React, { lazy, Suspense, useState, useEffect } from "react";
 import { Routes, Route, useNavigate } from "react-router-dom";
-import HomePage from "./pages/Home/HomePage.js";
-import NewAuctionPage from "./pages/NewAuction/NewAuctionPage.js";
-import AuctionsListPage from "./pages/AuctionsList/AuctionsListPage.js";
-import MetamaskTutorialPage from "./pages/MetamaskLogin/MetamaskTutorialPage.js";
-import MetamaskGuidePage from "./pages/MetamaskGuide/MetamaskGuidePage.js";
-import ManageBudgetPage from "./pages/ManageBudget/ManageBudgetPage.js";
-import ShowAuctionPage from "./pages/ShowAuction/ShowAuctionPage.js";
 import { MetaMaskProvider } from "./Context/Context.js";
 import { Toaster } from "react-hot-toast";
+
+const HomePage = lazy(() => import("./pages/Home/HomePage.js"));
+const NewAuctionPage = lazy(() => import("./pages/NewAuction/NewAuctionPage.js"));
+const AuctionsListPage = lazy(() => import("./pages/AuctionsList/AuctionsListPage.js"));
+const MetamaskTutorialPage = lazy(() =>
+  import("./pages/MetamaskLogin/MetamaskTutorialPage.js")
+);
+const MetamaskGuidePage = lazy(() => import("./pages/MetamaskGuide/MetamaskGuidePage.js"));
+const ManageBudgetPage = lazy(() => import("./pages/ManageBudget/ManageBudgetPage.js"));
+const ShowAuctionPage = lazy(() => import("./pages/ShowAuction/ShowAuctionPage.js"));
 
 function App() {
   const [isMobile, setIsMobile] = useState(false);
 
-  const checkMobile = () => {
-    const mobileThreshold = 768;
-    setIsMobile(window.innerWidth < mobileThreshold);
-  };
-
   useEffect(() => {
-    checkMobile();
-    window.addEventListener("resize", checkMobile);
-    return () => window.removeEventListener("resize", checkMobile);
+    const mediaQuery = window.matchMedia("(max-width: 767px)");
+    const handleChange = (event) => setIsMobile(event.matches);
+
+    setIsMobile(mediaQuery.matches);
+    mediaQuery.addEventListener?.("change", handleChange);
+    return () => mediaQuery.removeEventListener?.("change", handleChange);
   }, []);
 
   return (
@@ -121,15 +122,17 @@ function App() {
         </>
       ) : (
         <>
-          <Routes>
-            <Route path="/" element={<HomePage />} />
-            <Route path="/metamask-login" element={<MetamaskTutorialPage />} />
-            <Route path="/metamask-guide" element={<MetamaskGuidePage />} />
-            <Route path="/open-auction" element={<NewAuctionPage />} />
-            <Route path="/auctions-list" element={<AuctionsListPage />} />
-            <Route path="/auction/:address" element={<ShowAuctionPage />} />
-            <Route path="/manage-budget" element={<ManageBudgetPage />} />
-          </Routes>
+          <Suspense fallback={<div style={{ padding: "2rem" }}>Loading...</div>}>
+            <Routes>
+              <Route path="/" element={<HomePage />} />
+              <Route path="/metamask-login" element={<MetamaskTutorialPage />} />
+              <Route path="/metamask-guide" element={<MetamaskGuidePage />} />
+              <Route path="/open-auction" element={<NewAuctionPage />} />
+              <Route path="/auctions-list" element={<AuctionsListPage />} />
+              <Route path="/auction/:address" element={<ShowAuctionPage />} />
+              <Route path="/manage-budget" element={<ManageBudgetPage />} />
+            </Routes>
+          </Suspense>
           <Toaster />
         </>
       )}

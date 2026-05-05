@@ -213,6 +213,41 @@ function contribute() public payable onlyBeforeEnd {
             endTime
         );
     }
+
+    function getListSummary()
+        public
+        view
+        returns (
+            uint256, uint256, uint256, address,
+            uint256, string memory, address, uint256, bool
+        )
+    {
+        return (
+            minimumContribution,
+            address(this).balance,
+            approversCount,
+            manager,
+            highestBid,
+            dataDescription,
+            highestBidder,
+            endTime,
+            closed
+        );
+    }
+
+    function getUserAuctionStatus(address user)
+        public
+        view
+        returns (bool, uint256, bool, bool, bool)
+    {
+        bool participated = approvers[user];
+        uint256 bid = approversMoney[user];
+        bool isManager = user == manager;
+        bool isHighestBidder = user == highestBidder;
+        bool refunded = closed && participated && !isHighestBidder && bid == 0;
+
+        return (participated, bid, refunded, isManager, isHighestBidder);
+    }
 }
 
 contract CampaignFactory {

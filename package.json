@@ -38,6 +38,7 @@
     "test": "react-scripts test",
     "auto-finalize": "node scripts/autoFinalizeAuctions.js --once",
     "auto-finalize:watch": "node scripts/autoFinalizeAuctions.js",
+    "auction-indexer": "node scripts/auctionIndexer.js",
     "eject": "react-scripts eject"
   },
   "eslintConfig": {

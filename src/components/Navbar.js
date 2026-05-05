@@ -1,15 +1,15 @@
-import React, { useState } from "react";
+import React, { useCallback, useState } from "react";
 import DrawerComponent from "./Drawer.js";
 import ToolbarComponent from "./Toolbar.js";
 
 const Navbar = () => {
   const [isDrawerOpen, setDrawerOpen] = useState(false);
-  const toggleDrawer = () => {
+  const toggleDrawer = useCallback(() => {
     setDrawerOpen(false);
-  };
-  const openDrawer = () => {
+  }, []);
+  const openDrawer = useCallback(() => {
     setDrawerOpen(true);
-  };
+  }, []);
   return (
     <div className="App">
       <ToolbarComponent openDrawerHandler={openDrawer} />
