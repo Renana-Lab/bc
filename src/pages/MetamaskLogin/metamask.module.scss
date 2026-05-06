@@ -7,14 +7,24 @@
   margin: 0 auto;
   padding: 40px;
   gap: 30px;
+  animation: softFadeIn 220ms ease both;
 }
 
 
 .metamaskimg {
   border-radius: 2rem;
+  animation: softFadeUp 260ms ease both;
+  transition:
+    transform 180ms ease,
+    filter 180ms ease;
+}
+.metamaskimg:hover {
+  filter: brightness(1.03);
+  transform: translateY(-2px);
 }
 .metamaskQuestion {
   height: 100%;
+  animation: softFadeUp 240ms ease both;
 }
 .metamaskTitle {
   color: #002884;
@@ -35,6 +45,7 @@
   display: flex;
   justify-content: flex-start;
   gap:40px;
+  animation: softFadeIn 260ms ease both;
 }
 
 .metamaskVideo {
@@ -44,4 +55,12 @@
   box-shadow: rgba(100, 100, 111, 0.2) 0px 7px 29px 0px;
   margin: 0 auto;
   color: white;
+  animation: softFadeUp 260ms ease both;
+  transition:
+    box-shadow 180ms ease,
+    transform 180ms ease;
+}
+
+.metamaskVideo:hover {
+  box-shadow: rgba(100, 100, 111, 0.28) 0px 10px 32px 0px;
 }

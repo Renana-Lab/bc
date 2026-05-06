@@ -6,6 +6,7 @@
   display: flex;
   justify-content: center;
   height: 100%;
+  animation: softFadeIn 220ms ease both;
 }
 .Image {
   position: absolute;
@@ -15,6 +16,14 @@
   width: 22rem;
   height: 18rem;
   filter: brightness(85%);
+  animation: softFadeUp 280ms ease both;
+  transition:
+    filter 180ms ease,
+    transform 180ms ease;
+}
+
+.Image:hover {
+  filter: brightness(92%);
 }
 .form {
   text-align: left;
@@ -27,6 +36,14 @@
   background-color: white;
   box-shadow: rgba(100, 100, 111, 0.2) 0px 7px 29px 0px;
   border-radius: 20px;
+  animation: softFadeUp 240ms ease both;
+  transition:
+    box-shadow 180ms ease,
+    transform 180ms ease;
+}
+
+.form:focus-within {
+  box-shadow: rgba(100, 100, 111, 0.26) 0px 10px 32px 0px;
 }
 .introductionTitle {
   color: #002884;
@@ -64,8 +81,17 @@
   border: #d8dcf0;
   background-color: #d8dcf0;
   cursor: pointer;
+  transition:
+    background-color 150ms ease,
+    transform 150ms ease;
+}
+
+.circleIcon:hover {
+  background-color: #c8cee8;
+  transform: translateY(-1px);
 }
 .description {
   font-style: oblique;
   font-size: 0.9rem;
+  animation: softFadeIn 160ms ease both;
 }

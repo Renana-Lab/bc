@@ -14,6 +14,23 @@
   justify-content: center;
   margin: 0 auto;
   padding: 2rem;
+  animation: softFadeIn 220ms ease both;
+
+  :global(.MuiPaper-root) {
+    animation: softFadeUp 240ms ease both;
+  }
+
+  :global(.MuiTableBody-root .MuiTableRow-root) {
+    animation: softFadeIn 180ms ease both;
+    transition:
+      background-color 160ms ease,
+      transform 160ms ease,
+      box-shadow 160ms ease;
+  }
+
+  :global(.MuiTableBody-root .MuiTableRow-root:hover) {
+    transform: translateX(2px);
+  }
 }
 .createAuction {
   display: flex;
@@ -57,12 +74,32 @@
   margin: 0 auto;
   text-align: center;
   font-size: larger;
+  animation: softFadeUp 240ms ease both;
 }
 
 .searchBar {
   display: flex;
   align-items: center;
+  gap: 0.75rem;
   padding: 1rem 0 1.25rem;
+  animation: softFadeIn 220ms ease both;
+}
+
+.tableStatus {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 6.8rem;
+  color: #103090;
+  font-size: 0.85rem;
+  font-weight: 600;
+  white-space: nowrap;
+  opacity: 0.82;
+  animation: softFadeIn 160ms ease both;
+
+  :global(.MuiCircularProgress-root) {
+    color: #103090;
+  }
 }
 
 .searchInput {
@@ -129,6 +166,7 @@
   font-weight: 600;
   padding: 1.5rem;
   text-align: center;
+  animation: softFadeUp 180ms ease both;
 }
 
 

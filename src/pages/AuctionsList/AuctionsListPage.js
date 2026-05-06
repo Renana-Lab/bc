@@ -1,4 +1,11 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import React, {
+  useState,
+  useEffect,
+  useCallback,
+  useDeferredValue,
+  useMemo,
+  useRef,
+} from "react";
 import {
   Table,
   TableBody,
@@ -16,7 +23,6 @@ import {
 import SearchIcon from "@mui/icons-material/Search";
 import CloseIcon from "@mui/icons-material/Close";
 import { useNavigate, useLocation } from "react-router-dom";
-import Countdown from "react-countdown";
 import { readOnlyBatchCall, readOnlyCall } from "../../real_ethereum/readOnly";
 import { campaignSocket, factorySocket } from "../../real_ethereum/socketFactory";
 import Layout from "../../components/Layout";
@@ -26,6 +32,8 @@ import picSrc from "./Illustration_Start.png";
 const AUCTIONS_PAGE_SIZE = 20;
 const FETCH_CONCURRENCY = 5;
 const POLL_INTERVAL_MS = 30000;
+const COUNTDOWN_TICK_MS = 1000;
+const EVENT_REFRESH_DELAY_MS = 1500;
 const CACHE_TTL_MS = 15000;
 const DEPLOYED_CAMPAIGNS_TTL_MS = 60000;
 const USER_STATUS_TTL_MS = 15000;
@@ -529,7 +537,9 @@ function AuctionsListPage() {
   const [auctionsList, setAuctionsList] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const deferredSearchQuery = useDeferredValue(searchQuery);
   const [now, setNow] = useState(Date.now());
   const [connectedAccount, setConnectedAccount] = useState(
     window.ethereum?.selectedAddress?.toLowerCase() || ""
@@ -545,6 +555,7 @@ function AuctionsListPage() {
   const normalAuctionOrderRef = useRef([]);
   const didMountVisibleCountRef = useRef(false);
   const eventRefreshTimerRef = useRef(null);
+  const lastEventRefreshRef = useRef(0);
 
   const [remainingBudget, setRemainingBudget] = useState(
     navState?.remainingBudget || Infinity
@@ -616,6 +627,8 @@ function AuctionsListPage() {
   const fetchAuctionsList = useCallback(async () => {
     const visibleCountForRequest = visibleAuctionCount;
     const cached = getCachedAuctions(visibleAuctionCount);
+    const shouldShowBackgroundRefresh =
+      !loading && !loadingMore && !document.hidden;
 
     if (cached?.fresh) {
       setAuctionsList(
@@ -624,6 +637,7 @@ function AuctionsListPage() {
       setTotalAuctionCount(cached.total);
       setLoading(false);
       setLoadingMore(false);
+      setRefreshing(false);
       return;
     }
 
@@ -633,6 +647,9 @@ function AuctionsListPage() {
     }
 
     isFetchingRef.current = true;
+    if (shouldShowBackgroundRefresh) {
+      setRefreshing(true);
+    }
     const requestId = requestIdRef.current + 1;
     requestIdRef.current = requestId;
 
@@ -688,13 +705,14 @@ function AuctionsListPage() {
     } finally {
       setLoading(false);
       setLoadingMore(false);
+      setRefreshing(false);
       isFetchingRef.current = false;
       if (pendingFetchRef.current) {
         pendingFetchRef.current = false;
         window.setTimeout(() => fetchAuctionsListRef.current?.(), 0);
       }
     }
-  }, [keepNormalAuctionOrder, visibleAuctionCount]);
+  }, [keepNormalAuctionOrder, loading, loadingMore, visibleAuctionCount]);
 
   useEffect(() => {
     fetchAuctionsListRef.current = fetchAuctionsList;
@@ -707,17 +725,21 @@ function AuctionsListPage() {
   const scheduleEventRefresh = useCallback(() => {
     if (document.hidden) return;
 
+    const elapsed = Date.now() - lastEventRefreshRef.current;
+    const delay = Math.max(EVENT_REFRESH_DELAY_MS - elapsed, 250);
+
     window.clearTimeout(eventRefreshTimerRef.current);
     eventRefreshTimerRef.current = window.setTimeout(() => {
+      lastEventRefreshRef.current = Date.now();
       invalidateAuctionCaches();
       fetchAuctionsListRef.current?.();
-    }, 800);
+    }, delay);
   }, []);
 
   useEffect(() => {
     const interval = window.setInterval(() => {
       if (!document.hidden) setNow(Date.now());
-    }, 30000);
+    }, COUNTDOWN_TICK_MS);
 
     return () => window.clearInterval(interval);
   }, []);
@@ -871,7 +893,30 @@ function AuctionsListPage() {
     const millisecondsLeft = Number(endTime) - now;
     if (millisecondsLeft <= 0) return "Closed";
 
-    return <Countdown date={Number(endTime)} />;
+    const totalSeconds = Math.max(0, Math.floor(millisecondsLeft / 1000));
+    const days = Math.floor(totalSeconds / 86400);
+    const hours = Math.floor((totalSeconds % 86400) / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    const pad = (value) => String(value).padStart(2, "0");
+
+    if (days > 0) {
+      return `${days}d ${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
+    }
+
+    return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
+  };
+
+  const getAuctionDate = (endTime) => {
+    const date = new Date(Number(endTime));
+
+    if (Number.isNaN(date.getTime())) return "";
+
+    return date.toLocaleDateString([], {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
   };
 
   const isAuctionOpen = (endTime) => {
@@ -957,7 +1002,7 @@ function AuctionsListPage() {
       const textFields = [
         auction.dataDescription,
         auction.dataForSell,
-        Number(auction.endTime) > now ? "open active" : "closed ended",
+        Number(auction.endTime) > Date.now() ? "open active" : "closed ended",
       ];
       const addressFields = [
         auction.address,
@@ -978,11 +1023,11 @@ function AuctionsListPage() {
           numbers: new Set(numberFields.map((value) => String(value))),
         };
       }),
-    [auctionsList, now]
+    [auctionsList]
   );
 
   const filteredAuctions = useMemo(() => {
-    const query = getSearchKind(searchQuery);
+    const query = getSearchKind(deferredSearchQuery);
     if (!query.value) return auctionsList;
 
     return auctionSearchRows
@@ -1001,7 +1046,7 @@ function AuctionsListPage() {
       );
       })
       .map(({ auction }) => auction);
-  }, [auctionSearchRows, auctionsList, searchQuery]);
+  }, [auctionSearchRows, auctionsList, deferredSearchQuery]);
 
   const displayedAuctions = useMemo(
     () => {
@@ -1119,11 +1164,22 @@ function AuctionsListPage() {
                   ) : null,
                 }}
               />
+              {(refreshing || deferredSearchQuery !== searchQuery) && (
+                <div className={styles.tableStatus}>
+                  <CircularProgress size={14} />
+                  <span>
+                    {deferredSearchQuery !== searchQuery
+                      ? "Filtering..."
+                      : "Updating..."}
+                  </span>
+                </div>
+              )}
             </div>
             <Table aria-label="auctions table">
               <TableHead>
                 <TableRow>
                   {[
+                    "End Date",
                     "Description",
                     "Auction Status",
                     "Highest Bid",
@@ -1133,7 +1189,7 @@ function AuctionsListPage() {
                   ].map((title, idx) => (
                     <TableCell
                       key={idx}
-                      align={idx > 0 ? "center" : "left"}
+                      align={"center"}
                       style={{ color: "#0d0d4eff", fontWeight: "bold" }}
                     >
                       {title}
@@ -1164,12 +1220,21 @@ function AuctionsListPage() {
                         auction.isRefunded
                       )}
                     >
+                        <TableCell
+                        align="center"
+                        sx={getFontStyles(auction, currentUserAddress)}
+                      >
+                        {getAuctionDate(auction.endTime)}
+                      </TableCell>
                       <TableCell
                         sx={getFontStyles(auction, currentUserAddress)}
                         align="center"
                       >
                         {auction.dataDescription}
                       </TableCell>
+                    
+
+
                       <TableCell
                         align="center"
                         sx={getFontStyles(auction, currentUserAddress, true)}

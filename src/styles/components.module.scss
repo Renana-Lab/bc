@@ -288,6 +288,7 @@ $tooltip-color: #3f50b5;
   width: 80%;
   margin: 0 auto;
   height: auto;
+  animation: softFadeIn 180ms ease both;
 }
 
 // -------------------------
@@ -304,6 +305,7 @@ $tooltip-color: #3f50b5;
 
 .bigTitle {
   font-size: 2.2rem;
+  transition: opacity 160ms ease;
 }
 
 // -------------------------
@@ -322,11 +324,19 @@ $tooltip-color: #3f50b5;
     padding: 5px 0;
     position: absolute;
     z-index: 1;
+    opacity: 0;
+    transform: translateY(4px);
+    transition:
+      opacity 150ms ease,
+      transform 150ms ease,
+      visibility 150ms ease;
   }
 
   &:hover {
     .tooltiptext {
       visibility: visible;
+      opacity: 1;
+      transform: translateY(0);
     }
   }
 }
