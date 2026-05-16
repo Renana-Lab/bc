@@ -29,7 +29,7 @@ import Layout from "../../components/Layout";
 import styles from "./auctions.module.scss";
 import picSrc from "./Illustration_Start.png";
 
-const AUCTIONS_PAGE_SIZE = 20;
+const AUCTIONS_PAGE_SIZE = 100;
 const FETCH_CONCURRENCY = 5;
 const POLL_INTERVAL_MS = 30000;
 const COUNTDOWN_TICK_MS = 1000;
