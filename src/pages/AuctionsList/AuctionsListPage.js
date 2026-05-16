@@ -1103,18 +1103,29 @@ function AuctionsListPage() {
                     <br />
                     Do you want to put your data for auction?
                   </p>
-                  <Button
-                    variant="contained"
-                    style={{
-                      backgroundColor: "rgb(16, 48, 144)",
-                      color: "white",
-                      borderRadius: "20px",
-                      padding: "10px 20px",
-                    }}
-                    onClick={() => navigate("/open-auction")}
-                  >
-                    Start an auction
-                  </Button>
+                    <Button
+                        component="a"
+                        href={`/auction/${auction.address}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        variant="contained"
+                        style={{
+                            backgroundColor: userWon
+                                ? "#2e7d32"
+                                : auction.isRefunded
+                                    ? "#FFD700"
+                                    : "#9090D0",
+                            color: "white",
+                            borderRadius: "20px",
+                            padding: "6px 20px",
+                            textTransform: "uppercase",
+                            fontSize: "0.875rem",
+                            width: "max-content",
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        {userWon ? "View Data" : "View Auction"}
+                    </Button>
                 </div>
               </div>
             </div>
