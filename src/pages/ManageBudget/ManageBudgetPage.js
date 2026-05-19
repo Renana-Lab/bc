@@ -971,6 +971,7 @@ const ManageBudgetPage = () => {
   const [selectedAuctions, setSelectedAuctions] = useState({});
   const [auctionSelectorLoading, setAuctionSelectorLoading] = useState(false);
   const [auctionSearch, setAuctionSearch] = useState("");
+  const [auctionSort, setAuctionSort] = useState("index-asc");
   const [reportFilters, setReportFilters] = useState({ from: "", to: "" });
 
   useEffect(() => {
@@ -1234,25 +1235,52 @@ const ManageBudgetPage = () => {
     .length;
   const hasReportFilters = Boolean(reportFilters.from || reportFilters.to);
   const normalizedAuctionSearch = auctionSearch.trim().toLowerCase();
-  const visibleAuctionOptions = auctionOptions.filter((option) => {
-    const matchesSearch =
-      !normalizedAuctionSearch ||
-      [
-        option.index,
-        option.address,
-        option.dataDescription,
-        option.seller,
-        option.highestBidder,
-        option.highestBid,
-      ]
-        .join(" ")
-        .toLowerCase()
-        .includes(normalizedAuctionSearch);
-    const matchesDate =
-      !hasReportFilters || isEndTimeInDateRange(option.endTime, reportFilters);
+  const visibleAuctionOptions = auctionOptions
+    .filter((option) => {
+      const matchesSearch =
+        !normalizedAuctionSearch ||
+        [
+          option.index,
+          option.address,
+          option.dataDescription,
+          option.seller,
+          option.highestBidder,
+          option.highestBid,
+        ]
+          .join(" ")
+          .toLowerCase()
+          .includes(normalizedAuctionSearch);
+      const matchesDate =
+        !hasReportFilters || isEndTimeInDateRange(option.endTime, reportFilters);
 
-    return matchesSearch && matchesDate;
-  });
+      return matchesSearch && matchesDate;
+    })
+    .sort((a, b) => {
+      if (auctionSort === "selected-first") {
+        return (
+          Number(Boolean(selectedAuctions[b.address])) -
+            Number(Boolean(selectedAuctions[a.address])) || a.index - b.index
+        );
+      }
+      if (auctionSort === "date-desc") {
+        return Number(b.endTime || 0) - Number(a.endTime || 0);
+      }
+      if (auctionSort === "date-asc") {
+        return Number(a.endTime || 0) - Number(b.endTime || 0);
+      }
+      if (auctionSort === "bid-desc") {
+        return compareWeiDesc(a.highestBid, b.highestBid);
+      }
+      if (auctionSort === "bid-asc") {
+        return compareWeiDesc(b.highestBid, a.highestBid);
+      }
+      if (auctionSort === "name-asc") {
+        return String(a.dataDescription || "").localeCompare(
+          String(b.dataDescription || "")
+        );
+      }
+      return a.index - b.index;
+    });
   const selectedVisibleCount = visibleAuctionOptions.filter(
     (option) => selectedAuctions[option.address]
   ).length;
@@ -1482,7 +1510,10 @@ const ManageBudgetPage = () => {
                     <Box
                       sx={{
                         display: "grid",
-                        gridTemplateColumns: { xs: "1fr", md: "1fr auto" },
+                        gridTemplateColumns: {
+                          xs: "1fr",
+                          md: "1fr 190px auto",
+                        },
                         gap: 1,
                         mt: 1.5,
                         alignItems: "center",
@@ -1496,6 +1527,22 @@ const ManageBudgetPage = () => {
                         size="small"
                         fullWidth
                       />
+                      <TextField
+                        select
+                        label="Sort"
+                        value={auctionSort}
+                        onChange={(e) => setAuctionSort(e.target.value)}
+                        size="small"
+                        SelectProps={{ native: true }}
+                      >
+                        <option value="index-asc">Original order</option>
+                        <option value="selected-first">Selected first</option>
+                        <option value="date-desc">Newest end date</option>
+                        <option value="date-asc">Oldest end date</option>
+                        <option value="bid-desc">Highest bid</option>
+                        <option value="bid-asc">Lowest bid</option>
+                        <option value="name-asc">Description A-Z</option>
+                      </TextField>
                       <Box display="flex" gap={1} flexWrap="wrap">
                         <Button
                           variant="outlined"
