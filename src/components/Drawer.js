@@ -1,5 +1,5 @@
 import React from "react";
-import { ListItem, ListItemText, Drawer } from "@mui/material";
+import { ListItemButton, ListItemText, Drawer } from "@mui/material";
 import { makeStyles } from "@mui/styles";
 import styles1 from "./../styles/components.module.scss";
 import { useNavigate } from "react-router-dom";
@@ -45,30 +45,28 @@ const DrawerComponent = (props) => {
       onClick={props.toggleDrawerHandler}
       onKeyDown={props.toggleDrawerHandler}
     >
-      <ListItem className={classes.item} button onClick={() => nav("/")}>
+      <ListItemButton className={classes.item} onClick={() => nav("/")}>
         <span className={styles1.homePage}></span>
         <ListItemText>Back to Login</ListItemText>
-      </ListItem>
+      </ListItemButton>
 
-      <ListItem
+      <ListItemButton
         className={classes.item}
-        button
         onClick={() => nav("/auctions-list")}
       >
         <span className={styles1.ViewAuctions}></span>
         <ListItemText>View Auctions</ListItemText>
-      </ListItem>
+      </ListItemButton>
 
-      <ListItem
+      <ListItemButton
         className={classes.item}
-        button
         onClick={() => nav("/open-auction")}
       >
         <span className={styles1.createAuction}></span>
         <ListItemText>Start An Auction</ListItemText>
-      </ListItem>
+      </ListItemButton>
 
-      <ListItem className={classes.item} button>
+      <ListItemButton className={classes.item}>
         <span className={styles1.metamaskIcon}></span>
         <ListItemText>
           <a
@@ -80,18 +78,16 @@ const DrawerComponent = (props) => {
             Metamask Tutorial
           </a>
         </ListItemText>
-      </ListItem>
+      </ListItemButton>
 
-      <ListItem
-      sx={{marginTop: "230%", textAlign: "center"}}
+      <ListItemButton
+        sx={{ marginTop: "230%", textAlign: "center" }}
         className={classes.item}
         dense
-        button
         onClick={() => nav("/manage-budget")}
       >
-        
         <ListItemText> - - ADMIN ZONE - - </ListItemText>
-      </ListItem>
+      </ListItemButton>
     </div>
   );
 

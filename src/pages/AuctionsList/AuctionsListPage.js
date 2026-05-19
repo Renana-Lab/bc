@@ -31,16 +31,25 @@ import picSrc from "./Illustration_Start.png";
 
 const AUCTIONS_PAGE_SIZE = 20;
 const FETCH_CONCURRENCY = 5;
-const POLL_INTERVAL_MS = 30000;
+const POLL_INTERVAL_MS = 10000;
 const COUNTDOWN_TICK_MS = 1000;
-const EVENT_REFRESH_DELAY_MS = 1500;
-const CACHE_TTL_MS = 15000;
+const EVENT_REFRESH_DELAY_MS = 900;
+const CACHE_TTL_MS = 6000;
 const DEPLOYED_CAMPAIGNS_TTL_MS = 60000;
-const USER_STATUS_TTL_MS = 15000;
+const USER_STATUS_TTL_MS = 8000;
+const LOCAL_AUCTIONS_CACHE_KEY = "data-market:auctions:v2";
+const LOCAL_AUCTIONS_CACHE_MAX_AGE_MS = 5 * 60 * 1000;
 const AUCTIONS_API_URL = (process.env.REACT_APP_AUCTION_API_URL || "").replace(
   /\/$/,
   ""
 );
+
+const SORT_OPTIONS = [
+  { value: "normal", label: "Market order" },
+  { value: "ending", label: "Ending soon" },
+  { value: "highest", label: "Highest bid" },
+  { value: "bidders", label: "Most bidders" },
+];
 
 let auctionListCache = {
   data: [],
@@ -102,6 +111,50 @@ const normalizeAuction = (auction) => ({
   closed: Boolean(auction.closed),
 });
 
+const readStoredAuctionListCache = () => {
+  if (typeof window === "undefined" || !window.localStorage) return null;
+
+  try {
+    const stored = JSON.parse(
+      window.localStorage.getItem(LOCAL_AUCTIONS_CACHE_KEY) || "null"
+    );
+
+    if (
+      !stored?.data?.length ||
+      Date.now() - Number(stored.updatedAt || 0) > LOCAL_AUCTIONS_CACHE_MAX_AGE_MS
+    ) {
+      return null;
+    }
+
+    return {
+      data: sortNewestFirst(stored.data.map(normalizeAuction)),
+      total: Number(stored.total || stored.data.length),
+      visibleCount: Number(stored.visibleCount || stored.data.length),
+      updatedAt: Number(stored.updatedAt || Date.now()),
+    };
+  } catch (error) {
+    return null;
+  }
+};
+
+const writeStoredAuctionListCache = (cache) => {
+  if (typeof window === "undefined" || !window.localStorage) return;
+
+  try {
+    window.localStorage.setItem(
+      LOCAL_AUCTIONS_CACHE_KEY,
+      JSON.stringify({
+        data: cache.data.slice(0, 100),
+        total: cache.total,
+        visibleCount: cache.visibleCount,
+        updatedAt: cache.updatedAt,
+      })
+    );
+  } catch (error) {
+    // Storage is best-effort; the live chain read is still the source of truth.
+  }
+};
+
 const sortNewestFirst = (auctions) =>
   [...auctions].sort((a, b) => {
     if (b.listOrder !== a.listOrder) return b.listOrder - a.listOrder;
@@ -118,6 +171,7 @@ const cacheAuctionList = ({ data, total, visibleCount, updatedAt }) => {
     updatedAt: updatedAt || Date.now(),
   };
 
+  writeStoredAuctionListCache(auctionListCache);
   return auctionListCache;
 };
 
@@ -199,6 +253,11 @@ const mapWithConcurrency = async (items, limit, mapper) => {
 };
 
 const getCachedAuctions = (visibleAuctionCount) => {
+  if (!auctionListCache.data.length) {
+    const stored = readStoredAuctionListCache();
+    if (stored) auctionListCache = stored;
+  }
+
   if (
     auctionListCache.data.length &&
     auctionListCache.visibleCount >= visibleAuctionCount
@@ -538,9 +597,14 @@ function AuctionsListPage() {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [networkSlow, setNetworkSlow] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [sortMode, setSortMode] = useState("normal");
   const deferredSearchQuery = useDeferredValue(searchQuery);
   const [now, setNow] = useState(Date.now());
+  const [lastUpdated, setLastUpdated] = useState(
+    auctionListCache.updatedAt || null
+  );
   const [connectedAccount, setConnectedAccount] = useState(
     window.ethereum?.selectedAddress?.toLowerCase() || ""
   );
@@ -630,15 +694,23 @@ function AuctionsListPage() {
     const shouldShowBackgroundRefresh =
       !loading && !loadingMore && !document.hidden;
 
-    if (cached?.fresh) {
+    if (cached) {
       setAuctionsList(
         keepNormalAuctionOrder(cached.data, visibleCountForRequest)
       );
       setTotalAuctionCount(cached.total);
+      setLastUpdated(auctionListCache.updatedAt);
       setLoading(false);
       setLoadingMore(false);
-      setRefreshing(false);
-      return;
+
+      if (cached.fresh) {
+        setRefreshing(false);
+        return;
+      }
+
+      if (!document.hidden) {
+        setRefreshing(true);
+      }
     }
 
     if (isFetchingRef.current) {
@@ -692,6 +764,8 @@ function AuctionsListPage() {
       ) {
         setAuctionsList(keepNormalAuctionOrder(data, visibleCountForRequest));
         setTotalAuctionCount(total);
+        setLastUpdated(Date.now());
+        setNetworkSlow(false);
       }
     } catch (error) {
       const stale = getCachedAuctions(visibleAuctionCount);
@@ -700,7 +774,9 @@ function AuctionsListPage() {
           keepNormalAuctionOrder(stale.data, visibleCountForRequest)
         );
         setTotalAuctionCount(stale.total);
+        setLastUpdated(auctionListCache.updatedAt);
       }
+      setNetworkSlow(true);
       console.error("Error fetching auctions:", error);
     } finally {
       setLoading(false);
@@ -807,17 +883,6 @@ function AuctionsListPage() {
             currentUserAddress
           );
 
-          if (result.changed && auctionListCache.data.length) {
-            auctionListCache = {
-              ...auctionListCache,
-              data: applyUserStatusesToAuctions(
-                auctionListCache.data,
-                statuses,
-                currentUserAddress
-              ).auctions,
-            };
-          }
-
           return result.auctions;
         });
       })
@@ -852,6 +917,13 @@ function AuctionsListPage() {
       createdEvent?.unsubscribe?.();
     };
   }, [scheduleEventRefresh]);
+
+  const handleManualRefresh = useCallback(() => {
+    invalidateAuctionCaches();
+    setNetworkSlow(false);
+    setRefreshing(true);
+    fetchAuctionsListRef.current?.();
+  }, []);
 
   const bidSubscriptionKey = useMemo(
     () =>
@@ -917,6 +989,32 @@ function AuctionsListPage() {
       day: "numeric",
       year: "numeric",
     });
+  };
+
+  const getAuctionTime = (endTime) => {
+    const date = new Date(Number(endTime));
+
+    if (Number.isNaN(date.getTime())) return "";
+
+    return date.toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  };
+
+  const getLastUpdatedText = () => {
+    if (!lastUpdated) return "Waiting for first sync";
+
+    const secondsAgo = Math.max(
+      0,
+      Math.floor((Date.now() - Number(lastUpdated)) / 1000)
+    );
+
+    if (secondsAgo < 5) return "Updated now";
+    if (secondsAgo < 60) return `Updated ${secondsAgo}s ago`;
+
+    const minutesAgo = Math.floor(secondsAgo / 60);
+    return `Updated ${minutesAgo}m ago`;
   };
 
   const isAuctionOpen = (endTime) => {
@@ -996,13 +1094,19 @@ function AuctionsListPage() {
     return "";
   };
 
-  const auctionSearchRows = useMemo(
-    () =>
-      auctionsList.map((auction) => {
+  const auctionSearchIndex = useMemo(() => {
+    const rows = [];
+    const tokenMap = new Map();
+    const numberMap = new Map();
+    const exactAddressMap = new Map();
+
+    auctionsList.forEach((auction) => {
       const textFields = [
         auction.dataDescription,
         auction.dataForSell,
+        getAuctionDate(auction.endTime),
         Number(auction.endTime) > Date.now() ? "open active" : "closed ended",
+        auction.closed ? "closed ended" : "open active",
       ];
       const addressFields = [
         auction.address,
@@ -1014,47 +1118,125 @@ function AuctionsListPage() {
         auction.highestBid,
         auction.minimumContribution,
         auction.approversCount,
-      ];
+      ].map((value) => String(value ?? ""));
+      const text = normalizeSearchText(textFields.join(" "));
+      const address = normalizeAddressText(addressFields.join(" "));
+      const numbers = new Set(numberFields);
+      const row = { auction, text, address, numbers };
 
-        return {
-          auction,
-          text: normalizeSearchText(textFields.join(" ")),
-          address: normalizeAddressText(addressFields.join(" ")),
-          numbers: new Set(numberFields.map((value) => String(value))),
-        };
-      }),
-    [auctionsList]
-  );
+      rows.push(row);
 
-  const filteredAuctions = useMemo(() => {
+      new Set(text.split(/\s+/).filter(Boolean)).forEach((token) => {
+        if (!tokenMap.has(token)) tokenMap.set(token, []);
+        tokenMap.get(token).push(row);
+      });
+
+      numbers.forEach((number) => {
+        if (!number) return;
+        if (!numberMap.has(number)) numberMap.set(number, []);
+        numberMap.get(number).push(row);
+      });
+
+      addressFields.forEach((rawAddress) => {
+        const normalizedAddress = normalizeAddressText(rawAddress);
+        if (!normalizedAddress) return;
+        if (!exactAddressMap.has(normalizedAddress)) {
+          exactAddressMap.set(normalizedAddress, []);
+        }
+        exactAddressMap.get(normalizedAddress).push(row);
+      });
+    });
+
+    return { rows, tokenMap, numberMap, exactAddressMap };
+  }, [auctionsList]);
+
+  const searchedAuctions = useMemo(() => {
     const query = getSearchKind(deferredSearchQuery);
     if (!query.value) return auctionsList;
 
-    return auctionSearchRows
+    const orderedRows = auctionSearchIndex.rows;
+    let candidateRows = orderedRows;
+
+    if (query.kind === "number") {
+      candidateRows = auctionSearchIndex.numberMap.get(query.value) || [];
+    } else if (query.kind === "address") {
+      candidateRows =
+        auctionSearchIndex.exactAddressMap.get(query.value) || orderedRows;
+    } else if (query.tokens.length) {
+      const tokenCandidates = query.tokens
+        .map((token) => auctionSearchIndex.tokenMap.get(token) || [])
+        .sort((a, b) => a.length - b.length);
+
+      if (tokenCandidates.length) {
+        const allowed = new Set(tokenCandidates[0].map((row) => row.auction.address));
+        tokenCandidates.slice(1).forEach((rows) => {
+          const rowAddresses = new Set(rows.map((row) => row.auction.address));
+          Array.from(allowed).forEach((address) => {
+            if (!rowAddresses.has(address)) allowed.delete(address);
+          });
+        });
+        candidateRows = orderedRows.filter((row) =>
+          allowed.has(row.auction.address)
+        );
+      }
+    }
+
+    return candidateRows
       .filter(({ text, address, numbers }) => {
-      if (query.kind === "number") {
+        if (query.kind === "number") {
           return numbers.has(query.value);
-      }
+        }
 
-      if (query.kind === "address") {
+        if (query.kind === "address") {
           return address.includes(query.value);
-      }
+        }
 
-      return (
+        return (
           text.includes(query.value) ||
           query.tokens.every((token) => text.includes(token))
-      );
+        );
       })
       .map(({ auction }) => auction);
-  }, [auctionSearchRows, auctionsList, deferredSearchQuery]);
+  }, [auctionSearchIndex, auctionsList, deferredSearchQuery]);
+
+  const sortedAuctions = useMemo(() => {
+    if (sortMode === "normal") return searchedAuctions;
+
+    const sorted = [...searchedAuctions];
+
+    sorted.sort((a, b) => {
+      if (sortMode === "ending") {
+        const aOpen = Number(a.endTime) > now;
+        const bOpen = Number(b.endTime) > now;
+        if (aOpen !== bOpen) return aOpen ? -1 : 1;
+        return Number(a.endTime) - Number(b.endTime);
+      }
+
+      if (sortMode === "highest") {
+        return Number(b.highestBid || 0) - Number(a.highestBid || 0);
+      }
+
+      if (sortMode === "bidders") {
+        return Number(b.approversCount || 0) - Number(a.approversCount || 0);
+      }
+
+      return 0;
+    });
+
+    return sorted;
+  }, [searchedAuctions, sortMode, now]);
+
+  const viewIsFiltered = Boolean(deferredSearchQuery.trim());
+  const loadedAuctionCount = auctionsList.length;
+  const visibleResultCount = sortedAuctions.length;
 
   const displayedAuctions = useMemo(
     () => {
       return searchIsActive
-        ? filteredAuctions
-        : filteredAuctions.slice(0, visibleAuctionCount);
+        ? sortedAuctions
+        : sortedAuctions.slice(0, visibleAuctionCount);
     },
-    [filteredAuctions, searchIsActive, visibleAuctionCount]
+    [sortedAuctions, searchIsActive, visibleAuctionCount]
   );
 
   const handleSearchChange = (event) => {
@@ -1129,6 +1311,7 @@ function AuctionsListPage() {
         ) : (
           <TableContainer
             component={Paper}
+            className={styles.tableShell}
             style={{
               padding: "5px 20px",
               borderRadius: "20px",
@@ -1166,21 +1349,59 @@ function AuctionsListPage() {
               />
               {(refreshing || deferredSearchQuery !== searchQuery) && (
                 <div className={styles.tableStatus}>
-                  <CircularProgress size={14} />
+                  <span className={styles.syncDot} aria-hidden="true" />
                   <span>
                     {deferredSearchQuery !== searchQuery
-                      ? "Filtering..."
-                      : "Updating..."}
+                      ? "Filtering"
+                      : "Updating"}
                   </span>
                 </div>
               )}
             </div>
-            <Table aria-label="auctions table">
+            <div className={styles.tableToolbar}>
+              <div className={styles.tableTools}>
+                <label className={styles.sortControl}>
+                  <span>Sort</span>
+                  <select
+                    value={sortMode}
+                    onChange={(event) => setSortMode(event.target.value)}
+                  >
+                    {SORT_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  className={styles.refreshButton}
+                  onClick={handleManualRefresh}
+                  disabled={refreshing}
+                >
+                  {refreshing ? "Refreshing" : "Refresh"}
+                </Button>
+              </div>
+            </div>
+            <div className={styles.listMeta} aria-live="polite">
+              <span>
+                {viewIsFiltered
+                  ? `Showing ${displayedAuctions.length} of ${visibleResultCount} matches from ${loadedAuctionCount} loaded auctions`
+                  : `Showing ${displayedAuctions.length} of ${totalAuctionCount} auctions`}
+              </span>
+              <span className={networkSlow ? styles.networkWarning : ""}>
+                {networkSlow
+                  ? "Network slow: showing saved data"
+                  : getLastUpdatedText()}
+              </span>
+            </div>
+            <Table aria-label="auctions table" className={styles.auctionsTable}>
               <TableHead>
                 <TableRow>
                   {[
-                    "End Date",
                     "Description",
+                    "End Date",
                     "Auction Status",
                     "Highest Bid",
                     "Number Of Bidders",
@@ -1220,17 +1441,20 @@ function AuctionsListPage() {
                         auction.isRefunded
                       )}
                     >
-                        <TableCell
-                        align="center"
-                        sx={getFontStyles(auction, currentUserAddress)}
-                      >
-                        {getAuctionDate(auction.endTime)}
-                      </TableCell>
                       <TableCell
                         sx={getFontStyles(auction, currentUserAddress)}
                         align="center"
                       >
                         {auction.dataDescription}
+                      </TableCell>
+                      <TableCell
+                        align="center"
+                        sx={getFontStyles(auction, currentUserAddress)}
+                      >
+                        <span className={styles.dateCell}>
+                          <span>{getAuctionDate(auction.endTime)}</span>
+                          <small>{getAuctionTime(auction.endTime)}</small>
+                        </span>
                       </TableCell>
                     
 
@@ -1291,7 +1515,7 @@ function AuctionsListPage() {
                 })}
               </TableBody>
             </Table>
-            {searchQuery && !filteredAuctions.length && (
+            {viewIsFiltered && !sortedAuctions.length && (
               <div className={styles.emptySearch}>
                 No auctions match your search.
               </div>
