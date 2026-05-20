@@ -1548,22 +1548,13 @@ function AuctionsListPage() {
         <div className={styles.createAuction}>
           <div className={styles.introduction}>
             <div className={styles.introductionText}>
-              <div
-                style={{
-                  display: "flex",
-                  flexDirection: "row",
-                  gap: "100px",
-                  justifyContent: "center",
-                  alignItems: "center",
-                  width: "1100px",
-                }}
-              >
-                <img src={picSrc} height="320" width="360" alt="metamask" />
-                <div>
+              <div className={styles.heroContent}>
+                <img className={styles.heroImage} src={picSrc} alt="metamask" />
+                <div className={styles.heroCopy}>
                   <p className={styles.introductionTitle}>
                     Welcome to the Blockchain Data Market Platform
                   </p>
-                  <p style={{ fontSize: "larger" }}>
+                  <p className={styles.introductionSubtitle}>
                     Scroll down to see all the open and closed auctions.
                     <br />
                     Do you want to put your data for auction?
