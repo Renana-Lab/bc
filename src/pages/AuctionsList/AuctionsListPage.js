@@ -33,9 +33,9 @@ import Layout from "../../components/Layout";
 import styles from "./auctions.module.scss";
 import picSrc from "./Illustration_Start.png";
 
-const AUCTIONS_PAGE_SIZE = 100;
+const AUCTIONS_PAGE_SIZE = 20;
 const FETCH_CONCURRENCY = 2;
-const BATCH_READ_SIZE = 20;
+const BATCH_READ_SIZE = 10;
 const BATCH_READ_CONCURRENCY = 1;
 const POLL_INTERVAL_MS = 30000;
 const COUNTDOWN_TICK_MS = 1000;

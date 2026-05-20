@@ -42,16 +42,28 @@ const readOnlyWeb3s = RPC_URLS.map(
 );
 
 let nextProviderIndex = 0;
+let injectedProviderRef = null;
+let injectedWeb3 = null;
 
 const hasInjectedProvider = () =>
   typeof window !== "undefined" && Boolean(window.ethereum);
 
-const getInjectedWeb3 = () => new Web3(window.ethereum);
+const getInjectedWeb3 = () => {
+  if (!hasInjectedProvider()) return null;
+
+  if (injectedProviderRef !== window.ethereum || !injectedWeb3) {
+    injectedProviderRef = window.ethereum;
+    injectedWeb3 = new Web3(window.ethereum);
+  }
+
+  return injectedWeb3;
+};
 
 const getProviderSequence = (preferInjected = true, allowInjectedFallback = true) => {
   const providers = [];
-  const injectedProvider = hasInjectedProvider()
-    ? { injected: true, web3: getInjectedWeb3() }
+  const injectedWeb3Instance = getInjectedWeb3();
+  const injectedProvider = injectedWeb3Instance
+    ? { injected: true, web3: injectedWeb3Instance }
     : null;
 
   if (injectedProvider && preferInjected) {
