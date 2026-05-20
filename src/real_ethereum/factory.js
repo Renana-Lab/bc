@@ -1,17 +1,27 @@
 import web3 from "./web3";
 import CampaignFactory from "./build/CampaignFactory.json";
-import FACTORY_ADDRESS from "./factoryAddress";
+import { getActiveFactoryAddress } from "./marketConfig";
 
-const instance = new web3.eth.Contract(
-  CampaignFactory.abi,
-  FACTORY_ADDRESS
+export const getFactoryContract = () =>
+  new web3.eth.Contract(CampaignFactory.abi, getActiveFactoryAddress());
+
+const factory = new Proxy(
+  {},
+  {
+    get(_target, prop) {
+      const instance = getFactoryContract();
+      const value = instance[prop];
+      return typeof value === "function" ? value.bind(instance) : value;
+    },
+  }
 );
 
-export default instance;
+export default factory;
 
 // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
-// WHEN UPDATING THE CONTRACT, ALSO UPDATE THE ADDRESS HERE
-// AND IN THE DEPLOY SCRIPT!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+// Factory addresses are selected through marketConfig.js.
+// Configure REACT_APP_REAL_FACTORY_ADDRESS and REACT_APP_DEV_FACTORY_ADDRESS
+// to switch between real and development markets from the UI.
 
 // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!

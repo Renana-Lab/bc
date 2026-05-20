@@ -25,19 +25,26 @@ import CloseIcon from "@mui/icons-material/Close";
 import { useNavigate, useLocation } from "react-router-dom";
 import { readOnlyBatchCall, readOnlyCall } from "../../real_ethereum/readOnly";
 import { campaignSocket, factorySocket } from "../../real_ethereum/socketFactory";
+import {
+  getActiveFactoryAddress,
+  subscribeToMarketChanges,
+} from "../../real_ethereum/marketConfig";
 import Layout from "../../components/Layout";
 import styles from "./auctions.module.scss";
 import picSrc from "./Illustration_Start.png";
 
 const AUCTIONS_PAGE_SIZE = 100;
-const FETCH_CONCURRENCY = 5;
-const POLL_INTERVAL_MS = 10000;
+const FETCH_CONCURRENCY = 2;
+const BATCH_READ_SIZE = 20;
+const BATCH_READ_CONCURRENCY = 1;
+const POLL_INTERVAL_MS = 30000;
 const COUNTDOWN_TICK_MS = 1000;
 const EVENT_REFRESH_DELAY_MS = 900;
-const CACHE_TTL_MS = 6000;
+const CACHE_TTL_MS = 15000;
 const DEPLOYED_CAMPAIGNS_TTL_MS = 60000;
 const USER_STATUS_TTL_MS = 8000;
-const LOCAL_AUCTIONS_CACHE_KEY = "data-market:auctions:v2";
+const RATE_LIMIT_COOLDOWN_MS = 45000;
+const LOCAL_AUCTIONS_CACHE_PREFIX = "data-market:auctions:v5";
 const LOCAL_AUCTIONS_CACHE_MAX_AGE_MS = 5 * 60 * 1000;
 const AUCTIONS_API_URL = (process.env.REACT_APP_AUCTION_API_URL || "").replace(
   /\/$/,
@@ -62,6 +69,7 @@ let deployedCampaignsCache = {
   updatedAt: 0,
 };
 let auctionListInFlight = null;
+let auctionReadRateLimitedUntil = 0;
 const budgetCache = new Map();
 const budgetInFlight = new Map();
 const userAuctionStatusCache = new Map();
@@ -78,6 +86,22 @@ const normalizeAddressText = (value) =>
   String(value ?? "")
     .toLowerCase()
     .replace(/[^a-f0-9x]+/g, "");
+
+const isRpcRateLimitError = (error) => {
+  const message = JSON.stringify(error?.message || error || "");
+  return (
+    message.includes("429") ||
+    message.includes("Too Many Requests") ||
+    message.includes("Rate limit")
+  );
+};
+
+const markAuctionReadRateLimited = () => {
+  auctionReadRateLimitedUntil = Date.now() + RATE_LIMIT_COOLDOWN_MS;
+};
+
+const isAuctionReadCoolingDown = () =>
+  Date.now() < auctionReadRateLimitedUntil;
 
 const getSearchKind = (rawQuery) => {
   const query = rawQuery.trim().toLowerCase();
@@ -109,14 +133,18 @@ const normalizeAuction = (auction) => ({
   addresses: auction.addresses || [],
   isRefunded: Boolean(auction.isRefunded),
   closed: Boolean(auction.closed),
+  isReadPlaceholder: Boolean(auction.isReadPlaceholder),
 });
+
+const getLocalAuctionsCacheKey = () =>
+  `${LOCAL_AUCTIONS_CACHE_PREFIX}:${getActiveFactoryAddress().toLowerCase()}`;
 
 const readStoredAuctionListCache = () => {
   if (typeof window === "undefined" || !window.localStorage) return null;
 
   try {
     const stored = JSON.parse(
-      window.localStorage.getItem(LOCAL_AUCTIONS_CACHE_KEY) || "null"
+      window.localStorage.getItem(getLocalAuctionsCacheKey()) || "null"
     );
 
     if (
@@ -127,9 +155,12 @@ const readStoredAuctionListCache = () => {
     }
 
     return {
-      data: sortNewestFirst(stored.data.map(normalizeAuction)),
+      data: sortByMarketOrder(stored.data.map(normalizeAuction)),
       total: Number(stored.total || stored.data.length),
-      visibleCount: Number(stored.visibleCount || stored.data.length),
+      visibleCount: Math.min(
+        Number(stored.visibleCount || stored.data.length),
+        stored.data.length
+      ),
       updatedAt: Number(stored.updatedAt || Date.now()),
     };
   } catch (error) {
@@ -141,12 +172,18 @@ const writeStoredAuctionListCache = (cache) => {
   if (typeof window === "undefined" || !window.localStorage) return;
 
   try {
+    const persistedData = cache.data
+      .filter((auction) => !auction.isReadPlaceholder)
+      .slice(0, 100);
+
+    if (!persistedData.length) return;
+
     window.localStorage.setItem(
-      LOCAL_AUCTIONS_CACHE_KEY,
+      getLocalAuctionsCacheKey(),
       JSON.stringify({
-        data: cache.data.slice(0, 100),
+        data: persistedData,
         total: cache.total,
-        visibleCount: cache.visibleCount,
+        visibleCount: Math.min(cache.visibleCount, persistedData.length),
         updatedAt: cache.updatedAt,
       })
     );
@@ -155,29 +192,95 @@ const writeStoredAuctionListCache = (cache) => {
   }
 };
 
-const sortNewestFirst = (auctions) =>
+const sortByMarketOrder = (auctions) =>
   [...auctions].sort((a, b) => {
+    const aHasDate = Number(a.endTime) > 0;
+    const bHasDate = Number(b.endTime) > 0;
+    if (aHasDate !== bHasDate) return aHasDate ? -1 : 1;
+    if (Number(b.endTime) !== Number(a.endTime)) {
+      return Number(b.endTime) - Number(a.endTime);
+    }
     if (b.listOrder !== a.listOrder) return b.listOrder - a.listOrder;
     return String(b.address).localeCompare(String(a.address));
   });
 
 const cacheAuctionList = ({ data, total, visibleCount, updatedAt }) => {
-  const orderedData = sortNewestFirst(data || []);
+  const orderedData = sortByMarketOrder(data || []);
+  const hasPlaceholders = orderedData.some((auction) => auction.isReadPlaceholder);
 
   auctionListCache = {
     data: orderedData,
     total: Number(total ?? orderedData.length),
     visibleCount: Number(visibleCount ?? orderedData.length),
     updatedAt: updatedAt || Date.now(),
+    partial: hasPlaceholders,
   };
 
   writeStoredAuctionListCache(auctionListCache);
   return auctionListCache;
 };
 
+const createAuctionPlaceholder = (address, listOrder) =>
+  normalizeAuction({
+    address,
+    listOrder,
+    minimumContribution: "",
+    balance: "",
+    approversCount: "",
+    manager: "",
+    highestBid: "",
+    dataForSell: "",
+    dataDescription: "Loading auction...",
+    highestBidder: "",
+    addresses: [],
+    endTime: 0,
+    isRefunded: false,
+    closed: false,
+    isReadPlaceholder: true,
+  });
+
+const mergeReadAuctionsWithCache = (
+  visibleAuctions,
+  firstVisibleIndex,
+  auctionData
+) => {
+  const cachedByAddress = new Map(
+    auctionListCache.data.map((auction) => [
+      auction.address.toLowerCase(),
+      auction,
+    ])
+  );
+
+  return visibleAuctions.map((address, index) => {
+    const readAuction = auctionData[index];
+    if (readAuction) return readAuction;
+
+    const cachedAuction = cachedByAddress.get(address.toLowerCase());
+    if (cachedAuction && !cachedAuction.isReadPlaceholder) {
+      return normalizeAuction({
+        ...cachedAuction,
+        listOrder: firstVisibleIndex + index,
+      });
+    }
+
+    return createAuctionPlaceholder(address, firstVisibleIndex + index);
+  });
+};
+
 const invalidateAuctionCaches = () => {
-  auctionListCache.updatedAt = 0;
-  deployedCampaignsCache.updatedAt = 0;
+  auctionListCache = {
+    data: [],
+    total: 0,
+    visibleCount: 0,
+    updatedAt: 0,
+  };
+  deployedCampaignsCache = {
+    data: [],
+    updatedAt: 0,
+  };
+  auctionListInFlight = null;
+  userAuctionStatusCache.clear();
+  userAuctionStatusInFlight = null;
 };
 
 const getDeployedCampaigns = async () => {
@@ -210,7 +313,7 @@ export const getRemainingBudget = async (userAddress) => {
 
   if (!account) return null;
 
-  const normalizedAccount = account.toLowerCase();
+  const normalizedAccount = `${getActiveFactoryAddress().toLowerCase()}:${account.toLowerCase()}`;
   const cached = budgetCache.get(normalizedAccount);
   if (cached && Date.now() - cached.updatedAt < CACHE_TTL_MS) {
     return cached.budget;
@@ -262,12 +365,16 @@ const getCachedAuctions = (visibleAuctionCount) => {
     auctionListCache.data.length &&
     auctionListCache.visibleCount >= visibleAuctionCount
   ) {
-    const orderedData = sortNewestFirst(auctionListCache.data);
+    const orderedData = sortByMarketOrder(auctionListCache.data);
+    const data = orderedData.slice(0, visibleAuctionCount);
+    const hasPlaceholders = data.some((auction) => auction.isReadPlaceholder);
 
     return {
-      data: orderedData.slice(0, visibleAuctionCount),
+      data,
       total: auctionListCache.total,
-      fresh: Date.now() - auctionListCache.updatedAt < CACHE_TTL_MS,
+      fresh:
+        !hasPlaceholders &&
+        Date.now() - auctionListCache.updatedAt < CACHE_TTL_MS,
     };
   }
 
@@ -288,6 +395,14 @@ const readAuctionsFromApi = async (visibleAuctionCount, currentUserAddress) => {
   const payload = await response.json();
   const auctions = payload.data || payload.auctions || [];
   const total = Number(payload.total ?? payload.count ?? auctions.length);
+  const expectedCount = Math.min(visibleAuctionCount, total);
+
+  if (auctions.length < expectedCount) {
+    throw new Error(
+      `Auction API returned a partial page (${auctions.length}/${expectedCount})`
+    );
+  }
+
   const firstVisibleIndex = Math.max(0, total - auctions.length);
   const data = auctions.map((auction, index) =>
     normalizeAuction({
@@ -343,6 +458,11 @@ const readAuctionFromChain = async (address, currentUserAddress, listOrder = 0) 
       closed: details[8],
     });
   } catch (error) {
+    if (isRpcRateLimitError(error)) {
+      markAuctionReadRateLimited();
+      throw error;
+    }
+
     const details = await readOnlyCall(({ campaign }) =>
       campaign(address).methods.getSummary()
     );
@@ -387,59 +507,150 @@ const readAuctionFromChain = async (address, currentUserAddress, listOrder = 0) 
   }
 };
 
-const readLightAuctionsFromChain = async (
-  visibleAuctions,
-  firstVisibleIndex
-) => {
-  const summaryResults = await readOnlyBatchCall(({ campaign }) =>
-    visibleAuctions.map((address) => campaign(address).methods.getListSummary())
-  );
+const mapSummaryResultToAuction = (result, address, listOrder) => {
+  if (!result || result.status !== "fulfilled") return null;
 
-  return summaryResults.map((result, index) => {
-    if (result.status !== "fulfilled") return null;
+  const details = result.value;
 
-    const address = visibleAuctions[index];
-    const details = result.value;
-
-    return normalizeAuction({
-      address,
-      listOrder: firstVisibleIndex + index,
-      minimumContribution: details[0],
-      balance: details[1],
-      approversCount: details[2],
-      manager: details[3],
-      highestBid: details[4],
-      dataForSell: "",
-      dataDescription: details[5],
-      highestBidder: details[6],
-      addresses: [],
-      endTime: Number(details[7]) * 1000,
-      isRefunded: false,
-      closed: details[8],
-    });
+  return normalizeAuction({
+    address,
+    listOrder,
+    minimumContribution: details[0],
+    balance: details[1],
+    approversCount: details[2],
+    manager: details[3],
+    highestBid: details[4],
+    dataForSell: "",
+    dataDescription: details[5],
+    highestBidder: details[6],
+    addresses: [],
+    endTime: Number(details[7]) * 1000,
+    isRefunded: false,
+    closed: details[8],
   });
 };
 
-const readAuctionsFromChain = async (visibleAuctionCount) => {
+const readLightAuctionsFromChain = async (
+  visibleAuctions,
+  firstVisibleIndex,
+  onProgress
+) => {
+  const summaryResults = [];
+  const chunks = [];
+
+  for (let offset = 0; offset < visibleAuctions.length; offset += BATCH_READ_SIZE) {
+    chunks.push({
+      offset,
+      addresses: visibleAuctions.slice(offset, offset + BATCH_READ_SIZE),
+    });
+  }
+
+  const newestFirstChunks = chunks.reverse();
+  const readChunk = async ({ offset, addresses }) => {
+    if (isAuctionReadCoolingDown()) {
+      return {
+        offset,
+        results: addresses.map(() => ({
+          status: "rejected",
+          reason: new Error("RPC read cooldown active"),
+        })),
+      };
+    }
+
+    try {
+      const results = await readOnlyBatchCall(({ campaign }) =>
+        addresses.map((address) => campaign(address).methods.getListSummary())
+      );
+
+      return { offset, results };
+    } catch (error) {
+      if (isRpcRateLimitError(error)) {
+        markAuctionReadRateLimited();
+      }
+
+      console.warn("Auction summary batch failed:", error);
+      return {
+        offset,
+        results: addresses.map(() => ({ status: "rejected", reason: error })),
+      };
+    }
+  };
+  const applyChunkRead = ({ offset, results }) => {
+    results.forEach((result, chunkIndex) => {
+      summaryResults[offset + chunkIndex] = result;
+    });
+
+    onProgress?.(
+      summaryResults.map((result, index) =>
+        mapSummaryResultToAuction(
+          result,
+          visibleAuctions[index],
+          firstVisibleIndex + index
+        )
+      )
+    );
+  };
+
+  const [latestChunk, ...olderChunks] = newestFirstChunks;
+
+  if (latestChunk) {
+    applyChunkRead(await readChunk(latestChunk));
+  }
+
+  const olderChunkReads = await mapWithConcurrency(
+    olderChunks,
+    BATCH_READ_CONCURRENCY,
+    readChunk
+  );
+
+  olderChunkReads.forEach(applyChunkRead);
+
+  return summaryResults.map((result, index) =>
+    mapSummaryResultToAuction(
+      result,
+      visibleAuctions[index],
+      firstVisibleIndex + index
+    )
+  );
+};
+
+const readAuctionsFromChain = async (visibleAuctionCount, onProgress) => {
   const auctions = await getDeployedCampaigns();
   const firstVisibleIndex = Math.max(0, auctions.length - visibleAuctionCount);
   const visibleAuctions = auctions.slice(firstVisibleIndex);
+  const publishProgress = (partialAuctionData) => {
+    const stableAuctionData = mergeReadAuctionsWithCache(
+      visibleAuctions,
+      firstVisibleIndex,
+      partialAuctionData
+    );
+
+    onProgress?.(
+      cacheAuctionList({
+        data: stableAuctionData,
+        total: auctions.length,
+        visibleCount: visibleAuctions.length,
+        updatedAt: Date.now(),
+      })
+    );
+  };
 
   let auctionData;
 
   try {
     auctionData = await readLightAuctionsFromChain(
       visibleAuctions,
-      firstVisibleIndex
+      firstVisibleIndex,
+      publishProgress
     );
 
     const missingIndexes = auctionData
       .map((auction, index) => (auction ? null : index))
       .filter((index) => index !== null);
 
-    if (missingIndexes.length) {
+    if (missingIndexes.length && !isAuctionReadCoolingDown()) {
       const fallbackAuctions = await mapWithConcurrency(
-        missingIndexes,
+        [...missingIndexes].sort((a, b) => b - a),
         FETCH_CONCURRENCY,
         async (index) => {
           const address = visibleAuctions[index];
@@ -454,7 +665,11 @@ const readAuctionsFromChain = async (visibleAuctionCount) => {
               ),
             };
           } catch (error) {
-            console.warn("Skipping auction after RPC read failed:", address, error);
+            if (isRpcRateLimitError(error)) {
+              markAuctionReadRateLimited();
+            } else {
+              console.warn("Skipping auction after RPC read failed:", address, error);
+            }
             return { index, auction: null };
           }
         }
@@ -463,31 +678,53 @@ const readAuctionsFromChain = async (visibleAuctionCount) => {
       fallbackAuctions.forEach(({ index, auction }) => {
         auctionData[index] = auction;
       });
+
+      publishProgress(auctionData);
     }
   } catch (error) {
-    console.warn("Batched auction read failed, falling back:", error);
-    auctionData = await mapWithConcurrency(
-      visibleAuctions,
-      FETCH_CONCURRENCY,
-      async (address, index) => {
-        try {
-          return await readAuctionFromChain(
-            address,
-            "",
-            firstVisibleIndex + index
-          );
-        } catch (readError) {
-          console.warn("Skipping auction after RPC read failed:", address, readError);
-          return null;
+    if (isRpcRateLimitError(error)) {
+      markAuctionReadRateLimited();
+      auctionData = [];
+    } else {
+      console.warn("Batched auction read failed, falling back:", error);
+      auctionData = await mapWithConcurrency(
+        visibleAuctions.map((address, index) => ({ address, index })).reverse(),
+        FETCH_CONCURRENCY,
+        async ({ address, index }) => {
+          try {
+            return await readAuctionFromChain(
+              address,
+              "",
+              firstVisibleIndex + index
+            );
+          } catch (readError) {
+            if (isRpcRateLimitError(readError)) {
+              markAuctionReadRateLimited();
+            } else {
+              console.warn(
+                "Skipping auction after RPC read failed:",
+                address,
+                readError
+              );
+            }
+            return null;
+          }
         }
-      }
-    );
+      );
+      auctionData = auctionData.reverse();
+    }
   }
 
+  const stableAuctionData = mergeReadAuctionsWithCache(
+    visibleAuctions,
+    firstVisibleIndex,
+    auctionData
+  );
+
   return cacheAuctionList({
-    data: auctionData.filter(Boolean),
+    data: stableAuctionData,
     total: auctions.length,
-    visibleCount: visibleAuctionCount,
+    visibleCount: visibleAuctions.length,
     updatedAt: Date.now(),
   });
 };
@@ -546,6 +783,7 @@ const readUserStatusesForAuctions = async (auctions, userAddress) => {
   });
 
   if (!misses.length) return statuses;
+  if (isAuctionReadCoolingDown()) return statuses;
 
   if (userAuctionStatusInFlight) {
     await userAuctionStatusInFlight.catch(() => {});
@@ -611,12 +849,14 @@ function AuctionsListPage() {
   const [visibleAuctionCount, setVisibleAuctionCount] =
     useState(AUCTIONS_PAGE_SIZE);
   const [totalAuctionCount, setTotalAuctionCount] = useState(0);
+  const [activeFactoryAddress, setActiveFactoryAddress] = useState(
+    getActiveFactoryAddress()
+  );
   const fetchAuctionsListRef = useRef(null);
   const isFetchingRef = useRef(false);
   const pendingFetchRef = useRef(false);
   const requestIdRef = useRef(0);
   const visibleAuctionCountRef = useRef(AUCTIONS_PAGE_SIZE);
-  const normalAuctionOrderRef = useRef([]);
   const didMountVisibleCountRef = useRef(false);
   const eventRefreshTimerRef = useRef(null);
   const lastEventRefreshRef = useRef(0);
@@ -642,50 +882,7 @@ function AuctionsListPage() {
   }, []);
 
   const keepNormalAuctionOrder = useCallback((nextAuctions, limit) => {
-    const incomingAuctions = sortNewestFirst(nextAuctions || []);
-    const incomingByAddress = new Map(
-      incomingAuctions.map((auction) => [auction.address.toLowerCase(), auction])
-    );
-    const incomingAddresses = incomingAuctions.map((auction) =>
-      auction.address.toLowerCase()
-    );
-
-    if (!normalAuctionOrderRef.current.length) {
-      normalAuctionOrderRef.current = incomingAddresses.slice(0, limit);
-      return normalAuctionOrderRef.current
-        .map((address) => incomingByAddress.get(address))
-        .filter(Boolean);
-    }
-
-    const existingOrder = normalAuctionOrderRef.current.filter((address) =>
-      incomingByAddress.has(address)
-    );
-    const existingSet = new Set(existingOrder);
-    const highestKnownListOrder = existingOrder.reduce((highest, address) => {
-      const auction = incomingByAddress.get(address);
-      return Math.max(highest, Number(auction?.listOrder ?? -1));
-    }, -1);
-
-    const newAddresses = incomingAddresses.filter(
-      (address) => !existingSet.has(address)
-    );
-    const newerAddresses = newAddresses.filter((address) => {
-      const auction = incomingByAddress.get(address);
-      return Number(auction?.listOrder ?? -1) > highestKnownListOrder;
-    });
-    const olderAddresses = newAddresses.filter(
-      (address) => !newerAddresses.includes(address)
-    );
-
-    normalAuctionOrderRef.current = [
-      ...newerAddresses,
-      ...existingOrder,
-      ...olderAddresses,
-    ].slice(0, limit);
-
-    return normalAuctionOrderRef.current
-      .map((address) => incomingByAddress.get(address))
-      .filter(Boolean);
+    return sortByMarketOrder(nextAuctions || []).slice(0, limit);
   }, []);
 
   const fetchAuctionsList = useCallback(async () => {
@@ -746,7 +943,20 @@ function AuctionsListPage() {
             }
           }
 
-          return readAuctionsFromChain(visibleCountForRequest);
+          return readAuctionsFromChain(visibleCountForRequest, (snapshot) => {
+            if (
+              requestId === requestIdRef.current &&
+              visibleCountForRequest === visibleAuctionCountRef.current
+            ) {
+              setAuctionsList(
+                keepNormalAuctionOrder(snapshot.data, visibleCountForRequest)
+              );
+              setTotalAuctionCount(snapshot.total);
+              setLastUpdated(snapshot.updatedAt);
+              setLoading(false);
+              setNetworkSlow(false);
+            }
+          });
         })().finally(() => {
           if (auctionListInFlight?.key === requestKey) {
             auctionListInFlight = null;
@@ -793,6 +1003,21 @@ function AuctionsListPage() {
   useEffect(() => {
     fetchAuctionsListRef.current = fetchAuctionsList;
   }, [fetchAuctionsList]);
+
+  useEffect(() => {
+    return subscribeToMarketChanges(() => {
+      invalidateAuctionCaches();
+      setActiveFactoryAddress(getActiveFactoryAddress());
+      setAuctionsList([]);
+      setTotalAuctionCount(0);
+      setVisibleAuctionCount(AUCTIONS_PAGE_SIZE);
+      setLastUpdated(null);
+      setLoading(true);
+      setRefreshing(false);
+      setNetworkSlow(false);
+      window.setTimeout(() => fetchAuctionsListRef.current?.(), 0);
+    });
+  }, []);
 
   useEffect(() => {
     visibleAuctionCountRef.current = visibleAuctionCount;
@@ -870,7 +1095,9 @@ function AuctionsListPage() {
     if (!currentUserAddress || !auctionsList.length) return undefined;
 
     let cancelled = false;
-    const visibleAuctions = auctionsList.slice(0, visibleAuctionCount);
+    const visibleAuctions = auctionsList
+      .slice(0, visibleAuctionCount)
+      .filter((auction) => !auction.isReadPlaceholder);
 
     readUserStatusesForAuctions(visibleAuctions, currentUserAddress)
       .then((statuses) => {
@@ -916,7 +1143,7 @@ function AuctionsListPage() {
       window.clearTimeout(eventRefreshTimerRef.current);
       createdEvent?.unsubscribe?.();
     };
-  }, [scheduleEventRefresh]);
+  }, [activeFactoryAddress, scheduleEventRefresh]);
 
   const handleManualRefresh = useCallback(() => {
     invalidateAuctionCaches();
@@ -962,6 +1189,8 @@ function AuctionsListPage() {
   }, [bidSubscriptionKey, scheduleEventRefresh]);
 
   const getTimeLeft = (endTime) => {
+    if (!Number(endTime)) return "";
+
     const millisecondsLeft = Number(endTime) - now;
     if (millisecondsLeft <= 0) return "Closed";
 
@@ -980,7 +1209,10 @@ function AuctionsListPage() {
   };
 
   const getAuctionDate = (endTime) => {
-    const date = new Date(Number(endTime));
+    const timestamp = Number(endTime);
+    if (!timestamp) return "";
+
+    const date = new Date(timestamp);
 
     if (Number.isNaN(date.getTime())) return "";
 
@@ -992,7 +1224,10 @@ function AuctionsListPage() {
   };
 
   const getAuctionTime = (endTime) => {
-    const date = new Date(Number(endTime));
+    const timestamp = Number(endTime);
+    if (!timestamp) return "";
+
+    const date = new Date(timestamp);
 
     if (Number.isNaN(date.getTime())) return "";
 
@@ -1038,7 +1273,10 @@ function AuctionsListPage() {
   };
 
   const isUserManager = (auction, currentUserAddress) => {
-    return currentUserAddress === auction.manager.toLowerCase();
+    return (
+      Boolean(currentUserAddress) &&
+      currentUserAddress === auction.manager?.toLowerCase?.()
+    );
   };
 
   const getRowStyles = (hasWon, isOpen, isRefunded) => ({
@@ -1076,6 +1314,8 @@ function AuctionsListPage() {
   });
 
   const getRefundStatus = (auction, userParticipated, userWon, auctionOpen) => {
+    if (auction.isReadPlaceholder) return "";
+
     const isManager = isUserManager(auction, currentUserAddress);
 
     if (userParticipated && !userWon && !auctionOpen) {
@@ -1305,8 +1545,13 @@ function AuctionsListPage() {
 
         {loading ? (
           <div className={styles.loadingContainer}>
-            <CircularProgress size={50} />
-            <p>Loading auctions...</p>
+            <div className={styles.auctionLoader} aria-label="Loading auctions">
+              <span />
+              <span />
+              <span />
+            </div>
+            <p className={styles.loadingTitle}>Finding the latest auctions</p>
+            <p className={styles.loadingHint}>Newest listings appear first.</p>
           </div>
         ) : (
           <TableContainer
@@ -1445,7 +1690,9 @@ function AuctionsListPage() {
                         sx={getFontStyles(auction, currentUserAddress)}
                         align="center"
                       >
-                        {auction.dataDescription}
+                        {auction.isReadPlaceholder
+                          ? "Loading auction..."
+                          : auction.dataDescription}
                       </TableCell>
                       <TableCell
                         align="center"
@@ -1470,13 +1717,13 @@ function AuctionsListPage() {
                         align="center"
                         sx={getFontStyles(auction, currentUserAddress)}
                       >
-                        {auction.highestBid}
+                        {auction.isReadPlaceholder ? "" : auction.highestBid}
                       </TableCell>
                       <TableCell
                         align="center"
                         sx={getFontStyles(auction, currentUserAddress)}
                       >
-                        {auction.approversCount}
+                        {auction.isReadPlaceholder ? "" : auction.approversCount}
                       </TableCell>
                       <TableCell
                         sx={getFontStyles(auction, currentUserAddress)}

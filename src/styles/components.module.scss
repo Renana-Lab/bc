@@ -308,6 +308,43 @@ $tooltip-color: #3f50b5;
   transition: opacity 160ms ease;
 }
 
+.marketSwitch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.2rem;
+  border: 1px solid rgba(240, 240, 240, 0.14);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+
+  button {
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: rgba(255, 255, 255, 0.72);
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.82rem;
+    font-weight: 700;
+    padding: 0.32rem 0.7rem;
+    transition:
+      background-color 150ms ease,
+      color 150ms ease,
+      box-shadow 150ms ease;
+
+    &:hover {
+      color: #ffffff;
+      background: rgba(255, 255, 255, 0.08);
+    }
+  }
+}
+
+.marketSwitchActive {
+  background: #f0d070 !important;
+  color: #103090 !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.16);
+}
+
 // -------------------------
 // Tooltip
 // -------------------------

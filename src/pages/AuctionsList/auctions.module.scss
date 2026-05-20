@@ -68,13 +68,79 @@
 
 .loadingContainer {
   box-shadow: rgba(100, 100, 111, 0.2) 0px 7px 29px 0px;
-  background-color: white;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(250, 250, 255, 0.96));
   border-radius: 30px;
-  padding: 30px;
+  padding: 34px 42px;
   margin: 0 auto;
   text-align: center;
-  font-size: larger;
+  min-width: min(420px, 92vw);
   animation: softFadeUp 240ms ease both;
+}
+
+.auctionLoader {
+  display: grid;
+  gap: 0.55rem;
+  margin: 0 auto 1.1rem;
+  width: min(260px, 70vw);
+
+  span {
+    display: block;
+    height: 0.72rem;
+    border-radius: 999px;
+    background:
+      linear-gradient(
+        90deg,
+        rgba(16, 48, 144, 0.1),
+        rgba(144, 144, 208, 0.28),
+        rgba(16, 48, 144, 0.1)
+      );
+    background-size: 220% 100%;
+    animation: auctionLoaderSweep 1.35s ease-in-out infinite;
+  }
+
+  span:nth-child(1) {
+    width: 100%;
+  }
+
+  span:nth-child(2) {
+    width: 78%;
+    animation-delay: 120ms;
+  }
+
+  span:nth-child(3) {
+    width: 56%;
+    animation-delay: 240ms;
+  }
+}
+
+.loadingTitle {
+  color: #0d0d4e;
+  font-size: 1rem;
+  font-weight: 700;
+  margin: 0;
+}
+
+.loadingHint {
+  color: rgba(13, 13, 78, 0.58);
+  font-size: 0.88rem;
+  margin: 0.35rem 0 0;
+}
+
+@keyframes auctionLoaderSweep {
+  0% {
+    background-position: 120% 0;
+    opacity: 0.6;
+  }
+
+  50% {
+    opacity: 1;
+  }
+
+  100% {
+    background-position: -120% 0;
+    opacity: 0.6;
+  }
 }
 
 .searchBar {

@@ -1,7 +1,7 @@
 import Web3 from "web3";
 import CampaignFactory from "./build/CampaignFactory.json";
 import Campaign from "./build/Campaign.json";
-import FACTORY_ADDRESS from "./factoryAddress";
+import { getActiveFactoryAddress } from "./marketConfig";
 
 const DEFAULT_RPC_URLS = [
   "https://ethereum-sepolia-rpc.publicnode.com",
@@ -19,13 +19,17 @@ const RPC_URLS = (
   .map((url) => url.trim())
   .filter(Boolean);
 
-const RETRY_DELAY_MS = 900;
+const RETRY_DELAY_MS = 2500;
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const isRateLimitError = (error) => {
   const message = JSON.stringify(error?.message || error || "");
-  return message.includes("429") || message.includes("Too Many Requests");
+  return (
+    message.includes("429") ||
+    message.includes("Too Many Requests") ||
+    message.includes("Rate limit")
+  );
 };
 
 const readOnlyWeb3s = RPC_URLS.map(
@@ -39,30 +43,66 @@ const readOnlyWeb3s = RPC_URLS.map(
 
 let nextProviderIndex = 0;
 
-const getWeb3 = (offset = 0) =>
-  readOnlyWeb3s[(nextProviderIndex + offset) % readOnlyWeb3s.length];
+const hasInjectedProvider = () =>
+  typeof window !== "undefined" && Boolean(window.ethereum);
+
+const getInjectedWeb3 = () => new Web3(window.ethereum);
+
+const getProviderCount = () => RPC_URLS.length + (hasInjectedProvider() ? 1 : 0);
+
+const getProvider = (offset = 0) => {
+  if (hasInjectedProvider() && offset === 0) {
+    return {
+      injected: true,
+      web3: getInjectedWeb3(),
+    };
+  }
+
+  const httpOffset = hasInjectedProvider() ? offset - 1 : offset;
+
+  return {
+    injected: false,
+    web3: readOnlyWeb3s[
+      (nextProviderIndex + Math.max(0, httpOffset)) % readOnlyWeb3s.length
+    ],
+  };
+};
+
+const getWeb3 = (offset = 0) => getProvider(offset).web3;
 
 const createFactory = (web3Instance) =>
-  new web3Instance.eth.Contract(CampaignFactory.abi, FACTORY_ADDRESS);
+  new web3Instance.eth.Contract(CampaignFactory.abi, getActiveFactoryAddress());
 
 const createCampaign = (web3Instance, address) =>
   new web3Instance.eth.Contract(Campaign.abi, address);
 
-const readOnlyWeb3 = getWeb3();
-
-export const factoryReadOnly = new readOnlyWeb3.eth.Contract(
-  CampaignFactory.abi,
-  FACTORY_ADDRESS
+export const factoryReadOnly = new Proxy(
+  {},
+  {
+    get(_target, prop) {
+      const web3Instance = getWeb3();
+      const instance = new web3Instance.eth.Contract(
+        CampaignFactory.abi,
+        getActiveFactoryAddress()
+      );
+      const value = instance[prop];
+      return typeof value === "function" ? value.bind(instance) : value;
+    },
+  }
 );
 
-export const campaignReadOnly = (address) =>
-  new readOnlyWeb3.eth.Contract(Campaign.abi, address);
+export const campaignReadOnly = (address) => {
+  const web3Instance = getWeb3();
+  return new web3Instance.eth.Contract(Campaign.abi, address);
+};
 
-export const readOnlyCall = async (createCall, retries = RPC_URLS.length + 1) => {
+export const readOnlyCall = async (createCall, retries) => {
   let lastError;
+  const maxAttempts = retries ?? getProviderCount();
 
-  for (let attempt = 0; attempt < retries; attempt += 1) {
-    const web3Instance = getWeb3(attempt);
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const provider = getProvider(attempt);
+    const web3Instance = provider.web3;
 
     try {
       return await createCall({
@@ -71,12 +111,16 @@ export const readOnlyCall = async (createCall, retries = RPC_URLS.length + 1) =>
       }).call();
     } catch (error) {
       lastError = error;
+      const shouldTryNextProvider = provider.injected || isRateLimitError(error);
 
-      if (!isRateLimitError(error) || attempt === retries - 1) {
+      if (!shouldTryNextProvider || attempt === maxAttempts - 1) {
         throw error;
       }
 
-      nextProviderIndex = (nextProviderIndex + 1) % readOnlyWeb3s.length;
+      if (!provider.injected) {
+        nextProviderIndex = (nextProviderIndex + 1) % readOnlyWeb3s.length;
+      }
+
       await wait(RETRY_DELAY_MS * (attempt + 1));
     }
   }
@@ -86,12 +130,14 @@ export const readOnlyCall = async (createCall, retries = RPC_URLS.length + 1) =>
 
 export const readOnlyBatchCall = async (
   createCalls,
-  retries = RPC_URLS.length + 1
+  retries
 ) => {
   let lastError;
+  const maxAttempts = retries ?? getProviderCount();
 
-  for (let attempt = 0; attempt < retries; attempt += 1) {
-    const web3Instance = getWeb3(attempt);
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const provider = getProvider(attempt);
+    const web3Instance = provider.web3;
 
     try {
       const calls = createCalls({
@@ -142,23 +188,33 @@ export const readOnlyBatchCall = async (
         (result) =>
           result?.status === "rejected" && isRateLimitError(result.reason)
       );
+      const hasInjectedProviderFailure =
+        provider.injected &&
+        results.some((result) => result?.status === "rejected");
 
-      if (rateLimited && attempt < retries - 1) {
-        throw results.find(
+      if ((rateLimited || hasInjectedProviderFailure) && attempt < maxAttempts - 1) {
+        throw (
+          results.find(
           (result) =>
-            result?.status === "rejected" && isRateLimitError(result.reason)
-        ).reason;
+            result?.status === "rejected" &&
+            (isRateLimitError(result.reason) || hasInjectedProviderFailure)
+          )?.reason || new Error("Injected provider batch read failed")
+        );
       }
 
       return results;
     } catch (error) {
       lastError = error;
+      const shouldTryNextProvider = provider.injected || isRateLimitError(error);
 
-      if (!isRateLimitError(error) || attempt === retries - 1) {
+      if (!shouldTryNextProvider || attempt === maxAttempts - 1) {
         throw error;
       }
 
-      nextProviderIndex = (nextProviderIndex + 1) % readOnlyWeb3s.length;
+      if (!provider.injected) {
+        nextProviderIndex = (nextProviderIndex + 1) % readOnlyWeb3s.length;
+      }
+
       await wait(RETRY_DELAY_MS * (attempt + 1));
     }
   }
@@ -166,4 +222,4 @@ export const readOnlyBatchCall = async (
   throw lastError;
 };
 
-export default readOnlyWeb3;
+export default getWeb3();

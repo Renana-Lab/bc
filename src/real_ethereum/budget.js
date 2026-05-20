@@ -1,8 +1,14 @@
 import { readOnlyCall } from "./readOnly";
+import { getActiveFactoryAddress, subscribeToMarketChanges } from "./marketConfig";
 
 const CACHE_TTL_MS = 15000;
 const budgetCache = new Map();
 const budgetInFlight = new Map();
+
+subscribeToMarketChanges(() => {
+  budgetCache.clear();
+  budgetInFlight.clear();
+});
 
 export const getDefaultBudget = async () => {
   if (!window.ethereum) return undefined;
@@ -12,7 +18,7 @@ export const getDefaultBudget = async () => {
 
   if (!userAddress) return undefined;
 
-  const key = userAddress.toLowerCase();
+  const key = `${getActiveFactoryAddress().toLowerCase()}:${userAddress.toLowerCase()}`;
   const cached = budgetCache.get(key);
 
   if (cached && Date.now() - cached.updatedAt < CACHE_TTL_MS) {

@@ -1,3 +1,4 @@
+/* eslint-env es2020 */
 import React, { useCallback, useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import Layout from "../../components/Layout";
@@ -16,6 +17,72 @@ import toast from "react-hot-toast";
 import picSrc from "./Illustration_Create.png";
 import "./new.module.scss";
 
+const isWholeNumber = (value) => /^\d+$/.test(String(value || ""));
+const isPositiveWholeNumber = (value) =>
+  isWholeNumber(value) && BigInt(value) > 0n;
+
+const getAuctionValidationError = (auction, label = "Auction") => {
+  if (!isPositiveWholeNumber(auction.minimumContribution)) {
+    return `${label}: minimum bid must be a positive whole number.`;
+  }
+
+  if (
+    !isWholeNumber(auction.auctionDuration) ||
+    Number(auction.auctionDuration) < 1 ||
+    Number(auction.auctionDuration) > 30
+  ) {
+    return `${label}: duration must be a whole number between 1 and 30.`;
+  }
+
+  if (!auction.dataForSell.trim()) {
+    return `${label}: data for sale cannot be empty.`;
+  }
+
+  if (!auction.dataDescription.trim()) {
+    return `${label}: description cannot be empty.`;
+  }
+
+  return "";
+};
+
+const validateAuctionInput = (auction, label = "Auction") => {
+  const error = getAuctionValidationError(auction, label);
+  if (error) {
+    toast.error(error);
+    return false;
+  }
+  return true;
+};
+
+const requestConnectedAccount = async () => {
+  const accounts = window.ethereum
+    ? await window.ethereum.request({ method: "eth_requestAccounts" })
+    : await web3.eth.getAccounts();
+  const account = accounts?.[0];
+
+  if (!account) {
+    throw new Error("No wallet account is connected.");
+  }
+
+  return account;
+};
+
+const getTransactionErrorMessage = (err) => {
+  const message = JSON.stringify(err?.message || err || "");
+
+  if (message.includes("replacement transaction underpriced")) {
+    return "MetaMask has a pending transaction. Wait for it, or speed/cancel it in Activity.";
+  }
+  if (
+    message.includes("User denied") ||
+    message.includes("User rejected") ||
+    message.includes("4001")
+  ) {
+    return "Transaction rejected in MetaMask.";
+  }
+  return "Transaction failed. Please try again.";
+};
+
 function NewAuctionPage() {
   const [formData, setFormData] = useState({
     minimumContribution: "",
@@ -33,6 +100,7 @@ function NewAuctionPage() {
       navigate("/"); // Redirect away if no MetaMask
       return;
     }
+
   }, [navigate]);
 
   const handleChange = (event) => {
@@ -51,42 +119,7 @@ function NewAuctionPage() {
   };
 
   const validateForm = useCallback(() => {
-    const isInt = (val) => Number.isInteger(Number(val));
-
-    if (
-      !formData.minimumContribution ||
-      isNaN(formData.minimumContribution) ||
-      Number(formData.minimumContribution) <= 0 ||
-      !isInt(formData.minimumContribution)
-    ) {
-      toast.error("⚠️ Minimum contribution must be a positive whole number.");
-      return false;
-    }
-
-    if (
-      !formData.auctionDuration ||
-      isNaN(formData.auctionDuration) ||
-      formData.auctionDuration < 1 ||
-      formData.auctionDuration > 30 ||
-      !isInt(formData.auctionDuration)
-    ) {
-      toast.error(
-        "⚠️ Auction duration must be a whole number between 1 and 30."
-      );
-      return false;
-    }
-
-    if (!formData.dataForSell.trim()) {
-      toast.error("⚠️ Data for sale cannot be empty.");
-      return false;
-    }
-
-    if (!formData.dataDescription.trim()) {
-      toast.error("⚠️ Data description cannot be empty.");
-      return false;
-    }
-
-    return true;
+    return validateAuctionInput(formData, "Auction");
   }, [formData]);
 
   const handleSubmit = useCallback(
@@ -100,7 +133,7 @@ function NewAuctionPage() {
       const toastId = toast.loading("⏳ Creating auction...");
 
       try {
-        const accounts = await web3.eth.getAccounts();
+        const account = await requestConnectedAccount();
         await factory.methods
           .createCampaign(
             formData.minimumContribution,
@@ -108,21 +141,13 @@ function NewAuctionPage() {
             formData.dataDescription,
             formData.auctionDuration
           )
-          .send({ from: accounts[0] });
+          .send({ from: account });
 
         toast.success("🎉 Auction created successfully!", { id: toastId });
         navigate("/auctions-list");
       } catch (err) {
         console.error("Auction creation failed:", err);
-        const message = JSON.stringify(err?.message || err || "");
-        const isUnderpriced = message.includes("replacement transaction underpriced");
-
-        toast.error(
-          isUnderpriced
-            ? "MetaMask already has a pending transaction. Wait for it, or cancel/speed it up in MetaMask Activity."
-            : "Auction creation failed. Please try again.",
-          { id: toastId }
-        );
+        toast.error(getTransactionErrorMessage(err), { id: toastId });
       } finally {
         submittingRef.current = false;
         setLoading(false);
@@ -136,6 +161,7 @@ function NewAuctionPage() {
       <label className={styles.tooltipLabel}>
         {text}
         <button
+          type="button"
           onClick={() => handleTooltip(field)}
           className={styles.circleIcon}
         >
