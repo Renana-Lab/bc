@@ -239,6 +239,18 @@ const createAuctionPlaceholder = (address, listOrder) =>
     isReadPlaceholder: true,
   });
 
+const LoadingAuctionLabel = () => (
+  <span className={styles.inlineAuctionLoader}>
+    <span className={styles.inlineLoaderTrack} aria-hidden="true" />
+    <span>Loading auction</span>
+    <span className={styles.inlineLoaderDots} aria-hidden="true">
+      <span />
+      <span />
+      <span />
+    </span>
+  </span>
+);
+
 const mergeReadAuctionsWithCache = (
   visibleAuctions,
   firstVisibleIndex,
@@ -419,10 +431,22 @@ const readAuctionsFromApi = async (visibleAuctionCount, currentUserAddress) => {
   });
 };
 
-const readAuctionFromChain = async (address, currentUserAddress, listOrder = 0) => {
+const readAuctionFromChain = async (
+  address,
+  currentUserAddress,
+  listOrder = 0,
+  options = {}
+) => {
+  const readOptions = {
+    preferInjected: options.preferInjected !== false,
+    allowInjectedFallback: options.allowInjectedFallback !== false,
+  };
+
   try {
-    const details = await readOnlyCall(({ campaign }) =>
-      campaign(address).methods.getListSummary()
+    const details = await readOnlyCall(
+      ({ campaign }) => campaign(address).methods.getListSummary(),
+      undefined,
+      readOptions
     );
 
     let isRefunded = false;
@@ -430,8 +454,11 @@ const readAuctionFromChain = async (address, currentUserAddress, listOrder = 0) 
 
     if (currentUserAddress) {
       try {
-        const userStatus = await readOnlyCall(({ campaign }) =>
-          campaign(address).methods.getUserAuctionStatus(currentUserAddress)
+        const userStatus = await readOnlyCall(
+          ({ campaign }) =>
+            campaign(address).methods.getUserAuctionStatus(currentUserAddress),
+          undefined,
+          readOptions
         );
         const userParticipated = Boolean(userStatus[0]);
         isRefunded = Boolean(userStatus[2]);
@@ -463,13 +490,19 @@ const readAuctionFromChain = async (address, currentUserAddress, listOrder = 0) 
       throw error;
     }
 
-    const details = await readOnlyCall(({ campaign }) =>
-      campaign(address).methods.getSummary()
+    const details = await readOnlyCall(
+      ({ campaign }) => campaign(address).methods.getSummary(),
+      undefined,
+      readOptions
     );
     const addresses = details[8];
     const auctionEnded = Number(details[9]) * 1000 < Date.now();
     const closed = auctionEnded
-      ? await readOnlyCall(({ campaign }) => campaign(address).methods.getStatus())
+      ? await readOnlyCall(
+          ({ campaign }) => campaign(address).methods.getStatus(),
+          undefined,
+          readOptions
+        )
       : false;
 
     let isRefunded = false;
@@ -482,8 +515,10 @@ const readAuctionFromChain = async (address, currentUserAddress, listOrder = 0) 
       addresses.some((address) => address.toLowerCase() === currentUserAddress);
 
     if (userInAuction && auctionEnded && !isHighestBidder && !isManager) {
-      const balance = await readOnlyCall(({ campaign }) =>
-        campaign(address).methods.getBid(currentUserAddress)
+      const balance = await readOnlyCall(
+        ({ campaign }) => campaign(address).methods.getBid(currentUserAddress),
+        undefined,
+        readOptions
       );
       isRefunded = Number(balance) === 0;
     }
@@ -558,8 +593,11 @@ const readLightAuctionsFromChain = async (
     }
 
     try {
-      const results = await readOnlyBatchCall(({ campaign }) =>
-        addresses.map((address) => campaign(address).methods.getListSummary())
+      const results = await readOnlyBatchCall(
+        ({ campaign }) =>
+          addresses.map((address) => campaign(address).methods.getListSummary()),
+        undefined,
+        { preferInjected: false, allowInjectedFallback: false }
       );
 
       return { offset, results };
@@ -661,7 +699,8 @@ const readAuctionsFromChain = async (visibleAuctionCount, onProgress) => {
               auction: await readAuctionFromChain(
                 address,
                 "",
-                firstVisibleIndex + index
+                firstVisibleIndex + index,
+                { preferInjected: false, allowInjectedFallback: false }
               ),
             };
           } catch (error) {
@@ -695,7 +734,8 @@ const readAuctionsFromChain = async (visibleAuctionCount, onProgress) => {
             return await readAuctionFromChain(
               address,
               "",
-              firstVisibleIndex + index
+              firstVisibleIndex + index,
+              { preferInjected: false, allowInjectedFallback: false }
             );
           } catch (readError) {
             if (isRpcRateLimitError(readError)) {
@@ -790,10 +830,13 @@ const readUserStatusesForAuctions = async (auctions, userAddress) => {
     return readUserStatusesForAuctions(auctions, userAddress);
   }
 
-  userAuctionStatusInFlight = readOnlyBatchCall(({ campaign }) =>
-    misses.map((auction) =>
-      campaign(auction.address).methods.getUserAuctionStatus(userAddress)
-    )
+  userAuctionStatusInFlight = readOnlyBatchCall(
+    ({ campaign }) =>
+      misses.map((auction) =>
+        campaign(auction.address).methods.getUserAuctionStatus(userAddress)
+      ),
+    undefined,
+    { preferInjected: false, allowInjectedFallback: false }
   ).finally(() => {
     userAuctionStatusInFlight = null;
   });
@@ -1691,7 +1734,7 @@ function AuctionsListPage() {
                         align="center"
                       >
                         {auction.isReadPlaceholder
-                          ? "Loading auction..."
+                          ? <LoadingAuctionLabel />
                           : auction.dataDescription}
                       </TableCell>
                       <TableCell

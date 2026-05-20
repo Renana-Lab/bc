@@ -48,27 +48,31 @@ const hasInjectedProvider = () =>
 
 const getInjectedWeb3 = () => new Web3(window.ethereum);
 
-const getProviderCount = () => RPC_URLS.length + (hasInjectedProvider() ? 1 : 0);
+const getProviderSequence = (preferInjected = true, allowInjectedFallback = true) => {
+  const providers = [];
+  const injectedProvider = hasInjectedProvider()
+    ? { injected: true, web3: getInjectedWeb3() }
+    : null;
 
-const getProvider = (offset = 0) => {
-  if (hasInjectedProvider() && offset === 0) {
-    return {
-      injected: true,
-      web3: getInjectedWeb3(),
-    };
+  if (injectedProvider && preferInjected) {
+    providers.push(injectedProvider);
   }
 
-  const httpOffset = hasInjectedProvider() ? offset - 1 : offset;
+  readOnlyWeb3s.forEach((_web3Instance, offset) => {
+    providers.push({
+      injected: false,
+      web3: readOnlyWeb3s[(nextProviderIndex + offset) % readOnlyWeb3s.length],
+    });
+  });
 
-  return {
-    injected: false,
-    web3: readOnlyWeb3s[
-      (nextProviderIndex + Math.max(0, httpOffset)) % readOnlyWeb3s.length
-    ],
-  };
+  if (injectedProvider && !preferInjected && allowInjectedFallback) {
+    providers.push(injectedProvider);
+  }
+
+  return providers;
 };
 
-const getWeb3 = (offset = 0) => getProvider(offset).web3;
+const getWeb3 = () => getProviderSequence(true)[0].web3;
 
 const createFactory = (web3Instance) =>
   new web3Instance.eth.Contract(CampaignFactory.abi, getActiveFactoryAddress());
@@ -96,12 +100,16 @@ export const campaignReadOnly = (address) => {
   return new web3Instance.eth.Contract(Campaign.abi, address);
 };
 
-export const readOnlyCall = async (createCall, retries) => {
+export const readOnlyCall = async (createCall, retries, options = {}) => {
   let lastError;
-  const maxAttempts = retries ?? getProviderCount();
+  const providers = getProviderSequence(
+    options.preferInjected !== false,
+    options.allowInjectedFallback !== false
+  );
+  const maxAttempts = retries ?? providers.length;
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    const provider = getProvider(attempt);
+    const provider = providers[attempt % providers.length];
     const web3Instance = provider.web3;
 
     try {
@@ -130,13 +138,18 @@ export const readOnlyCall = async (createCall, retries) => {
 
 export const readOnlyBatchCall = async (
   createCalls,
-  retries
+  retries,
+  options = {}
 ) => {
   let lastError;
-  const maxAttempts = retries ?? getProviderCount();
+  const providers = getProviderSequence(
+    options.preferInjected !== false,
+    options.allowInjectedFallback !== false
+  );
+  const maxAttempts = retries ?? providers.length;
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    const provider = getProvider(attempt);
+    const provider = providers[attempt % providers.length];
     const web3Instance = provider.web3;
 
     try {
@@ -195,9 +208,9 @@ export const readOnlyBatchCall = async (
       if ((rateLimited || hasInjectedProviderFailure) && attempt < maxAttempts - 1) {
         throw (
           results.find(
-          (result) =>
-            result?.status === "rejected" &&
-            (isRateLimitError(result.reason) || hasInjectedProviderFailure)
+            (result) =>
+              result?.status === "rejected" &&
+              (isRateLimitError(result.reason) || hasInjectedProviderFailure)
           )?.reason || new Error("Injected provider batch read failed")
         );
       }
