@@ -20,6 +20,7 @@ const ToolbarComponent = (props) => {
   const [budget, setBudget] = useState(null);
   const [activeMarket, setActiveMarketState] = useState(getActiveMarket());
   const [marketOptions, setMarketOptions] = useState(getMarketOptions());
+  const [switchingMarketId, setSwitchingMarketId] = useState("");
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -47,6 +48,8 @@ const ToolbarComponent = (props) => {
       setActiveMarketState(market);
       setMarketOptions(getMarketOptions());
       setBudget(null);
+      setSwitchingMarketId(market.id);
+      window.setTimeout(() => setSwitchingMarketId(""), 520);
       fetchBudget();
     });
   }, [fetchBudget]);
@@ -70,7 +73,9 @@ const ToolbarComponent = (props) => {
         setMarketOptions(getMarketOptions());
       }
 
+      setSwitchingMarketId(marketId);
       setActiveMarketState(setActiveMarket(marketId));
+      window.setTimeout(() => setSwitchingMarketId(""), 520);
       navigate("/auctions-list");
     } catch (error) {
       window.alert(error.message || "Could not switch market.");
@@ -118,18 +123,21 @@ const ToolbarComponent = (props) => {
             }}
           >
             <div
-              className={componentStyles.marketSwitch}
+              className={`${componentStyles.marketSwitch} ${
+                switchingMarketId ? componentStyles.marketSwitchChanging : ""
+              }`}
               aria-label="Market selector"
             >
               {marketOptions.map((market) => (
                 <button
                   key={market.id}
                   type="button"
-                  className={
-                    activeMarket.id === market.id
-                      ? componentStyles.marketSwitchActive
-                      : ""
-                  }
+                  className={[
+                    activeMarket.id === market.id ? componentStyles.marketSwitchActive : "",
+                    switchingMarketId === market.id ? componentStyles.marketSwitchPending : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
                   onClick={() => handleMarketSwitch(market.id)}
                   title={
                     market.address

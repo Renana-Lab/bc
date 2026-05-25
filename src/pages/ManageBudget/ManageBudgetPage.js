@@ -16,6 +16,7 @@ import toast from "react-hot-toast";
 import factory from "../../real_ethereum/factory";
 import { getDefaultBudget } from "../../real_ethereum/budget";
 import { readOnlyCall } from "../../real_ethereum/readOnly";
+import componentStyles from "../../styles/components.module.scss";
 import {
   clearMarketFactoryAddress,
   getActiveMarket,
@@ -272,6 +273,7 @@ const ManageBudgetPage = () => {
   const [bulkProgress, setBulkProgress] = useState({ current: 0, total: 0 });
   const [bulkResults, setBulkResults] = useState([]);
   const [activeMarket, setActiveMarketState] = useState(getActiveMarket());
+  const [switchingMarketId, setSwitchingMarketId] = useState("");
   const reportCancelRef = useRef(false);
   const bulkSubmittingRef = useRef(false);
   const autoLoadedAuctionRangeRef = useRef("");
@@ -307,6 +309,7 @@ const ManageBudgetPage = () => {
   useEffect(() => {
     return subscribeToMarketChanges((market) => {
       setActiveMarketState(market);
+      setSwitchingMarketId(market.id);
       refreshMarketOptions();
       setBudget(null);
       setAuctionOptions([]);
@@ -322,6 +325,7 @@ const ManageBudgetPage = () => {
       reportCancelRef.current = true;
       autoLoadedAuctionRangeRef.current = "";
       loadBudget();
+      window.setTimeout(() => setSwitchingMarketId(""), 560);
     });
   }, [loadBudget, refreshMarketOptions]);
 
@@ -771,11 +775,14 @@ const ManageBudgetPage = () => {
 
   const handleUseMarket = (marketId) => {
     try {
+      setSwitchingMarketId(marketId);
       const market = setActiveMarket(marketId);
       setActiveMarketState(market);
       refreshMarketOptions();
       toast.success(`${market.label} market is active`);
+      window.setTimeout(() => setSwitchingMarketId(""), 560);
     } catch (switchError) {
+      setSwitchingMarketId("");
       toast.error(switchError.message || "Could not switch market");
     }
   };
@@ -1425,6 +1432,13 @@ const ManageBudgetPage = () => {
                   return (
                     <Box
                       key={market.id}
+                      className={`${componentStyles.contractCard} ${
+                        isActive ? componentStyles.contractCardActive : ""
+                      } ${
+                        switchingMarketId === market.id
+                          ? componentStyles.contractCardSwitching
+                          : ""
+                      }`}
                       sx={{
                         p: 1.5,
                         borderRadius: 2,
@@ -1453,6 +1467,9 @@ const ManageBudgetPage = () => {
                         </Box>
                         <Typography
                           variant="caption"
+                          className={`${componentStyles.marketStatusPill} ${
+                            isActive ? componentStyles.marketStatusPillActive : ""
+                          }`}
                           sx={{
                             px: 1,
                             py: 0.35,
@@ -1462,7 +1479,11 @@ const ManageBudgetPage = () => {
                             fontWeight: 800,
                           }}
                         >
-                          {isActive ? "Active" : "Standby"}
+                          {switchingMarketId === market.id
+                            ? "Switching"
+                            : isActive
+                            ? "Active"
+                            : "Standby"}
                         </Typography>
                       </Box>
 

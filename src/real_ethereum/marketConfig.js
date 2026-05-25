@@ -1,4 +1,5 @@
 const DEFAULT_FACTORY_ADDRESS = "0xb61Cd17D498f82E9F22771254C31bCBBb5781540";
+const DEFAULT_DEV_FACTORY_ADDRESS = "0xec38565FAeeef009F57037F2804D186928E63629";
 const MARKET_STORAGE_KEY = "data-market:active-factory";
 const REAL_FACTORY_STORAGE_KEY = "data-market:real-factory-address";
 const DEV_FACTORY_STORAGE_KEY = "data-market:dev-factory-address";
@@ -24,6 +25,9 @@ const removeStoredValue = (key) => {
   window.localStorage.removeItem(key);
 };
 
+const firstValidAddress = (...addresses) =>
+  addresses.map(normalizeAddress).find((address) => isValidAddress(address)) || "";
+
 export const MARKET_DEFINITIONS = [
   {
     id: "real",
@@ -41,7 +45,7 @@ export const MARKET_DEFINITIONS = [
     envAddress:
       process.env.REACT_APP_DEV_FACTORY_ADDRESS ||
       process.env.REACT_APP_TEST_FACTORY_ADDRESS,
-    fallbackAddress: "",
+    fallbackAddress: DEFAULT_DEV_FACTORY_ADDRESS,
   },
 ];
 
@@ -49,12 +53,11 @@ export const getMarketFactoryAddress = (marketId) => {
   const definition = MARKET_DEFINITIONS.find((market) => market.id === marketId);
   if (!definition) return "";
 
-  const configuredAddress =
-    getStoredValue(definition.storageKey) ||
-    definition.envAddress ||
-    definition.fallbackAddress;
-
-  return isValidAddress(configuredAddress) ? normalizeAddress(configuredAddress) : "";
+  return firstValidAddress(
+    getStoredValue(definition.storageKey),
+    definition.envAddress,
+    definition.fallbackAddress
+  );
 };
 
 export const getDevelopmentFactoryAddress = () => {
