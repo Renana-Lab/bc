@@ -7,7 +7,7 @@ const SEPOLIA_ADDRESS_URL = "https://sepolia.etherscan.io/address/";
 const BUDGET_AT_BID_UNAVAILABLE =
   "Unavailable in current contract";
 const BUDGET_AT_BID_EXPLANATION =
-  "Bid stores value, time, and bidder only; factory.changeBudget does not emit per-bid budget values.";
+  "This auction was created by an older contract that does not store per-bid budget snapshots.";
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -213,13 +213,34 @@ export const compareWeiDesc = (left, right) => {
 };
 
 const normalizeTransactions = (rawTransactions, highestBid, highestBidder) => {
-  const normalized = rawTransactions.map((tx, idx) => ({
-    idx,
-    bidder: tx.bidderAddress,
-    bidderKey: tx.bidderAddress.toLowerCase(),
-    value: BigInt(tx.value || 0),
-    time: BigInt(tx.time || 0),
-  }));
+  const normalized = rawTransactions.map((tx, idx) => {
+    const hasBudgetSnapshot =
+      tx.budgetBefore !== undefined && tx.budgetAfter !== undefined;
+
+    return {
+      idx,
+      bidder: tx.bidderAddress,
+      bidderKey: tx.bidderAddress.toLowerCase(),
+      value: BigInt(tx.value || 0),
+      time: BigInt(tx.time || 0),
+      contractCumulativeBid:
+        tx.cumulativeBid !== undefined ? String(tx.cumulativeBid || 0) : "",
+      budgetBeforeBidWei: hasBudgetSnapshot
+        ? String(tx.budgetBefore || 0)
+        : BUDGET_AT_BID_UNAVAILABLE,
+      budgetAfterBidWei: hasBudgetSnapshot
+        ? String(tx.budgetAfter || 0)
+        : "",
+      budgetSnapshotSource: hasBudgetSnapshot
+        ? "Contract Bid snapshot"
+        : BUDGET_AT_BID_EXPLANATION,
+      previousHighestBidder: tx.previousHighestBidder || "",
+      previousHighestBidWei:
+        tx.previousHighestBid !== undefined
+          ? String(tx.previousHighestBid || 0)
+          : "",
+    };
+  });
   const byTime = [...normalized].sort((a, b) =>
     a.time === b.time ? a.idx - b.idx : a.time < b.time ? -1 : 1
   );
@@ -240,6 +261,12 @@ const normalizeTransactions = (rawTransactions, highestBid, highestBidder) => {
     bidderKey: tx.bidderKey,
     transactionAmountWei: tx.value.toString(),
     cumulativeBidWei: cumulativeByIndex[index].toString(),
+    contractCumulativeBidWei: tx.contractCumulativeBid,
+    budgetBeforeBidWei: tx.budgetBeforeBidWei,
+    budgetAfterBidWei: tx.budgetAfterBidWei,
+    budgetSnapshotSource: tx.budgetSnapshotSource,
+    previousHighestBidder: tx.previousHighestBidder,
+    previousHighestBidWei: tx.previousHighestBidWei,
     timeSeconds: tx.time.toString(),
     time: toDateTime(tx.time),
     isoTime: toIsoDateTime(tx.time),
@@ -268,6 +295,22 @@ export const readAuctionOption = async (address, index) => {
   };
 };
 
+const readAuctionTransactions = async (address) => {
+  const ledgerResult = await readOnlyCall(({ campaign }) =>
+    campaign(address).methods.getBidLedger()
+  )
+    .then((rows) => ({ supported: true, rows }))
+    .catch(() => ({ supported: false, rows: [] }));
+
+  if (ledgerResult.supported) {
+    return ledgerResult.rows || [];
+  }
+
+  return readOnlyCall(({ campaign }) =>
+    campaign(address).methods.getTransactions()
+  ).catch(() => []);
+};
+
 export const readAuctionReport = async (
   address,
   index,
@@ -279,9 +322,7 @@ export const readAuctionReport = async (
 
   const [summary, rawTransactions, closedResult] = await Promise.all([
     readOnlyCall(({ campaign }) => campaign(address).methods.getSummary()),
-    readOnlyCall(({ campaign }) => campaign(address).methods.getTransactions()).catch(
-      () => []
-    ),
+    readAuctionTransactions(address),
     readOnlyCall(({ campaign }) => campaign(address).methods.getStatus()).catch(
       (error) => ({
         readError: error.message || "Auction status read failed",
@@ -963,11 +1004,11 @@ const buildReportAnalysis = (reports, errors, options = {}) => {
       Section: "Budget",
       Term: "Budget at bid moment",
       Definition:
-        "The current deployed contract does not store the user's budget before or after each bid.",
+        "The bidder's budget immediately before a bid transaction was charged. New contracts also include Budget After Bid.",
       "Where It Appears": "All Bids, Timeline",
       "Why It Matters":
-        "The report includes a budget column marked unavailable. To support exact values later, store budgetBefore/budgetAfter in Bid or emit BudgetUpdated from changeBudget with the campaign address.",
-      Example: "Unavailable in current contract.",
+        "This proves what budget the bidder had at the exact moment of bidding, without reconstructing it from later state.",
+      Example: "Budget At Bid Moment = 1800, Budget After Bid = 1500.",
     },
     {
       Order: 27,
@@ -1169,14 +1210,14 @@ const buildReportAnalysis = (reports, errors, options = {}) => {
     },
     {
       Order: 180,
-      Section: "Contract Limitations",
+      Section: "Contract Compatibility",
       Term: "Budget at bid moment",
       Definition:
-        "The current deployed contract does not store budget before or after each bid, so exact historical budget is unavailable.",
+        "Newly deployed contracts store budgetBefore and budgetAfter in each Bid. Older deployed auctions do not have those fields, so the report marks them unavailable.",
       "Where It Appears": "All Bids, Timeline",
       "Why It Matters":
-        "A future contract can add budgetBefore/budgetAfter to Bid events or emit BudgetUpdated with auction context.",
-      Example: "Unavailable in current contract.",
+        "Mixed reports can include old and new auctions without hiding missing historical budget data.",
+      Example: "Old auction: unavailable. New auction: budget values are filled.",
     },
     {
       Order: 190,
@@ -1293,7 +1334,10 @@ const buildCoreReportTables = (reports, errors, generatedAt, options = {}) => {
           "Transaction Amount (wei)": 0,
           "Cumulative Bid (wei)": 0,
           "Budget At Bid Moment (wei)": "",
+          "Budget After Bid (wei)": "",
           "Budget At Bid Moment Source": "No bid transaction",
+          "Previous Highest Bidder": "",
+          "Previous Highest Bid (wei)": "",
           "Bid Time": "",
           "Bid Time ISO": "",
           "Is Highest Bid": "No",
@@ -1310,8 +1354,12 @@ const buildCoreReportTables = (reports, errors, generatedAt, options = {}) => {
       "Bidder Etherscan URL": `${SEPOLIA_ADDRESS_URL}${tx.bidder}`,
       "Transaction Amount (wei)": tx.transactionAmountWei,
       "Cumulative Bid (wei)": tx.cumulativeBidWei,
-      "Budget At Bid Moment (wei)": BUDGET_AT_BID_UNAVAILABLE,
-      "Budget At Bid Moment Source": BUDGET_AT_BID_EXPLANATION,
+      "Contract Cumulative Bid (wei)": tx.contractCumulativeBidWei,
+      "Budget At Bid Moment (wei)": tx.budgetBeforeBidWei,
+      "Budget After Bid (wei)": tx.budgetAfterBidWei,
+      "Budget At Bid Moment Source": tx.budgetSnapshotSource,
+      "Previous Highest Bidder": tx.previousHighestBidder,
+      "Previous Highest Bid (wei)": tx.previousHighestBidWei,
       "Bid Time": tx.time,
       "Bid Time ISO": tx.isoTime,
       "Is Highest Bid": tx.isHighestBid ? "Yes" : "No",
@@ -1332,6 +1380,7 @@ const buildCoreReportTables = (reports, errors, generatedAt, options = {}) => {
       "Amount (wei)": "",
       "Cumulative Bid (wei)": "",
       "Budget At Bid Moment (wei)": "",
+      "Budget After Bid (wei)": "",
       "Budget At Bid Moment Source": "",
     })),
     ...reports.flatMap(({ auction, transactions }) =>
@@ -1347,8 +1396,9 @@ const buildCoreReportTables = (reports, errors, generatedAt, options = {}) => {
         "Actor Etherscan URL": `${SEPOLIA_ADDRESS_URL}${tx.bidder}`,
         "Amount (wei)": tx.transactionAmountWei,
         "Cumulative Bid (wei)": tx.cumulativeBidWei,
-        "Budget At Bid Moment (wei)": BUDGET_AT_BID_UNAVAILABLE,
-        "Budget At Bid Moment Source": BUDGET_AT_BID_EXPLANATION,
+        "Budget At Bid Moment (wei)": tx.budgetBeforeBidWei,
+        "Budget After Bid (wei)": tx.budgetAfterBidWei,
+        "Budget At Bid Moment Source": tx.budgetSnapshotSource,
       }))
     ),
     ...reports
@@ -1366,6 +1416,7 @@ const buildCoreReportTables = (reports, errors, generatedAt, options = {}) => {
         "Amount (wei)": 0,
         "Cumulative Bid (wei)": 0,
         "Budget At Bid Moment (wei)": "",
+        "Budget After Bid (wei)": "",
         "Budget At Bid Moment Source": "No bid transaction",
       })),
   ].sort((a, b) => String(a["Time ISO"]).localeCompare(String(b["Time ISO"])));

@@ -1,20 +1,21 @@
-// after refunding non winners , we have to make sure we dont refund them twice
-// evrything has to be initialized
-// approvers , approvercount , approversmonney , addresses
-// approvers (mapping adress with flag will stay same)
-// approverscount (is not usefull anymore we can reinitalize it )
-// approversMonney (mapping adress with money sould be initialise)
-// transactions (array of Bid should remain the same)
-// adreeses (array of addresses which contributes sould stay the same)
 // SPDX-License-Identifier: MIT
 
 pragma solidity ^0.8.9;
 
-
-
 contract Campaign {
     CampaignFactory public factory;
+
     event BidAdded(address contributor);
+    event BidRecorded(
+        address indexed bidder,
+        uint256 amount,
+        uint256 cumulativeBid,
+        uint256 budgetBefore,
+        uint256 budgetAfter,
+        uint256 time,
+        address indexed previousHighestBidder,
+        uint256 previousHighestBid
+    );
     event RefundProcessed(address indexed contributor, uint256 amount);
     event SellerPaid(address indexed seller, uint256 amount);
 
@@ -22,6 +23,17 @@ contract Campaign {
         uint256 value;
         uint256 time;
         address bidderAddress;
+    }
+
+    struct BidLedgerEntry {
+        uint256 value;
+        uint256 time;
+        address bidderAddress;
+        uint256 cumulativeBid;
+        uint256 budgetBefore;
+        uint256 budgetAfter;
+        address previousHighestBidder;
+        uint256 previousHighestBid;
     }
 
     address public manager;
@@ -35,6 +47,7 @@ contract Campaign {
 
     address[] public addresses;
     Bid[] public transactions;
+    BidLedgerEntry[] public bidLedger;
 
     address public highestBidder;
     uint256 public highestBid;
@@ -69,44 +82,79 @@ contract Campaign {
         factory = CampaignFactory(factoryAddress);
     }
 
-function contribute() public payable onlyBeforeEnd {
-    require(msg.sender != manager, "You can't bid on your own auction");
-    require(msg.value > 0, "Must send some ether");
+    function contribute() public payable onlyBeforeEnd {
+        require(msg.sender != manager, "You can't bid on your own auction");
+        require(msg.value > 0, "Must send some ether");
 
-    uint256 previous = approversMoney[msg.sender];
-    uint256 newTotal = previous + msg.value;
+        uint256 previous = approversMoney[msg.sender];
+        uint256 newTotal = previous + msg.value;
+        uint256 previousHighestBid = highestBid;
+        address previousHighestBidder = highestBidder;
+        uint256 budgetBefore;
+        uint256 budgetAfter;
 
-    // ביד ראשון חייב לעמוד במינימום
-    if (highestBidder == address(0)) {
-        require(newTotal >= minimumContribution, "Below minimum bid");
-        factory.changeBudget(msg.sender, msg.value, false); // חייב את הביד הראשון
-    } else {
-        require(newTotal > highestBid, "Bid must exceed current highest");
-
-        // אם זה יוזר אחר → החזר ל־prev, חיוב מלא ל־new
-        if (msg.sender != highestBidder) {
-            factory.changeBudget(highestBidder, highestBid, true);       // החזר מלא לקודם
-            factory.changeBudget(msg.sender, newTotal, false);           // חיוב מלא לחדש
+        if (highestBidder == address(0)) {
+            require(newTotal >= minimumContribution, "Below minimum bid");
+            (budgetBefore, budgetAfter) = factory.changeBudget(
+                msg.sender,
+                msg.value,
+                false
+            );
         } else {
-            // אם זה אותו יוזר → חיוב על ההפרש בלבד
-            factory.changeBudget(msg.sender, msg.value, false);
+            require(newTotal > highestBid, "Bid must exceed current highest");
+
+            if (msg.sender != highestBidder) {
+                factory.changeBudget(highestBidder, highestBid, true);
+                (budgetBefore, budgetAfter) = factory.changeBudget(
+                    msg.sender,
+                    newTotal,
+                    false
+                );
+            } else {
+                (budgetBefore, budgetAfter) = factory.changeBudget(
+                    msg.sender,
+                    msg.value,
+                    false
+                );
+            }
         }
+
+        approversMoney[msg.sender] = newTotal;
+        highestBid = newTotal;
+        highestBidder = msg.sender;
+
+        transactions.push(Bid(msg.value, block.timestamp, msg.sender));
+        bidLedger.push(
+            BidLedgerEntry(
+                msg.value,
+                block.timestamp,
+                msg.sender,
+                newTotal,
+                budgetBefore,
+                budgetAfter,
+                previousHighestBidder,
+                previousHighestBid
+            )
+        );
+
+        if (!approvers[msg.sender]) {
+            approvers[msg.sender] = true;
+            approversCount++;
+            addresses.push(msg.sender);
+        }
+
+        emit BidAdded(msg.sender);
+        emit BidRecorded(
+            msg.sender,
+            msg.value,
+            newTotal,
+            budgetBefore,
+            budgetAfter,
+            block.timestamp,
+            previousHighestBidder,
+            previousHighestBid
+        );
     }
-
-    approversMoney[msg.sender] = newTotal;
-    highestBid = newTotal;
-    highestBidder = msg.sender;
-
-    transactions.push(Bid(msg.value, block.timestamp, msg.sender));
-
-    if (!approvers[msg.sender]) {
-        approvers[msg.sender] = true;
-        approversCount++;
-        addresses.push(msg.sender);
-    }
-    emit BidAdded(msg.sender);
-     
-}
 
     function finalizeAuctionIfNeeded() public onlyAfterEnd {
         require(!closed, "Auction already finalized");
@@ -181,6 +229,28 @@ function contribute() public payable onlyBeforeEnd {
         return transactions;
     }
 
+    function getTransactionCount() public view returns (uint256) {
+        return transactions.length;
+    }
+
+    function getTransactionAt(uint256 index) public view returns (Bid memory) {
+        require(index < transactions.length, "Bid index out of range");
+        return transactions[index];
+    }
+
+    function getBidLedger() public view returns (BidLedgerEntry[] memory) {
+        return bidLedger;
+    }
+
+    function getBidLedgerAt(uint256 index)
+        public
+        view
+        returns (BidLedgerEntry memory)
+    {
+        require(index < bidLedger.length, "Bid index out of range");
+        return bidLedger[index];
+    }
+
     function getData() public view returns (string memory) {
         require(closed, "Auction not finalized");
         require(msg.sender == highestBidder, "Only winner can access the data");
@@ -195,9 +265,16 @@ function contribute() public payable onlyBeforeEnd {
         public
         view
         returns (
-            uint256, uint256, uint256, address,
-            uint256, string memory, string memory,
-            address, address[] memory, uint256
+            uint256,
+            uint256,
+            uint256,
+            address,
+            uint256,
+            string memory,
+            string memory,
+            address,
+            address[] memory,
+            uint256
         )
     {
         return (
@@ -218,8 +295,15 @@ function contribute() public payable onlyBeforeEnd {
         public
         view
         returns (
-            uint256, uint256, uint256, address,
-            uint256, string memory, address, uint256, bool
+            uint256,
+            uint256,
+            uint256,
+            address,
+            uint256,
+            string memory,
+            address,
+            uint256,
+            bool
         )
     {
         return (
@@ -252,19 +336,34 @@ function contribute() public payable onlyBeforeEnd {
 
 contract CampaignFactory {
     event AuctionCreated(address campaignAddress);
+    event AuctionCreatedDetailed(
+        address indexed campaignAddress,
+        address indexed seller,
+        uint256 minimum,
+        uint256 endTime,
+        string dataDescription
+    );
     event BudgetUpdated(address indexed user, uint256 newBudget);
+    event BudgetChanged(
+        address indexed campaignAddress,
+        address indexed user,
+        uint256 amount,
+        bool increase,
+        uint256 budgetBefore,
+        uint256 budgetAfter
+    );
 
     uint256 defaultBudget = 2000;
     address payable[] public deployedCampaigns;
     mapping(address => bool) public isCampaign;
-    mapping(address => uint256) public usersBudget; // budgets
-    mapping(address => bool) public isRegistered; // for first contribute
-    address[] public allUsers; // for reset purposes
+    mapping(address => uint256) public usersBudget;
+    mapping(address => bool) public isRegistered;
+    address[] public allUsers;
 
     modifier onlyCampaigns() {
-    require(isCampaign[msg.sender], "Only campaigns can modify budgets");
-    _;
-}
+        require(isCampaign[msg.sender], "Only campaigns can modify budgets");
+        _;
+    }
 
     modifier ensureRegistered(address user) {
         if (!isRegistered[user]) {
@@ -275,37 +374,65 @@ contract CampaignFactory {
         _;
     }
 
-
     function getBudget(address user) public view returns (uint256) {
         if (!isRegistered[user]) {
             return defaultBudget;
         }
         return usersBudget[user];
     }
-    function changeBudget(address user, uint256 amount, bool increase)
-    external
-    onlyCampaigns
-    ensureRegistered(user)
+
+    function changeBudget(
+        address user,
+        uint256 amount,
+        bool increase
+    )
+        external
+        onlyCampaigns
+        ensureRegistered(user)
+        returns (uint256 budgetBefore, uint256 budgetAfter)
     {
+        budgetBefore = usersBudget[user];
+
         if (increase) {
             usersBudget[user] += amount;
         } else {
             require(usersBudget[user] >= amount, "Insufficient budget");
             usersBudget[user] -= amount;
-        } 
-    }
+        }
 
+        budgetAfter = usersBudget[user];
+        emit BudgetUpdated(user, budgetAfter);
+        emit BudgetChanged(
+            msg.sender,
+            user,
+            amount,
+            increase,
+            budgetBefore,
+            budgetAfter
+        );
+    }
 
     function resetAllBudgets(uint256 newBudget) public {
         defaultBudget = newBudget;
         for (uint256 i = 0; i < allUsers.length; i++) {
             address user = allUsers[i];
+            uint256 budgetBefore = usersBudget[user];
+            bool increased = newBudget >= budgetBefore;
+            uint256 amountChanged = increased
+                ? newBudget - budgetBefore
+                : budgetBefore - newBudget;
             usersBudget[user] = defaultBudget;
-            // 🔔 Emit event for each user whose budget was reset
             emit BudgetUpdated(user, defaultBudget);
+            emit BudgetChanged(
+                address(0),
+                user,
+                amountChanged,
+                increased,
+                budgetBefore,
+                defaultBudget
+            );
         }
     }
-
 
     function createCampaign(
         uint256 minimum,
@@ -317,10 +444,16 @@ contract CampaignFactory {
         address newCampaign = address(
             new Campaign(minimum, dataSell, dataDesc, msg.sender, end, address(this))
         );
-        isCampaign[newCampaign] = true; // ✅ הוספה לסט
+        isCampaign[newCampaign] = true;
         deployedCampaigns.push(payable(newCampaign));
         emit AuctionCreated(newCampaign);
-
+        emit AuctionCreatedDetailed(
+            newCampaign,
+            msg.sender,
+            minimum,
+            end,
+            dataDesc
+        );
     }
 
     function getDeployedCampaigns()

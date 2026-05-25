@@ -46,7 +46,7 @@ export const getMarketOptions = () => [
   },
   {
     id: "dev",
-    label: "Development",
+    label: "Dev",
     description: "Testing market",
     address: getDevelopmentFactoryAddress(),
   },

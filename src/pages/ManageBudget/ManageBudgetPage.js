@@ -17,6 +17,10 @@ import factory from "../../real_ethereum/factory";
 import { getDefaultBudget } from "../../real_ethereum/budget";
 import { readOnlyCall } from "../../real_ethereum/readOnly";
 import {
+  getActiveMarket,
+  subscribeToMarketChanges,
+} from "../../real_ethereum/marketConfig";
+import {
   BULK_DRAFT_KEY,
   BULK_MAX_AUCTIONS,
   getAuctionValidationError,
@@ -238,9 +242,17 @@ const ManageBudgetPage = () => {
   const [bulkLoading, setBulkLoading] = useState(false);
   const [bulkProgress, setBulkProgress] = useState({ current: 0, total: 0 });
   const [bulkResults, setBulkResults] = useState([]);
+  const [activeMarket, setActiveMarketState] = useState(getActiveMarket());
   const reportCancelRef = useRef(false);
   const bulkSubmittingRef = useRef(false);
   const autoLoadedAuctionRangeRef = useRef("");
+
+  const loadBudget = useCallback(async () => {
+    const stored = await getDefaultBudget();
+    if (stored !== undefined && stored !== null) {
+      setBudget(stored);
+    }
+  }, []);
 
   useEffect(() => {
     if (!window.ethereum) {
@@ -248,20 +260,33 @@ const ManageBudgetPage = () => {
       return;
     }
 
-    const loadBudget = async () => {
-      const stored = await getDefaultBudget();
-      if (stored !== undefined && stored !== null) {
-        setBudget(stored);
-      }
-    };
-
     loadBudget();
 
     const savedDraft = localStorage.getItem(BULK_DRAFT_KEY);
     if (savedDraft) {
       setBulkText(savedDraft);
     }
-  }, [navigate]);
+  }, [loadBudget, navigate]);
+
+  useEffect(() => {
+    return subscribeToMarketChanges((market) => {
+      setActiveMarketState(market);
+      setBudget(null);
+      setAuctionOptions([]);
+      setSelectedAuctions({});
+      setAuctionSearch("");
+      setReportState({
+        loading: false,
+        current: 0,
+        total: 0,
+        message: "",
+        product: "",
+      });
+      reportCancelRef.current = true;
+      autoLoadedAuctionRangeRef.current = "";
+      loadBudget();
+    });
+  }, [loadBudget]);
 
   useEffect(() => {
     if (bulkText) {
@@ -1072,6 +1097,37 @@ const ManageBudgetPage = () => {
               Admin Zone
             </Typography>
 
+            <Box
+              sx={{
+                width: "100%",
+                mb: 3,
+                p: 2,
+                border: "1px solid #d9dff2",
+                borderRadius: 2,
+                backgroundColor: "#f8faff",
+              }}
+            >
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ textTransform: "uppercase", letterSpacing: 0.4 }}
+              >
+                Active market
+              </Typography>
+              <Typography variant="body1" sx={{ fontWeight: 800 }}>
+                {activeMarket.label} market
+              </Typography>
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ display: "block", overflowWrap: "anywhere" }}
+              >
+                Budgets, batch creation, and reports currently use this factory:
+                {" "}
+                {activeMarket.address || "No factory address configured"}
+              </Typography>
+            </Box>
+
             <Box sx={{ width: "100%" }}>
               <Typography variant="h6">Set Global Budget</Typography>
               <TextField
@@ -1680,7 +1736,8 @@ const ManageBudgetPage = () => {
               <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
                 Build a focused export from selected auctions. Choose the date
                 range, optional auction list, report tabs, diagnostics, and file
-                type before downloading.
+                type before downloading. Reports are generated from the active
+                {` ${activeMarket.label.toLowerCase()} `}factory.
               </Typography>
 
               <Box

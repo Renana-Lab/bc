@@ -4,12 +4,22 @@ import { useNavigate } from "react-router-dom";
 import Layout from "../../components/Layout";
 import factory from "../../real_ethereum/factory";
 import web3 from "../../real_ethereum/web3";
+import {
+  getActiveMarket,
+  getMarketOptions,
+  isValidAddress,
+  setActiveMarket,
+  setDevelopmentFactoryAddress,
+  subscribeToMarketChanges,
+} from "../../real_ethereum/marketConfig";
 import styles from "./new.module.scss";
 import {
+  Box,
   Button,
   CircularProgress,
   FormControl,
   TextField,
+  Typography,
 } from "@mui/material";
 import { faQuestionCircle } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
@@ -92,6 +102,8 @@ function NewAuctionPage() {
   });
   const [explanation, setExplanation] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [activeMarket, setActiveMarketState] = useState(getActiveMarket());
+  const [marketOptions, setMarketOptions] = useState(getMarketOptions());
   const submittingRef = useRef(false);
   const navigate = useNavigate();
 
@@ -102,6 +114,39 @@ function NewAuctionPage() {
     }
 
   }, [navigate]);
+
+  useEffect(() => {
+    return subscribeToMarketChanges((market) => {
+      setActiveMarketState(market);
+      setMarketOptions(getMarketOptions());
+    });
+  }, []);
+
+  const handleMarketChange = (event) => {
+    const marketId = event.target.value;
+    try {
+      const market = marketOptions.find((option) => option.id === marketId);
+
+      if (marketId === "dev" && !market?.address) {
+        const address = window.prompt(
+          "Paste the development factory contract address"
+        );
+
+        if (!address) return;
+        if (!isValidAddress(address)) {
+          window.alert("That does not look like a valid contract address.");
+          return;
+        }
+
+        setDevelopmentFactoryAddress(address);
+        setMarketOptions(getMarketOptions());
+      }
+
+      setActiveMarketState(setActiveMarket(marketId));
+    } catch (error) {
+      window.alert(error.message || "Could not switch market.");
+    }
+  };
 
   const handleChange = (event) => {
     const { name, value } = event.target;
@@ -190,6 +235,55 @@ function NewAuctionPage() {
           onSubmit={handleSubmit}
         >
           <h3 className={styles.introductionTitle}>Create Auction</h3>
+          <Box
+            sx={{
+              width: "85%",
+              p: 1.5,
+              border: "1px solid #d9dff2",
+              borderRadius: 2,
+              backgroundColor: "#f8faff",
+            }}
+          >
+            <Typography variant="body2" sx={{ fontWeight: 800, color: "#002884" }}>
+              Auction destination
+            </Typography>
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              display="block"
+              sx={{ mt: 0.25, mb: 1 }}
+            >
+              This auction will be opened in the selected factory contract.
+            </Typography>
+            <TextField
+              select
+              size="small"
+              label="Market"
+              value={activeMarket.id}
+              onChange={handleMarketChange}
+              fullWidth
+              SelectProps={{ native: true }}
+            >
+              {marketOptions.map((market) => (
+                <option
+                  key={market.id}
+                  value={market.id}
+                  disabled={!market.address && market.id !== "dev"}
+                >
+                  {market.label}
+                  {market.address ? "" : " - set address"}
+                </option>
+              ))}
+            </TextField>
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              display="block"
+              sx={{ mt: 0.75, overflowWrap: "anywhere" }}
+            >
+              {activeMarket.address || "No factory address configured"}
+            </Typography>
+          </Box>
           {renderTooltip("minBid", "Minimum Bid (in Wei)")}
           <TextField
             type="number"
