@@ -57,7 +57,7 @@ const ToolbarComponent = (props) => {
 
       if (marketId === "dev" && !market?.address) {
         const address = window.prompt(
-          "Paste the development factory contract address"
+          "Paste the development factory contract address",
         );
 
         if (!address) return;
