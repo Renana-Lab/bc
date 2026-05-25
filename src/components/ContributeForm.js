@@ -1,3 +1,4 @@
+/* eslint-env es2020 */
 import { Component } from "react";
 import FormControl from "@mui/material/FormControl";
 import TextField from "@mui/material/TextField";
@@ -15,6 +16,7 @@ import toast from "react-hot-toast";
   const ERROR_DEADLINE = "Your bid was submitted after the deadline";
   const ERROR_USER_DENIED_CONTRIBUTE = "You decided to cancel your bid";
   const USER_DENIED_PREFIX = "User denied transaction signature";
+  const READ_OPTIONS = { preferInjected: false, allowInjectedFallback: false };
 
 
 class ContributeForm extends Component {
@@ -45,13 +47,19 @@ class ContributeForm extends Component {
     let summaryIsLight = true;
 
     try {
-      summary = await readOnlyCall(({ campaign: readOnlyCampaign }) =>
-        readOnlyCampaign(address).methods.getListSummary()
+      summary = await readOnlyCall(
+        ({ campaign: readOnlyCampaign }) =>
+          readOnlyCampaign(address).methods.getListSummary(),
+        undefined,
+        READ_OPTIONS
       );
     } catch (error) {
       summaryIsLight = false;
-      summary = await readOnlyCall(({ campaign: readOnlyCampaign }) =>
-        readOnlyCampaign(address).methods.getSummary()
+      summary = await readOnlyCall(
+        ({ campaign: readOnlyCampaign }) =>
+          readOnlyCampaign(address).methods.getSummary(),
+        undefined,
+        READ_OPTIONS
       );
     }
 
@@ -62,11 +70,26 @@ class ContributeForm extends Component {
     const accounts = await window.ethereum.request({ method: "eth_accounts" });
     const connectedAccount = accounts[0];
 
-    const newBid = Number(this.state.bidAmount);
-    const additionalBid = newBid - userBid;
+    if (!/^\d+$/.test(String(this.state.bidAmount || ""))) {
+      this.setState({
+        error: true,
+        errorMessage: "Bid amount must be a whole number in wei",
+        transactionIsLoading: false,
+      });
+      return;
+    }
+
+    const newBid = BigInt(this.state.bidAmount);
+    const currentUserBid = BigInt(String(userBid || 0));
+    const highestBidValue = BigInt(String(highestBid || 0));
+    const minimumContributionValue = BigInt(String(minimumContribution || 0));
+    const remainingBudgetValue =
+      remainingBudget === Infinity ? null : BigInt(String(remainingBudget || 0));
+    const additionalBid =
+      newBid > currentUserBid ? newBid - currentUserBid : 0n;
 
     // Basic validations
-    if (newBid <= 0) {
+    if (newBid <= 0n) {
       this.setState({
         error: true,
         errorMessage: "Bid amount must be greater than 0",
@@ -74,7 +97,7 @@ class ContributeForm extends Component {
       });
       return;
     }
-    if (newBid <= userBid || newBid <= highestBid) {
+    if (newBid <= currentUserBid || newBid <= highestBidValue) {
       this.setState({
         error: true,
         errorMessage: `Your new bid must be greater than the highest bid - ${highestBid} wei`,
@@ -82,15 +105,15 @@ class ContributeForm extends Component {
       });
       return;
     }
-    if (newBid > remainingBudget) {
+    if (remainingBudgetValue !== null && additionalBid > remainingBudgetValue) {
       this.setState({
         error: true,
-        errorMessage: `Insufficient budget.`,
+        errorMessage: `Insufficient budget. You need ${additionalBid.toString()} more wei for this bid.`,
         transactionIsLoading: false,
       });
       return;
     }
-    if (newBid < Number(minimumContribution)) {
+    if (newBid < minimumContributionValue) {
       this.setState({
         error: true,
         errorMessage: `Total bid must exceed the minimum required of ${minimumContribution} wei.`,

@@ -211,14 +211,23 @@ function ShowAuctionPage() {
     let summary;
     let summaryIsLight = true;
 
+    const compatibilityReadOptions = {
+      preferInjected: false,
+      allowInjectedFallback: false,
+    };
+
     try {
-      summary = await readOnlyCall(({ campaign }) =>
-        campaign(address).methods.getListSummary()
+      summary = await readOnlyCall(
+        ({ campaign }) => campaign(address).methods.getListSummary(),
+        undefined,
+        compatibilityReadOptions
       );
     } catch (error) {
       summaryIsLight = false;
-      summary = await readOnlyCall(({ campaign }) =>
-        campaign(address).methods.getSummary()
+      summary = await readOnlyCall(
+        ({ campaign }) => campaign(address).methods.getSummary(),
+        undefined,
+        compatibilityReadOptions
       );
     }
 
@@ -240,22 +249,36 @@ function ShowAuctionPage() {
 
     const [rawTransactions, userStatus, fallbackUserBid, closed] = await Promise.all([
       auctionEnded
-        ? readOnlyCall(({ campaign }) => campaign(address).methods.getTransactions())
+        ? readOnlyCall(
+            ({ campaign }) => campaign(address).methods.getTransactions(),
+            undefined,
+            compatibilityReadOptions
+          )
         : Promise.resolve([]),
       summaryIsLight && account
-        ? readOnlyCall(({ campaign }) =>
-            campaign(address).methods.getUserAuctionStatus(account)
+        ? readOnlyCall(
+            ({ campaign }) => campaign(address).methods.getUserAuctionStatus(account),
+            undefined,
+            compatibilityReadOptions
           ).catch(() => null)
         : Promise.resolve(null),
       account
         ? summaryIsLight
           ? Promise.resolve(0)
-          : readOnlyCall(({ campaign }) => campaign(address).methods.getBid(account))
+          : readOnlyCall(
+              ({ campaign }) => campaign(address).methods.getBid(account),
+              undefined,
+              compatibilityReadOptions
+            )
         : Promise.resolve(0),
       summaryIsLight
         ? Promise.resolve(closedFromSummary)
         : auctionEnded
-        ? readOnlyCall(({ campaign }) => campaign(address).methods.getStatus())
+        ? readOnlyCall(
+            ({ campaign }) => campaign(address).methods.getStatus(),
+            undefined,
+            compatibilityReadOptions
+          )
         : Promise.resolve(false),
     ]);
     const userBid = userStatus ? userStatus[1] : fallbackUserBid;
@@ -264,7 +287,7 @@ function ShowAuctionPage() {
       : addresses.some((addr) => addr.toLowerCase() === accountKey);
     const contributors = summaryIsLight && userParticipated ? [account] : addresses;
 
-    if (auctionEnded && userIsHighestBidder && !dataForSell) {
+    if (auctionEnded && closed && userIsHighestBidder && !dataForSell) {
       dataForSell = await auctionInstance.methods
         .getData()
         .call({ from: account })

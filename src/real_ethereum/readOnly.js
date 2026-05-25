@@ -86,8 +86,8 @@ const getProviderSequence = (preferInjected = true, allowInjectedFallback = true
 
 const getWeb3 = () => getProviderSequence(true)[0].web3;
 
-const createFactory = (web3Instance) =>
-  new web3Instance.eth.Contract(CampaignFactory.abi, getActiveFactoryAddress());
+const createFactory = (web3Instance, factoryAddress = getActiveFactoryAddress()) =>
+  new web3Instance.eth.Contract(CampaignFactory.abi, factoryAddress);
 
 const createCampaign = (web3Instance, address) =>
   new web3Instance.eth.Contract(Campaign.abi, address);
@@ -126,7 +126,7 @@ export const readOnlyCall = async (createCall, retries, options = {}) => {
 
     try {
       return await createCall({
-        factory: createFactory(web3Instance),
+        factory: createFactory(web3Instance, options.factoryAddress),
         campaign: (address) => createCampaign(web3Instance, address),
       }).call();
     } catch (error) {
@@ -166,7 +166,7 @@ export const readOnlyBatchCall = async (
 
     try {
       const calls = createCalls({
-        factory: createFactory(web3Instance),
+        factory: createFactory(web3Instance, options.factoryAddress),
         campaign: (address) => createCampaign(web3Instance, address),
       });
 

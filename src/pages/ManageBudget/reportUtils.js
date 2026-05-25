@@ -3,6 +3,7 @@ import { readOnlyCall } from "../../real_ethereum/readOnly";
 
 export const REPORT_CONCURRENCY = 3;
 const BIDDER_STATUS_CONCURRENCY = 4;
+const READ_OPTIONS = { preferInjected: false, allowInjectedFallback: false };
 const SEPOLIA_ADDRESS_URL = "https://sepolia.etherscan.io/address/";
 const BUDGET_AT_BID_UNAVAILABLE =
   "Unavailable in current contract";
@@ -278,8 +279,10 @@ const normalizeTransactions = (rawTransactions, highestBid, highestBidder) => {
 };
 
 export const readAuctionOption = async (address, index) => {
-  const summary = await readOnlyCall(({ campaign }) =>
-    campaign(address).methods.getSummary()
+  const summary = await readOnlyCall(
+    ({ campaign }) => campaign(address).methods.getSummary(),
+    undefined,
+    READ_OPTIONS
   );
 
   return {
@@ -296,8 +299,10 @@ export const readAuctionOption = async (address, index) => {
 };
 
 const readAuctionTransactions = async (address) => {
-  const ledgerResult = await readOnlyCall(({ campaign }) =>
-    campaign(address).methods.getBidLedger()
+  const ledgerResult = await readOnlyCall(
+    ({ campaign }) => campaign(address).methods.getBidLedger(),
+    undefined,
+    READ_OPTIONS
   )
     .then((rows) => ({ supported: true, rows }))
     .catch(() => ({ supported: false, rows: [] }));
@@ -306,8 +311,10 @@ const readAuctionTransactions = async (address) => {
     return ledgerResult.rows || [];
   }
 
-  return readOnlyCall(({ campaign }) =>
-    campaign(address).methods.getTransactions()
+  return readOnlyCall(
+    ({ campaign }) => campaign(address).methods.getTransactions(),
+    undefined,
+    READ_OPTIONS
   ).catch(() => []);
 };
 
@@ -321,13 +328,19 @@ export const readAuctionReport = async (
   onProgress?.(`Reading auction ${progressIndex + 1} of ${total}`);
 
   const [summary, rawTransactions, closedResult] = await Promise.all([
-    readOnlyCall(({ campaign }) => campaign(address).methods.getSummary()),
-    readAuctionTransactions(address),
-    readOnlyCall(({ campaign }) => campaign(address).methods.getStatus()).catch(
-      (error) => ({
-        readError: error.message || "Auction status read failed",
-      })
+    readOnlyCall(
+      ({ campaign }) => campaign(address).methods.getSummary(),
+      undefined,
+      READ_OPTIONS
     ),
+    readAuctionTransactions(address),
+    readOnlyCall(
+      ({ campaign }) => campaign(address).methods.getStatus(),
+      undefined,
+      READ_OPTIONS
+    ).catch((error) => ({
+      readError: error.message || "Auction status read failed",
+    })),
   ]);
   const auction = {
     index: index + 1,
@@ -362,8 +375,10 @@ export const readAuctionReport = async (
     BIDDER_STATUS_CONCURRENCY,
     async (bidder) => {
       try {
-        const status = await readOnlyCall(({ campaign }) =>
-          campaign(address).methods.getUserAuctionStatus(bidder)
+        const status = await readOnlyCall(
+          ({ campaign }) => campaign(address).methods.getUserAuctionStatus(bidder),
+          undefined,
+          READ_OPTIONS
         );
         return {
           auctionAddress: address,

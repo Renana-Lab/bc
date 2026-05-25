@@ -17,7 +17,11 @@ import factory from "../../real_ethereum/factory";
 import { getDefaultBudget } from "../../real_ethereum/budget";
 import { readOnlyCall } from "../../real_ethereum/readOnly";
 import {
+  clearMarketFactoryAddress,
   getActiveMarket,
+  getMarketOptions,
+  setActiveMarket,
+  setMarketFactoryAddress,
   subscribeToMarketChanges,
 } from "../../real_ethereum/marketConfig";
 import {
@@ -30,7 +34,6 @@ import {
   serializeBulkAuctions,
 } from "./bulkAuctionUtils";
 import {
-  REPORT_CONCURRENCY,
   buildReportPayload,
   buildReportSheets,
   compareWeiDesc,
@@ -49,6 +52,8 @@ import {
 
 const LOCAL_STORAGE_KEY = "globalBudgetStore";
 const ADMIN_SECRET = "1234"; // Do not store production secrets on the frontend.
+const DEFAULT_REPORT_READ_CONCURRENCY = 6;
+const MAX_REPORT_READ_CONCURRENCY = 10;
 const REPORT_SECTION_OPTIONS = [
   {
     key: "readme",
@@ -182,6 +187,18 @@ const summarizeReportSelection = (options, selection, emptyText) => {
   return `${labels.slice(0, 3).join(", ")} +${labels.length - 3} more`;
 };
 
+const makeContractDrafts = (options) =>
+  options.reduce((drafts, option) => {
+    drafts[option.id] = option.address || "";
+    return drafts;
+  }, {});
+
+const normalizeReportConcurrency = (value) => {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed)) return DEFAULT_REPORT_READ_CONCURRENCY;
+  return Math.min(MAX_REPORT_READ_CONCURRENCY, Math.max(1, parsed));
+};
+
 export const saveBudget = (budget) => {
   localStorage.setItem(
     LOCAL_STORAGE_KEY,
@@ -220,9 +237,21 @@ const ManageBudgetPage = () => {
   const [auctionSelectorLoading, setAuctionSelectorLoading] = useState(false);
   const [auctionSearch, setAuctionSearch] = useState("");
   const [auctionSort, setAuctionSort] = useState("index-asc");
+  const [marketOptions, setMarketOptionsState] = useState(() =>
+    getMarketOptions()
+  );
+  const [contractDrafts, setContractDrafts] = useState(() =>
+    makeContractDrafts(getMarketOptions())
+  );
+  const [contractStats, setContractStats] = useState({});
+  const [contractManagerLoading, setContractManagerLoading] = useState(false);
   const [reportFilters, setReportFilters] = useState({ from: "", to: "" });
   const [reportIncludeAllAuctions, setReportIncludeAllAuctions] =
     useState(false);
+  const [reportLoadAllMarkets, setReportLoadAllMarkets] = useState(false);
+  const [reportReadConcurrency, setReportReadConcurrency] = useState(
+    String(DEFAULT_REPORT_READ_CONCURRENCY)
+  );
   const [reportSections, setReportSections] = useState(() =>
     makeDefaultReportSelection(REPORT_SECTION_OPTIONS)
   );
@@ -254,6 +283,13 @@ const ManageBudgetPage = () => {
     }
   }, []);
 
+  const refreshMarketOptions = useCallback(() => {
+    const nextOptions = getMarketOptions();
+    setMarketOptionsState(nextOptions);
+    setContractDrafts(makeContractDrafts(nextOptions));
+    return nextOptions;
+  }, []);
+
   useEffect(() => {
     if (!window.ethereum) {
       navigate("/");
@@ -271,6 +307,7 @@ const ManageBudgetPage = () => {
   useEffect(() => {
     return subscribeToMarketChanges((market) => {
       setActiveMarketState(market);
+      refreshMarketOptions();
       setBudget(null);
       setAuctionOptions([]);
       setSelectedAuctions({});
@@ -286,7 +323,7 @@ const ManageBudgetPage = () => {
       autoLoadedAuctionRangeRef.current = "";
       loadBudget();
     });
-  }, [loadBudget]);
+  }, [loadBudget, refreshMarketOptions]);
 
   useEffect(() => {
     if (bulkText) {
@@ -631,31 +668,222 @@ const ManageBudgetPage = () => {
     }
   };
 
+  const getReportMarkets = useCallback(() => {
+    const options = getMarketOptions().filter((market) => market.address);
+    if (reportLoadAllMarkets) return options;
+
+    return options.filter((market) => market.id === activeMarket.id);
+  }, [activeMarket.id, reportLoadAllMarkets]);
+
+  const readMarketAuctionAddresses = useCallback(async (market) => {
+    if (!market.address) {
+      return {
+        market,
+        addresses: [],
+        error: "No factory address configured",
+      };
+    }
+
+    try {
+      const addresses = await readOnlyCall(
+        ({ factory: readFactory }) => readFactory.methods.getDeployedCampaigns(),
+        undefined,
+        {
+          factoryAddress: market.address,
+          preferInjected: false,
+          allowInjectedFallback: false,
+        }
+      );
+
+      return { market, addresses };
+    } catch (readError) {
+      return {
+        market,
+        addresses: [],
+        error: readError.message || "Could not read this factory",
+      };
+    }
+  }, []);
+
+  const readMarketAuctionOptions = useCallback(
+    async (market, concurrency) => {
+      const result = await readMarketAuctionAddresses(market);
+      if (result.error) return { ...result, options: [] };
+
+      const options = await mapWithConcurrency(
+        result.addresses,
+        concurrency,
+        async (address, index) => {
+          const option = await readAuctionOption(address, index);
+          return option
+            ? {
+                ...option,
+                marketId: market.id,
+                marketLabel: market.label,
+                factoryAddress: market.address,
+                selectionKey: `${market.id}:${address.toLowerCase()}`,
+              }
+            : null;
+        }
+      );
+
+      return {
+        ...result,
+        options: options.filter(Boolean),
+      };
+    },
+    [readMarketAuctionAddresses]
+  );
+
+  const handleContractDraftChange = (marketId, value) => {
+    setContractDrafts((current) => ({
+      ...current,
+      [marketId]: value.trim(),
+    }));
+  };
+
+  const handleSaveContractAddress = (marketId) => {
+    try {
+      const address = contractDrafts[marketId] || "";
+      setMarketFactoryAddress(marketId, address);
+      refreshMarketOptions();
+      setAuctionOptions([]);
+      setSelectedAuctions({});
+      autoLoadedAuctionRangeRef.current = "";
+      toast.success("Contract address saved locally");
+    } catch (saveError) {
+      toast.error(saveError.message || "Could not save contract address");
+    }
+  };
+
+  const handleClearContractAddress = (marketId) => {
+    try {
+      clearMarketFactoryAddress(marketId);
+      refreshMarketOptions();
+      setAuctionOptions([]);
+      setSelectedAuctions({});
+      autoLoadedAuctionRangeRef.current = "";
+      toast.success("Local contract override cleared");
+    } catch (clearError) {
+      toast.error(clearError.message || "Could not clear contract address");
+    }
+  };
+
+  const handleUseMarket = (marketId) => {
+    try {
+      const market = setActiveMarket(marketId);
+      setActiveMarketState(market);
+      refreshMarketOptions();
+      toast.success(`${market.label} market is active`);
+    } catch (switchError) {
+      toast.error(switchError.message || "Could not switch market");
+    }
+  };
+
+  const handleInspectContracts = useCallback(
+    async (marketId = "") => {
+      if (contractManagerLoading) return;
+
+      const markets = (marketId
+        ? getMarketOptions().filter((market) => market.id === marketId)
+        : getMarketOptions()
+      ).filter((market) => market.address);
+
+      if (!markets.length) {
+        toast.error("No configured contracts to inspect");
+        return;
+      }
+
+      setContractManagerLoading(true);
+      setContractStats((current) => {
+        const next = { ...current };
+        markets.forEach((market) => {
+          next[market.id] = { loading: true, error: "", count: 0 };
+        });
+        return next;
+      });
+
+      const results = await mapWithConcurrency(markets, 2, async (market) => {
+        const result = await readMarketAuctionAddresses(market);
+        if (result.error) {
+          return {
+            marketId: market.id,
+            loading: false,
+            count: 0,
+            error: result.error,
+            latestAuction: null,
+            updatedAt: Date.now(),
+          };
+        }
+
+        const latestAddress = result.addresses[result.addresses.length - 1];
+        const latestAuction = latestAddress
+          ? await readAuctionOption(latestAddress, result.addresses.length - 1).catch(
+              () => null
+            )
+          : null;
+
+        return {
+          marketId: market.id,
+          loading: false,
+          count: result.addresses.length,
+          error: "",
+          latestAuction,
+          updatedAt: Date.now(),
+        };
+      });
+
+      setContractStats((current) => {
+        const next = { ...current };
+        results.forEach((result) => {
+          next[result.marketId] = result;
+        });
+        return next;
+      });
+      setContractManagerLoading(false);
+      toast.success(`Inspected ${markets.length} contract${markets.length === 1 ? "" : "s"}`);
+    },
+    [contractManagerLoading, readMarketAuctionAddresses]
+  );
+
   const handleLoadAuctionSelector = useCallback(
     async ({ quiet = false } = {}) => {
       if (auctionSelectorLoading || reportState.loading) return false;
 
       setAuctionSelectorLoading(true);
       try {
-        const addresses = await readOnlyCall(({ factory: readFactory }) =>
-          readFactory.methods.getDeployedCampaigns()
+        const concurrency = normalizeReportConcurrency(reportReadConcurrency);
+        const markets = getReportMarkets();
+        const marketResults = await mapWithConcurrency(
+          markets,
+          Math.min(markets.length, 2),
+          (market) => readMarketAuctionOptions(market, concurrency)
         );
-        const options = await mapWithConcurrency(
-          addresses,
-          REPORT_CONCURRENCY,
-          (address, index) => readAuctionOption(address, index)
-        );
+        const options = marketResults.flatMap((result) => result.options);
+        const readErrors = marketResults.filter((result) => result.error);
 
         setAuctionOptions(options.filter(Boolean));
         setSelectedAuctions((current) => {
           const next = {};
           options.forEach((option) => {
-            if (current[option.address]) next[option.address] = true;
+            if (current[option.selectionKey]) next[option.selectionKey] = true;
           });
           return next;
         });
+        if (readErrors.length) {
+          readErrors.forEach((result) =>
+            console.warn(
+              `Auction selector failed for ${result.market.label}:`,
+              result.error
+            )
+          );
+        }
         if (!quiet) {
-          toast.success(`Loaded ${options.length} auctions`);
+          toast.success(
+            `Loaded ${options.length} auctions from ${markets.length} contract${
+              markets.length === 1 ? "" : "s"
+            }`
+          );
         }
         return true;
       } catch (loadError) {
@@ -666,13 +894,19 @@ const ManageBudgetPage = () => {
         setAuctionSelectorLoading(false);
       }
     },
-    [auctionSelectorLoading, reportState.loading]
+    [
+      auctionSelectorLoading,
+      getReportMarkets,
+      readMarketAuctionOptions,
+      reportReadConcurrency,
+      reportState.loading,
+    ]
   );
 
-  const handleToggleAuctionSelection = (address) => {
+  const handleToggleAuctionSelection = (selectionKey) => {
     setSelectedAuctions((current) => ({
       ...current,
-      [address]: !current[address],
+      [selectionKey]: !current[selectionKey],
     }));
   };
 
@@ -699,7 +933,9 @@ const ManageBudgetPage = () => {
       return;
     }
 
-    const rangeKey = `${reportFilters.from}|${reportFilters.to}`;
+    const rangeKey = `${reportFilters.from}|${reportFilters.to}|${
+      reportLoadAllMarkets ? "all-markets" : activeMarket.id
+    }`;
     if (autoLoadedAuctionRangeRef.current === rangeKey) return;
 
     autoLoadedAuctionRangeRef.current = rangeKey;
@@ -715,7 +951,9 @@ const ManageBudgetPage = () => {
     reportFilters.from,
     reportFilters.to,
     reportIncludeAllAuctions,
+    reportLoadAllMarkets,
     reportState.loading,
+    activeMarket.id,
   ]);
 
   const handleToggleReportSection = (key) => {
@@ -816,9 +1054,13 @@ const ManageBudgetPage = () => {
     });
 
     try {
-      const addresses = await readOnlyCall(({ factory: readFactory }) =>
-        readFactory.methods.getDeployedCampaigns()
-      );
+      const concurrency = normalizeReportConcurrency(reportReadConcurrency);
+      const markets = getReportMarkets();
+      const marketAddressResults = auctionOptions.length
+        ? []
+        : await mapWithConcurrency(markets, Math.min(markets.length, 2), (market) =>
+            readMarketAuctionAddresses(market)
+          );
       if (reportCancelRef.current) {
         toast("Report generation cancelled.");
         return;
@@ -828,7 +1070,7 @@ const ManageBudgetPage = () => {
       const selectedSet = new Set(
         Object.entries(selectedAuctions)
           .filter(([, selected]) => selected)
-          .map(([address]) => address)
+          .map(([selectionKey]) => selectionKey)
       );
       const shouldFilterByDate = !reportIncludeAllAuctions;
       let targets = auctionOptions.length
@@ -836,11 +1078,27 @@ const ManageBudgetPage = () => {
             address: option.address,
             index: option.index - 1,
             endTime: option.endTime,
+            marketId: option.marketId || activeMarket.id,
+            marketLabel: option.marketLabel || activeMarket.label,
+            factoryAddress: option.factoryAddress || activeMarket.address,
+            selectionKey:
+              option.selectionKey ||
+              `${option.marketId || activeMarket.id}:${option.address.toLowerCase()}`,
           }))
-        : addresses.map((address, index) => ({ address, index, endTime: "" }));
+        : marketAddressResults.flatMap((result) =>
+            result.addresses.map((address, index) => ({
+              address,
+              index,
+              endTime: "",
+              marketId: result.market.id,
+              marketLabel: result.market.label,
+              factoryAddress: result.market.address,
+              selectionKey: `${result.market.id}:${address.toLowerCase()}`,
+            }))
+          );
 
       if (selectedSet.size) {
-        targets = targets.filter((target) => selectedSet.has(target.address));
+        targets = targets.filter((target) => selectedSet.has(target.selectionKey));
       }
 
       if (shouldFilterByDate && auctionOptions.length) {
@@ -863,7 +1121,7 @@ const ManageBudgetPage = () => {
 
       await mapWithConcurrency(
         targets,
-        REPORT_CONCURRENCY,
+        concurrency,
         async (target, targetIndex) => {
           if (reportCancelRef.current) return;
           try {
@@ -1014,6 +1272,7 @@ const ManageBudgetPage = () => {
           option.seller,
           option.highestBidder,
           option.highestBid,
+          option.marketLabel,
         ]
           .join(" ")
           .toLowerCase()
@@ -1028,8 +1287,8 @@ const ManageBudgetPage = () => {
     .sort((a, b) => {
       if (auctionSort === "selected-first") {
         return (
-          Number(Boolean(selectedAuctions[b.address])) -
-            Number(Boolean(selectedAuctions[a.address])) || a.index - b.index
+          Number(Boolean(selectedAuctions[b.selectionKey])) -
+            Number(Boolean(selectedAuctions[a.selectionKey])) || a.index - b.index
         );
       }
       if (auctionSort === "date-desc") {
@@ -1052,23 +1311,27 @@ const ManageBudgetPage = () => {
       return a.index - b.index;
     });
   const selectedVisibleCount = visibleAuctionOptions.filter(
-    (option) => selectedAuctions[option.address]
+    (option) => selectedAuctions[option.selectionKey]
   ).length;
   const reportScopeText = selectedAuctionCount
     ? `${selectedAuctionCount} selected auction${
         selectedAuctionCount === 1 ? "" : "s"
       }`
     : hasReportFilters
-    ? "all auctions in the selected date range"
+    ? reportLoadAllMarkets
+      ? "all Real and Dev auctions in the selected date range"
+      : `all ${activeMarket.label} auctions in the selected date range`
     : reportIncludeAllAuctions
-    ? "every auction in the contract"
+    ? reportLoadAllMarkets
+      ? "every auction in every configured contract"
+      : `every auction in the ${activeMarket.label} contract`
     : "choose report dates";
 
   const handleSelectVisibleAuctions = () => {
     setSelectedAuctions((current) => {
       const next = { ...current };
       visibleAuctionOptions.forEach((option) => {
-        next[option.address] = true;
+        next[option.selectionKey] = true;
       });
       return next;
     });
@@ -1101,31 +1364,216 @@ const ManageBudgetPage = () => {
               sx={{
                 width: "100%",
                 mb: 3,
-                p: 2,
+                p: { xs: 1.5, sm: 2 },
                 border: "1px solid #d9dff2",
-                borderRadius: 2,
+                borderRadius: 3,
                 backgroundColor: "#f8faff",
               }}
             >
-              <Typography
-                variant="caption"
-                color="text.secondary"
-                sx={{ textTransform: "uppercase", letterSpacing: 0.4 }}
+              <Box
+                display="flex"
+                justifyContent="space-between"
+                alignItems="flex-start"
+                gap={2}
+                flexWrap="wrap"
               >
-                Active market
-              </Typography>
-              <Typography variant="body1" sx={{ fontWeight: 800 }}>
-                {activeMarket.label} market
-              </Typography>
-              <Typography
-                variant="caption"
-                color="text.secondary"
-                sx={{ display: "block", overflowWrap: "anywhere" }}
+                <Box>
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    sx={{ textTransform: "uppercase", letterSpacing: 0.4 }}
+                  >
+                    Contract manager
+                  </Typography>
+                  <Typography variant="body1" sx={{ fontWeight: 800 }}>
+                    Active: {activeMarket.label} market
+                  </Typography>
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    sx={{ display: "block", maxWidth: 560 }}
+                  >
+                    Writes use the active factory. Reports can inspect Real and
+                    Dev together when multi-contract loading is enabled.
+                  </Typography>
+                </Box>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  onClick={() => handleInspectContracts()}
+                  disabled={contractManagerLoading}
+                  sx={{ borderRadius: 999 }}
+                >
+                  {contractManagerLoading ? "Inspecting..." : "Inspect All"}
+                </Button>
+              </Box>
+
+              <Box
+                sx={{
+                  display: "grid",
+                  gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" },
+                  gap: 1.5,
+                  mt: 2,
+                }}
               >
-                Budgets, batch creation, and reports currently use this factory:
-                {" "}
-                {activeMarket.address || "No factory address configured"}
-              </Typography>
+                {marketOptions.map((market) => {
+                  const isActive = activeMarket.id === market.id;
+                  const stats = contractStats[market.id] || {};
+                  const draft = contractDrafts[market.id] || "";
+                  const draftLooksValid = !draft || /^0x[a-fA-F0-9]{40}$/.test(draft);
+
+                  return (
+                    <Box
+                      key={market.id}
+                      sx={{
+                        p: 1.5,
+                        borderRadius: 2,
+                        backgroundColor: "#ffffff",
+                        border: isActive
+                          ? "1px solid #9fb0ef"
+                          : "1px solid #e5e9f8",
+                        boxShadow: isActive
+                          ? "0 8px 24px rgba(16, 48, 144, 0.08)"
+                          : "none",
+                      }}
+                    >
+                      <Box
+                        display="flex"
+                        justifyContent="space-between"
+                        alignItems="center"
+                        gap={1}
+                      >
+                        <Box>
+                          <Typography variant="subtitle2" sx={{ fontWeight: 800 }}>
+                            {market.label}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            {market.description}
+                          </Typography>
+                        </Box>
+                        <Typography
+                          variant="caption"
+                          sx={{
+                            px: 1,
+                            py: 0.35,
+                            borderRadius: 999,
+                            backgroundColor: isActive ? "#e8efff" : "#f1f3f9",
+                            color: isActive ? "#103090" : "#69708c",
+                            fontWeight: 800,
+                          }}
+                        >
+                          {isActive ? "Active" : "Standby"}
+                        </Typography>
+                      </Box>
+
+                      <TextField
+                        label="Factory address"
+                        value={draft}
+                        onChange={(event) =>
+                          handleContractDraftChange(market.id, event.target.value)
+                        }
+                        error={!draftLooksValid}
+                        helperText={
+                          draftLooksValid
+                            ? "Saved in this browser as a local override."
+                            : "Use a valid 0x contract address."
+                        }
+                        size="small"
+                        fullWidth
+                        sx={{ mt: 1.25 }}
+                        InputProps={{
+                          sx: {
+                            fontFamily: "monospace",
+                            fontSize: 13,
+                          },
+                        }}
+                      />
+
+                      <Box
+                        display="flex"
+                        gap={1}
+                        flexWrap="wrap"
+                        sx={{ mt: 1.25 }}
+                      >
+                        <Button
+                          variant={isActive ? "contained" : "outlined"}
+                          size="small"
+                          onClick={() => handleUseMarket(market.id)}
+                          disabled={!market.address || isActive}
+                          sx={{ borderRadius: 999 }}
+                        >
+                          Use
+                        </Button>
+                        <Button
+                          variant="outlined"
+                          size="small"
+                          onClick={() => handleSaveContractAddress(market.id)}
+                          disabled={!draftLooksValid || !draft}
+                          sx={{ borderRadius: 999 }}
+                        >
+                          Save
+                        </Button>
+                        <Button
+                          variant="text"
+                          size="small"
+                          onClick={() => handleClearContractAddress(market.id)}
+                        >
+                          Clear
+                        </Button>
+                        <Button
+                          variant="text"
+                          size="small"
+                          onClick={() => handleInspectContracts(market.id)}
+                          disabled={!market.address || contractManagerLoading}
+                        >
+                          Inspect
+                        </Button>
+                      </Box>
+
+                      <Box
+                        sx={{
+                          mt: 1.25,
+                          p: 1,
+                          borderRadius: 2,
+                          backgroundColor: "#fbfcff",
+                          border: "1px solid #edf0fb",
+                        }}
+                      >
+                        {stats.loading ? (
+                          <>
+                            <LinearProgress />
+                            <Typography variant="caption" color="text.secondary">
+                              Reading contract...
+                            </Typography>
+                          </>
+                        ) : stats.error ? (
+                          <Typography variant="caption" color="error">
+                            {stats.error}
+                          </Typography>
+                        ) : stats.updatedAt ? (
+                          <>
+                            <Typography variant="caption" sx={{ fontWeight: 800 }}>
+                              {stats.count} auction{stats.count === 1 ? "" : "s"}
+                            </Typography>
+                            <Typography
+                              variant="caption"
+                              color="text.secondary"
+                              display="block"
+                            >
+                              Latest:{" "}
+                              {stats.latestAuction?.dataDescription || "No auctions yet"}
+                            </Typography>
+                          </>
+                        ) : (
+                          <Typography variant="caption" color="text.secondary">
+                            Not inspected yet.
+                          </Typography>
+                        )}
+                      </Box>
+                    </Box>
+                  );
+                })}
+              </Box>
             </Box>
 
             <Box sx={{ width: "100%" }}>
@@ -1736,9 +2184,78 @@ const ManageBudgetPage = () => {
               <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
                 Build a focused export from selected auctions. Choose the date
                 range, optional auction list, report tabs, diagnostics, and file
-                type before downloading. Reports are generated from the active
-                {` ${activeMarket.label.toLowerCase()} `}factory.
+                type before downloading.
               </Typography>
+
+              <Box
+                sx={{
+                  mt: 2,
+                  display: "grid",
+                  gridTemplateColumns: { xs: "1fr", md: "1.4fr 0.6fr" },
+                  gap: 1,
+                  alignItems: "stretch",
+                }}
+              >
+                <Box
+                  component="label"
+                  sx={{
+                    display: "grid",
+                    gridTemplateColumns: "auto 1fr",
+                    gap: 1,
+                    alignItems: "flex-start",
+                    p: 1.25,
+                    borderRadius: 2,
+                    border: reportLoadAllMarkets
+                      ? "1px solid #b9c7f2"
+                      : "1px solid #e5e8f6",
+                    backgroundColor: reportLoadAllMarkets
+                      ? "#f1f5ff"
+                      : "#fbfcff",
+                    cursor: "pointer",
+                  }}
+                >
+                  <Checkbox
+                    size="small"
+                    checked={reportLoadAllMarkets}
+                    onChange={(event) => {
+                      setReportLoadAllMarkets(event.target.checked);
+                      setAuctionOptions([]);
+                      setSelectedAuctions({});
+                      autoLoadedAuctionRangeRef.current = "";
+                    }}
+                    sx={{ p: 0.15 }}
+                  />
+                  <Box>
+                    <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                      Multi-load Real and Dev contracts
+                    </Typography>
+                    <Typography
+                      variant="caption"
+                      color="text.secondary"
+                      display="block"
+                    >
+                      Load report auction choices from every configured market
+                      at the same time. Budget changes and batch creation still
+                      use only the active {activeMarket.label} contract.
+                    </Typography>
+                  </Box>
+                </Box>
+
+                <TextField
+                  select
+                  label="Read lanes"
+                  value={reportReadConcurrency}
+                  onChange={(event) => setReportReadConcurrency(event.target.value)}
+                  size="small"
+                  SelectProps={{ native: true }}
+                  helperText="More lanes load faster, but can stress RPC providers."
+                  fullWidth
+                >
+                  <option value="3">Gentle - 3</option>
+                  <option value="6">Fast - 6</option>
+                  <option value="10">Heavy - 10</option>
+                </TextField>
+              </Box>
 
               <Box
                 sx={{
@@ -1848,7 +2365,7 @@ const ManageBudgetPage = () => {
                     </Typography>
                     <Typography variant="caption" color="text.secondary">
                       Leave empty to export the current date scope, or the full
-                      contract only when that override is enabled.
+                      contract set only when that override is enabled.
                     </Typography>
                   </Box>
                   <Button
@@ -1861,6 +2378,8 @@ const ManageBudgetPage = () => {
                       ? "Loading..."
                       : auctionOptions.length
                       ? "Reload Auctions"
+                      : reportLoadAllMarkets
+                      ? "Load All Markets"
                       : "Load Auctions"}
                   </Button>
                 </Box>
@@ -2004,7 +2523,7 @@ const ManageBudgetPage = () => {
                     >
                       {visibleAuctionOptions.map((option) => (
                         <Box
-                          key={option.address}
+                          key={option.selectionKey}
                           component="label"
                           sx={{
                             display: "grid",
@@ -2026,10 +2545,10 @@ const ManageBudgetPage = () => {
                           <Box sx={{ pt: 0.25 }}>
                             <Checkbox
                               checked={Boolean(
-                                selectedAuctions[option.address]
+                                selectedAuctions[option.selectionKey]
                               )}
                               onChange={() =>
-                                handleToggleAuctionSelection(option.address)
+                                handleToggleAuctionSelection(option.selectionKey)
                               }
                               size="small"
                             />
@@ -2047,6 +2566,21 @@ const ManageBudgetPage = () => {
                               >
                                 #{option.index} {option.dataDescription}
                               </Typography>
+                              {reportLoadAllMarkets && (
+                                <Typography
+                                  variant="caption"
+                                  sx={{
+                                    px: 1,
+                                    py: 0.25,
+                                    borderRadius: 999,
+                                    backgroundColor: "#f4f6fc",
+                                    color: "#4d5576",
+                                    whiteSpace: "nowrap",
+                                  }}
+                                >
+                                  {option.marketLabel}
+                                </Typography>
+                              )}
                               <Typography
                                 variant="caption"
                                 sx={{
