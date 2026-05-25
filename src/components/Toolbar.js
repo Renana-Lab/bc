@@ -1,4 +1,4 @@
-import React, { memo, useCallback, useEffect, useState } from "react";
+import React, { memo, useCallback, useEffect, useRef, useState } from "react";
 import { AppBar, Button, Toolbar, Typography } from "@mui/material";
 import MenuIcon from "@mui/icons-material/Menu";
 import HomeIcon from "@mui/icons-material/Home";
@@ -18,9 +18,12 @@ const ToolbarComponent = (props) => {
   const navigate = useNavigate();
   const [currentTime, setCurrentTime] = useState(new Date());
   const [budget, setBudget] = useState(null);
+  const [budgetRefreshing, setBudgetRefreshing] = useState(false);
   const [activeMarket, setActiveMarketState] = useState(getActiveMarket());
   const [marketOptions, setMarketOptions] = useState(getMarketOptions());
   const [switchingMarketId, setSwitchingMarketId] = useState("");
+  const activeMarketIdRef = useRef(activeMarket.id);
+  const budgetRequestIdRef = useRef(0);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -31,10 +34,27 @@ const ToolbarComponent = (props) => {
   }, []);
 
   const fetchBudget = useCallback(async () => {
+    const marketIdForRequest = activeMarketIdRef.current;
+    const requestId = budgetRequestIdRef.current + 1;
+    budgetRequestIdRef.current = requestId;
+    setBudgetRefreshing(true);
+
     try {
       const result = await getDefaultBudget();
-      setBudget(result);
+      if (
+        requestId === budgetRequestIdRef.current &&
+        marketIdForRequest === activeMarketIdRef.current
+      ) {
+        setBudget(result);
+        setBudgetRefreshing(false);
+      }
     } catch (err) {
+      if (
+        requestId === budgetRequestIdRef.current &&
+        marketIdForRequest === activeMarketIdRef.current
+      ) {
+        setBudgetRefreshing(false);
+      }
       console.error("Failed to fetch budget:", err);
     }
   }, []);
@@ -45,9 +65,10 @@ const ToolbarComponent = (props) => {
 
   useEffect(() => {
     return subscribeToMarketChanges((market) => {
+      activeMarketIdRef.current = market.id;
+      budgetRequestIdRef.current += 1;
       setActiveMarketState(market);
       setMarketOptions(getMarketOptions());
-      setBudget(null);
       setSwitchingMarketId(market.id);
       window.setTimeout(() => setSwitchingMarketId(""), 520);
       fetchBudget();
@@ -74,7 +95,9 @@ const ToolbarComponent = (props) => {
       }
 
       setSwitchingMarketId(marketId);
-      setActiveMarketState(setActiveMarket(marketId));
+      const nextMarket = setActiveMarket(marketId);
+      activeMarketIdRef.current = nextMarket.id;
+      setActiveMarketState(nextMarket);
       window.setTimeout(() => setSwitchingMarketId(""), 520);
       navigate("/auctions-list");
     } catch (error) {
@@ -88,6 +111,10 @@ const ToolbarComponent = (props) => {
       minute: "2-digit",
       second: "2-digit",
     });
+  const activeMarketIndex = Math.max(
+    0,
+    marketOptions.findIndex((market) => market.id === activeMarket.id)
+  );
 
   return (
     <div style={{ flexGrow: 1 }}>
@@ -126,6 +153,10 @@ const ToolbarComponent = (props) => {
               className={`${componentStyles.marketSwitch} ${
                 switchingMarketId ? componentStyles.marketSwitchChanging : ""
               }`}
+              style={{
+                "--market-index": activeMarketIndex,
+                "--market-count": marketOptions.length || 2,
+              }}
               aria-label="Market selector"
             >
               {marketOptions.map((market) => (
@@ -150,17 +181,23 @@ const ToolbarComponent = (props) => {
               ))}
             </div>
 
-            <Typography
-              variant="body2"
-              style={{
-                color: "#F0F0F0",
-                border: "1px solid rgba(240, 240, 240, 0.06)",
-                padding: "0.5rem",
-                borderRadius: "20px",
-              }}
+            <div
+              className={`${componentStyles.toolbarPill} ${
+                budgetRefreshing ? componentStyles.toolbarPillRefreshing : ""
+              }`}
+              title={budgetRefreshing ? "Budget is refreshing" : "Current budget"}
             >
-              Budget: {budget ?? "Loading..."}
-            </Typography>
+              <span className={componentStyles.toolbarPillLabel}>Budget</span>
+              <span className={componentStyles.toolbarPillValue}>
+                {budget ?? "—"}
+              </span>
+              {budgetRefreshing && (
+                <span
+                  className={componentStyles.toolbarPillDot}
+                  aria-label="Refreshing budget"
+                />
+              )}
+            </div>
 
             <Typography
               variant="body2"

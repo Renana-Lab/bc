@@ -8,7 +8,10 @@ import {
   Divider,
   Checkbox,
   CircularProgress,
+  Collapse,
+  IconButton,
 } from "@mui/material";
+import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import Layout from "../../components/Layout";
@@ -53,6 +56,7 @@ import {
 
 const LOCAL_STORAGE_KEY = "globalBudgetStore";
 const ADMIN_SECRET = "1234"; // Do not store production secrets on the frontend.
+const DEFAULT_GLOBAL_BUDGET = 2000;
 const DEFAULT_REPORT_READ_CONCURRENCY = 6;
 const MAX_REPORT_READ_CONCURRENCY = 10;
 const REPORT_SECTION_OPTIONS = [
@@ -269,6 +273,8 @@ const ManageBudgetPage = () => {
     dataPrefix: "Data",
   });
   const [showBulkImport, setShowBulkImport] = useState(false);
+  const [batchStudioOpen, setBatchStudioOpen] = useState(false);
+  const [auctionReportsOpen, setAuctionReportsOpen] = useState(false);
   const [bulkLoading, setBulkLoading] = useState(false);
   const [bulkProgress, setBulkProgress] = useState({ current: 0, total: 0 });
   const [bulkResults, setBulkResults] = useState([]);
@@ -384,9 +390,11 @@ const ManageBudgetPage = () => {
     const userAddress = window.ethereum?.selectedAddress?.toLowerCase();
 
     try {
-      setBudget(0);
-      await factory.methods.resetAllBudgets(0).send({ from: userAddress });
-      toast.success("Budget reset for all users");
+      setBudget(DEFAULT_GLOBAL_BUDGET);
+      await factory.methods
+        .resetAllBudgets(DEFAULT_GLOBAL_BUDGET)
+        .send({ from: userAddress });
+      toast.success(`Budget reset to ${DEFAULT_GLOBAL_BUDGET} wei for all users`);
       navigate("/auctions-list");
     } catch (resetError) {
       console.error("Error resetting budget:", resetError);
@@ -1637,20 +1645,96 @@ const ManageBudgetPage = () => {
 
             <Divider flexItem sx={{ my: 4 }} />
 
-            <Box sx={{ width: "100%" }}>
+            <Box
+              sx={{
+                width: "100%",
+                p: { xs: 1.5, sm: 2 },
+                border: "1px solid #d9dff2",
+                borderRadius: 3,
+                backgroundColor: batchStudioOpen ? "#fbfcff" : "#ffffff",
+                boxShadow: batchStudioOpen
+                  ? "0 10px 26px rgba(16, 48, 144, 0.06)"
+                  : "0 4px 14px rgba(16, 48, 144, 0.035)",
+                transition:
+                  "background-color 180ms ease, box-shadow 180ms ease, border-color 180ms ease",
+              }}
+            >
               <Box
                 display="flex"
                 justifyContent="space-between"
-                alignItems="flex-start"
+                alignItems="center"
                 gap={2}
                 flexWrap="wrap"
               >
-                <Box>
+                <Box sx={{ minWidth: 0 }}>
                   <Typography variant="h6">Batch Auction Studio</Typography>
-                  <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+                  <Typography
+                    variant="body2"
+                    color="text.secondary"
+                    sx={{ mt: 0.5, maxWidth: 680 }}
+                  >
                     Pick a template, fine tune the rows, then create the batch.
                   </Typography>
                 </Box>
+                <Box display="flex" gap={1} flexWrap="wrap" alignItems="center">
+                  <IconButton
+                    onClick={() => setBatchStudioOpen((current) => !current)}
+                    aria-expanded={batchStudioOpen}
+                    aria-controls="batch-auction-studio-panel"
+                    aria-label={
+                      batchStudioOpen
+                        ? "Collapse Batch Auction Studio"
+                        : "Expand Batch Auction Studio"
+                    }
+                    title={
+                      batchStudioOpen
+                        ? "Collapse Batch Auction Studio"
+                        : "Expand Batch Auction Studio"
+                    }
+                    sx={{
+                      width: 42,
+                      height: 42,
+                      border: "1px solid #b9c7f2",
+                      color: "#103090",
+                      backgroundColor: "#ffffff",
+                      transition:
+                        "background-color 160ms ease, transform 160ms ease, box-shadow 160ms ease",
+                      "&:hover": {
+                        backgroundColor: "#f1f5ff",
+                        transform: "translateY(-1px)",
+                        boxShadow: "0 6px 14px rgba(16, 48, 144, 0.08)",
+                      },
+                    }}
+                  >
+                    <KeyboardArrowDownIcon
+                      sx={{
+                        transform: batchStudioOpen
+                          ? "rotate(180deg)"
+                          : "rotate(0deg)",
+                        transition:
+                          "transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1)",
+                      }}
+                    />
+                  </IconButton>
+                </Box>
+              </Box>
+
+              <Collapse
+                id="batch-auction-studio-panel"
+                in={batchStudioOpen}
+                timeout="auto"
+                unmountOnExit={false}
+              >
+              <Box
+                sx={{
+                  pt: 2,
+                  opacity: batchStudioOpen ? 1 : 0,
+                  transform: batchStudioOpen ? "translateY(0)" : "translateY(-6px)",
+                  transition:
+                    "opacity 180ms ease 70ms, transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1)",
+                }}
+              >
+              <Box display="flex" justifyContent="flex-end" sx={{ mb: 1.25 }}>
                 <Button
                   variant="contained"
                   onClick={handlePrepareBulkRows}
@@ -1664,13 +1748,11 @@ const ManageBudgetPage = () => {
                   Generate Draft
                 </Button>
               </Box>
-
               <Box
                 sx={{
                   display: "grid",
                   gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr 1fr" },
                   gap: 1,
-                  mt: 2,
                 }}
               >
                 {[
@@ -2196,21 +2278,105 @@ const ManageBudgetPage = () => {
                   ))}
                 </Box>
               )}
+              </Box>
+              </Collapse>
             </Box>
 
             <Divider flexItem sx={{ my: 4 }} />
 
-            <Box sx={{ width: "100%" }}>
-              <Typography variant="h6">Auction Reports</Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                Build a focused export from selected auctions. Choose the date
-                range, optional auction list, report tabs, diagnostics, and file
-                type before downloading.
-              </Typography>
+            <Box
+              sx={{
+                width: "100%",
+                p: { xs: 1.5, sm: 2 },
+                border: "1px solid #d9dff2",
+                borderRadius: 3,
+                backgroundColor: auctionReportsOpen ? "#fbfcff" : "#ffffff",
+                boxShadow: auctionReportsOpen
+                  ? "0 10px 26px rgba(16, 48, 144, 0.06)"
+                  : "0 4px 14px rgba(16, 48, 144, 0.035)",
+                transition:
+                  "background-color 180ms ease, box-shadow 180ms ease, border-color 180ms ease",
+              }}
+            >
+              <Box
+                display="flex"
+                justifyContent="space-between"
+                alignItems="center"
+                gap={2}
+                flexWrap="wrap"
+              >
+                <Box sx={{ minWidth: 0 }}>
+                  <Typography variant="h6">Auction Reports</Typography>
+                  <Typography
+                    variant="body2"
+                    color="text.secondary"
+                    sx={{ mt: 1, maxWidth: 760 }}
+                  >
+                    Build a focused export from selected auctions. Choose the date
+                    range, optional auction list, report tabs, diagnostics, and file
+                    type before downloading.
+                  </Typography>
+                </Box>
+                <IconButton
+                  onClick={() => setAuctionReportsOpen((current) => !current)}
+                  aria-expanded={auctionReportsOpen}
+                  aria-controls="auction-reports-panel"
+                  aria-label={
+                    auctionReportsOpen
+                      ? "Collapse Auction Reports"
+                      : "Expand Auction Reports"
+                  }
+                  title={
+                    auctionReportsOpen
+                      ? "Collapse Auction Reports"
+                      : "Expand Auction Reports"
+                  }
+                  sx={{
+                    width: 42,
+                    height: 42,
+                    border: "1px solid #b9c7f2",
+                    color: "#103090",
+                    backgroundColor: "#ffffff",
+                    transition:
+                      "background-color 160ms ease, transform 160ms ease, box-shadow 160ms ease",
+                    "&:hover": {
+                      backgroundColor: "#f1f5ff",
+                      transform: "translateY(-1px)",
+                      boxShadow: "0 6px 14px rgba(16, 48, 144, 0.08)",
+                    },
+                  }}
+                >
+                  <KeyboardArrowDownIcon
+                    sx={{
+                      transform: auctionReportsOpen
+                        ? "rotate(180deg)"
+                        : "rotate(0deg)",
+                      transition:
+                        "transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1)",
+                    }}
+                  />
+                </IconButton>
+              </Box>
 
+              <Collapse
+                id="auction-reports-panel"
+                in={auctionReportsOpen}
+                timeout="auto"
+                unmountOnExit={false}
+              >
               <Box
                 sx={{
-                  mt: 2,
+                  pt: 2,
+                  opacity: auctionReportsOpen ? 1 : 0,
+                  transform: auctionReportsOpen
+                    ? "translateY(0)"
+                    : "translateY(-6px)",
+                  transition:
+                    "opacity 180ms ease 70ms, transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1)",
+                }}
+              >
+              <Box
+                sx={{
                   display: "grid",
                   gridTemplateColumns: { xs: "1fr", md: "1.4fr 0.6fr" },
                   gap: 1,
@@ -3011,6 +3177,8 @@ const ManageBudgetPage = () => {
                   </Box>
                 </Box>
               )}
+              </Box>
+              </Collapse>
             </Box>
           </>
         ) : (

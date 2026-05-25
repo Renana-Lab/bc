@@ -4,6 +4,8 @@ import { getActiveFactoryAddress, subscribeToMarketChanges } from "./marketConfi
 const CACHE_TTL_MS = 15000;
 const budgetCache = new Map();
 const budgetInFlight = new Map();
+const normalizeFactoryAddress = (address) =>
+  String(address || "").trim().toLowerCase();
 
 subscribeToMarketChanges(() => {
   budgetCache.clear();
@@ -13,12 +15,13 @@ subscribeToMarketChanges(() => {
 export const getDefaultBudget = async () => {
   if (!window.ethereum) return undefined;
 
+  const factoryAddress = getActiveFactoryAddress();
   const accounts = await window.ethereum.request({ method: "eth_accounts" });
   const userAddress = accounts[0] || "";
 
   if (!userAddress) return undefined;
 
-  const key = `${getActiveFactoryAddress().toLowerCase()}:${userAddress.toLowerCase()}`;
+  const key = `${normalizeFactoryAddress(factoryAddress)}:${userAddress.toLowerCase()}`;
   const cached = budgetCache.get(key);
 
   if (cached && Date.now() - cached.updatedAt < CACHE_TTL_MS) {
@@ -29,7 +32,11 @@ export const getDefaultBudget = async () => {
     return budgetInFlight.get(key);
   }
 
-  const request = readOnlyCall(({ factory }) => factory.methods.getBudget(userAddress))
+  const request = readOnlyCall(
+    ({ factory }) => factory.methods.getBudget(userAddress),
+    undefined,
+    { factoryAddress }
+  )
     .then((value) => {
       budgetCache.set(key, { value, updatedAt: Date.now() });
       return value;
