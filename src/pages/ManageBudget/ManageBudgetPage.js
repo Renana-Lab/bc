@@ -16,167 +16,173 @@ import toast from "react-hot-toast";
 import factory from "../../real_ethereum/factory";
 import { getDefaultBudget } from "../../real_ethereum/budget";
 import { readOnlyCall } from "../../real_ethereum/readOnly";
+import {
+  BULK_DRAFT_KEY,
+  BULK_MAX_AUCTIONS,
+  getAuctionValidationError,
+  getTransactionErrorMessage,
+  makeBulkAuctionRows,
+  parseBulkAuctions,
+  serializeBulkAuctions,
+} from "./bulkAuctionUtils";
+import {
+  REPORT_CONCURRENCY,
+  buildReportPayload,
+  buildReportSheets,
+  compareWeiDesc,
+  downloadCsvReport,
+  downloadHtmlReport,
+  downloadJsonReport,
+  downloadWorkbook,
+  filterReportsByDate,
+  isEndTimeInDateRange,
+  mapWithConcurrency,
+  readAuctionOption,
+  readAuctionReport,
+  shortAddress,
+  toDateInputValue,
+} from "./reportUtils";
 
 const LOCAL_STORAGE_KEY = "globalBudgetStore";
 const ADMIN_SECRET = "1234"; // Do not store production secrets on the frontend.
-const REPORT_CONCURRENCY = 3;
-const BIDDER_STATUS_CONCURRENCY = 4;
-const BULK_DRAFT_KEY = "bulkAuctionDraft";
-const BULK_MAX_AUCTIONS = 30;
-const SEPOLIA_ADDRESS_URL = "https://sepolia.etherscan.io/address/";
-const INVALID_SHEET_NAME_CHARS = new Set(["[", "]", ":", "*", "?", "/", "\\"]);
+const REPORT_SECTION_OPTIONS = [
+  {
+    key: "readme",
+    label: "README",
+    description: "Report metadata, glossary, and field definitions.",
+  },
+  {
+    key: "summary",
+    label: "Auction Summary",
+    description: "One clean row per auction contract.",
+  },
+  {
+    key: "bids",
+    label: "All Bids",
+    description: "Every bid row, plus explicit zero-bid auctions.",
+  },
+  {
+    key: "timeline",
+    label: "Timeline",
+    description: "Bid events and auction end times in order.",
+  },
+  {
+    key: "payments",
+    label: "Payment Review",
+    description: "Seller, winner, refund, and bidder status review.",
+  },
+  {
+    key: "participants",
+    label: "Participant Analysis",
+    description: "Seller and bidder summaries in one sheet.",
+  },
+  {
+    key: "flags",
+    label: "Review Flags",
+    description: "The operational checklist for things to inspect.",
+  },
+  {
+    key: "leaderboards",
+    label: "Leaderboards",
+    description: "Top auctions and bidders by activity/value.",
+  },
+];
+const REPORT_DIAGNOSTIC_OPTIONS = [
+  {
+    key: "readErrors",
+    label: "Read errors",
+    description: "Auctions that could not be fully exported.",
+  },
+  {
+    key: "zeroBids",
+    label: "Zero bids",
+    description: "Auctions with no bid transactions.",
+  },
+  {
+    key: "singleBidder",
+    label: "Single bidder",
+    description: "Auctions with only one unique bidder.",
+  },
+  {
+    key: "paymentIssues",
+    label: "Payment issues",
+    description: "Pending seller payments or payment status failures.",
+  },
+  {
+    key: "highestBidMismatch",
+    label: "Highest bid mismatch",
+    description: "Summary winner does not match reconstructed bids.",
+  },
+  {
+    key: "bidderCountMismatch",
+    label: "Bidder count mismatch",
+    description: "Summary count differs from transaction-derived count.",
+  },
+  {
+    key: "statusReadErrors",
+    label: "Status read errors",
+    description: "Failed getUserAuctionStatus reads.",
+  },
+];
+const REPORT_EXPORT_OPTIONS = [
+  {
+    product: "excel",
+    label: "Excel Workbook",
+    description: "Best for full analysis with your selected tabs.",
+    primary: true,
+  },
+  {
+    product: "html",
+    label: "Printable HTML",
+    description: "Readable snapshot for sharing or printing.",
+  },
+  {
+    product: "json",
+    label: "Raw JSON",
+    description: "Developer-friendly export with raw structures.",
+  },
+  {
+    product: "timeline",
+    label: "Timeline CSV",
+    description: "Only chronological auction and bid events.",
+    requiresSection: "timeline",
+  },
+  {
+    product: "bids",
+    label: "All Bids CSV",
+    description: "Only bid rows for spreadsheet analysis.",
+    requiresSection: "bids",
+  },
+  {
+    product: "payments",
+    label: "Payment CSV",
+    description: "Only seller, refund, and winner review rows.",
+    requiresSection: "payments",
+  },
+];
+
+const makeDefaultReportSelection = (options) =>
+  options.reduce((selection, option) => {
+    selection[option.key] = true;
+    return selection;
+  }, {});
+
+const summarizeReportSelection = (options, selection, emptyText) => {
+  const labels = options
+    .filter((option) => selection[option.key])
+    .map((option) => option.label);
+
+  if (!labels.length) return emptyText;
+  if (labels.length <= 3) return labels.join(", ");
+
+  return `${labels.slice(0, 3).join(", ")} +${labels.length - 3} more`;
+};
 
 export const saveBudget = (budget) => {
   localStorage.setItem(
     LOCAL_STORAGE_KEY,
     JSON.stringify({ defaultBudget: budget })
   );
-};
-
-const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-const mapWithConcurrency = async (items, limit, mapper) => {
-  const results = new Array(items.length);
-  let nextIndex = 0;
-
-  const workers = Array.from(
-    { length: Math.min(limit, items.length) },
-    async () => {
-      while (nextIndex < items.length) {
-        const currentIndex = nextIndex;
-        nextIndex += 1;
-        results[currentIndex] = await mapper(items[currentIndex], currentIndex);
-      }
-    }
-  );
-
-  await Promise.all(workers);
-  return results;
-};
-
-const escapeXml = (value) =>
-  String(value ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-
-const normalizeSheetName = (name, fallback) => {
-  const clean = String(name || fallback)
-    .split("")
-    .map((char) => (INVALID_SHEET_NAME_CHARS.has(char) ? " " : char))
-    .join("")
-    .replace(/\s+/g, " ")
-    .trim();
-  return (clean || fallback).slice(0, 31);
-};
-
-const toDateTime = (seconds) => {
-  const timestamp = Number(seconds || 0);
-  if (!timestamp) return "";
-  return new Date(timestamp * 1000).toLocaleString();
-};
-
-const toIsoDateTime = (seconds) => {
-  const timestamp = Number(seconds || 0);
-  if (!timestamp) return "";
-  return new Date(timestamp * 1000).toISOString();
-};
-
-const toDateInputValue = (seconds) => {
-  const iso = toIsoDateTime(seconds);
-  return iso ? iso.slice(0, 10) : "";
-};
-
-const shortAddress = (address) =>
-  address ? `${address.slice(0, 6)}...${address.slice(-4)}` : "";
-
-const splitBulkLine = (line) => {
-  if (line.includes("|")) return line.split("|").map((part) => part.trim());
-  if (line.includes("\t")) return line.split("\t").map((part) => part.trim());
-  return line.split(",").map((part) => part.trim());
-};
-
-const isHeaderLine = (parts) => {
-  const normalized = parts.join(" ").toLowerCase();
-  return (
-    normalized.includes("description") &&
-    normalized.includes("minimum") &&
-    normalized.includes("duration")
-  );
-};
-
-const parseBulkAuctions = (text) =>
-  text
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line, sourceIndex) => ({ line, sourceIndex }))
-    .filter(({ line }) => !isHeaderLine(splitBulkLine(line)))
-    .map(({ line, sourceIndex }) => {
-      const [dataDescription, dataForSell, minimumContribution, auctionDuration] =
-        splitBulkLine(line);
-
-      return {
-        rowNumber: sourceIndex + 1,
-        minimumContribution: minimumContribution || "",
-        auctionDuration: auctionDuration || "",
-        dataForSell: dataForSell || "",
-        dataDescription: dataDescription || "",
-      };
-    });
-
-const serializeBulkAuctions = (auctions) =>
-  auctions
-    .map(
-      (auction) =>
-        `${auction.dataDescription || ""} | ${auction.dataForSell || ""} | ${
-          auction.minimumContribution || ""
-        } | ${auction.auctionDuration || ""}`
-    )
-    .join("\n");
-
-const makeBulkAuctionRows = ({
-  rowCount,
-  minimumContribution,
-  auctionDuration,
-  descriptionPrefix,
-  dataPrefix,
-}) =>
-  Array.from({ length: rowCount }, (_, index) => ({
-    rowNumber: index + 1,
-    dataDescription: `${descriptionPrefix || "Auction"} ${index + 1}`,
-    dataForSell: `${dataPrefix || "Data"} ${index + 1}`,
-    minimumContribution: minimumContribution || "100",
-    auctionDuration: auctionDuration || "10",
-  }));
-
-const isWholeNumber = (value) => /^\d+$/.test(String(value || ""));
-const isPositiveWholeNumber = (value) =>
-  isWholeNumber(value) && BigInt(value) > 0n;
-
-const getAuctionValidationError = (auction, label = "Auction") => {
-  if (!isPositiveWholeNumber(auction.minimumContribution)) {
-    return `${label}: minimum bid must be a positive whole number.`;
-  }
-
-  if (
-    !isWholeNumber(auction.auctionDuration) ||
-    Number(auction.auctionDuration) < 1 ||
-    Number(auction.auctionDuration) > 30
-  ) {
-    return `${label}: duration must be a whole number between 1 and 30.`;
-  }
-
-  if (!auction.dataForSell.trim()) {
-    return `${label}: data for sale cannot be empty.`;
-  }
-
-  if (!auction.dataDescription.trim()) {
-    return `${label}: description cannot be empty.`;
-  }
-
-  return "";
 };
 
 const requestConnectedAccount = async () => {
@@ -190,888 +196,6 @@ const requestConnectedAccount = async () => {
   }
 
   return account;
-};
-
-const getTransactionErrorMessage = (err) => {
-  const message = JSON.stringify(err?.message || err || "");
-
-  if (message.includes("replacement transaction underpriced")) {
-    return "MetaMask has a pending transaction. Wait for it, or speed/cancel it in Activity.";
-  }
-  if (
-    message.includes("User denied") ||
-    message.includes("User rejected") ||
-    message.includes("4001")
-  ) {
-    return "Transaction rejected in MetaMask.";
-  }
-  return "Transaction failed. Please try again.";
-};
-
-const getDateRangeMs = (filters) => {
-  const fromMs = filters.from
-    ? new Date(`${filters.from}T00:00:00`).getTime()
-    : null;
-  const toMs = filters.to ? new Date(`${filters.to}T23:59:59`).getTime() : null;
-  return { fromMs, toMs };
-};
-
-const isEndTimeInDateRange = (endTime, filters) => {
-  const endMs = Number(endTime || 0) * 1000;
-  const { fromMs, toMs } = getDateRangeMs(filters);
-
-  if (!endMs) return false;
-  if (fromMs !== null && endMs < fromMs) return false;
-  if (toMs !== null && endMs > toMs) return false;
-  return true;
-};
-
-const filterReportsByDate = (reports, filters) => {
-  if (!filters.from && !filters.to) return reports;
-  return reports.filter(({ auction }) => isEndTimeInDateRange(auction.endTime, filters));
-};
-
-const buildWorksheet = (name, rows) => {
-  const safeRows = rows.length ? rows : [{ Notice: "No rows available" }];
-  const headers = Array.from(
-    safeRows.reduce((set, row) => {
-      Object.keys(row).forEach((key) => set.add(key));
-      return set;
-    }, new Set())
-  );
-  const headerXml = `<Row>${headers
-    .map(
-      (header) =>
-        `<Cell><Data ss:Type="String">${escapeXml(header)}</Data></Cell>`
-    )
-    .join("")}</Row>`;
-  const bodyXml = safeRows
-    .map(
-      (row) =>
-        `<Row>${headers
-          .map((header) => {
-            const value = row[header];
-            const type =
-              typeof value === "number" && Number.isFinite(value)
-                ? "Number"
-                : "String";
-            return `<Cell><Data ss:Type="${type}">${escapeXml(
-              value
-            )}</Data></Cell>`;
-          })
-          .join("")}</Row>`
-    )
-    .join("");
-
-  return `<Worksheet ss:Name="${escapeXml(name)}"><Table>${headerXml}${bodyXml}</Table></Worksheet>`;
-};
-
-const buildWorkbook = (sheets) =>
-  `<?xml version="1.0"?>
-<?mso-application progid="Excel.Sheet"?>
-<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
- xmlns:o="urn:schemas-microsoft-com:office:office"
- xmlns:x="urn:schemas-microsoft-com:office:excel"
- xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
-${sheets.map((sheet) => buildWorksheet(sheet.name, sheet.rows)).join("")}
-</Workbook>`;
-
-const downloadBlob = (content, mimeType, extension, reportKind) => {
-  const blob = new Blob([content], { type: mimeType });
-  const url = URL.createObjectURL(blob);
-  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const link = document.createElement("a");
-
-  link.href = url;
-  link.download = `auction-admin-${reportKind}-${timestamp}.${extension}`;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  URL.revokeObjectURL(url);
-};
-
-const downloadWorkbook = (sheets) => {
-  downloadBlob(
-    buildWorkbook(sheets),
-    "application/vnd.ms-excel;charset=utf-8;",
-    "xls",
-    "workbook"
-  );
-};
-
-const downloadJsonReport = (payload) => {
-  downloadBlob(
-    JSON.stringify(payload, null, 2),
-    "application/json;charset=utf-8;",
-    "json",
-    "raw-data"
-  );
-};
-
-const toBigIntSafe = (value) => {
-  try {
-    return BigInt(value || 0);
-  } catch (error) {
-    return 0n;
-  }
-};
-
-const hasWei = (value) => toBigIntSafe(value) > 0n;
-
-const compareWeiDesc = (left, right) => {
-  const leftValue = toBigIntSafe(left);
-  const rightValue = toBigIntSafe(right);
-  if (leftValue === rightValue) return 0;
-  return leftValue > rightValue ? -1 : 1;
-};
-
-const normalizeTransactions = (rawTransactions, highestBid, highestBidder) => {
-  const normalized = rawTransactions.map((tx, idx) => ({
-    idx,
-    bidder: tx.bidderAddress,
-    bidderKey: tx.bidderAddress.toLowerCase(),
-    value: BigInt(tx.value || 0),
-    time: BigInt(tx.time || 0),
-  }));
-  const byTime = [...normalized].sort((a, b) =>
-    a.time === b.time ? a.idx - b.idx : a.time < b.time ? -1 : 1
-  );
-  const sumByBidder = new Map();
-  const cumulativeByIndex = Array(normalized.length).fill(0n);
-
-  byTime.forEach((tx) => {
-    const next = (sumByBidder.get(tx.bidderKey) || 0n) + tx.value;
-    sumByBidder.set(tx.bidderKey, next);
-    cumulativeByIndex[tx.idx] = next;
-  });
-
-  const highestBidValue = BigInt(highestBid || 0);
-  const highestBidderKey = (highestBidder || "").toLowerCase();
-
-  return normalized.map((tx, index) => ({
-    bidder: tx.bidder,
-    bidderKey: tx.bidderKey,
-    transactionAmountWei: tx.value.toString(),
-    cumulativeBidWei: cumulativeByIndex[index].toString(),
-    timeSeconds: tx.time.toString(),
-    time: toDateTime(tx.time),
-    isoTime: toIsoDateTime(tx.time),
-    isHighestBid:
-      Boolean(highestBidderKey) &&
-      tx.bidderKey === highestBidderKey &&
-      cumulativeByIndex[index] === highestBidValue,
-  }));
-};
-
-const readAuctionOption = async (address, index) => {
-  const summary = await readOnlyCall(({ campaign }) =>
-    campaign(address).methods.getSummary()
-  );
-
-  return {
-    index: index + 1,
-    address,
-    minimumContribution: summary[0],
-    seller: summary[3],
-    highestBid: summary[4],
-    dataDescription: summary[6],
-    highestBidder: summary[7],
-    endTime: summary[9],
-    endDate: toDateInputValue(summary[9]),
-  };
-};
-
-const readAuctionReport = async (
-  address,
-  index,
-  total,
-  onProgress,
-  progressIndex = index
-) => {
-  onProgress?.(`Reading auction ${progressIndex + 1} of ${total}`);
-
-  const [summary, rawTransactions, closedResult] = await Promise.all([
-    readOnlyCall(({ campaign }) => campaign(address).methods.getSummary()),
-    readOnlyCall(({ campaign }) => campaign(address).methods.getTransactions()).catch(
-      () => []
-    ),
-    readOnlyCall(({ campaign }) => campaign(address).methods.getStatus()).catch(
-      (error) => ({
-        readError: error.message || "Auction status read failed",
-      })
-    ),
-  ]);
-  const auction = {
-    index: index + 1,
-    address,
-    minimumContribution: summary[0],
-    balance: summary[1],
-    approversCount: summary[2],
-    seller: summary[3],
-    highestBid: summary[4],
-    dataForSell: summary[5],
-    dataDescription: summary[6],
-    highestBidder: summary[7],
-    addresses: summary[8] || [],
-    endTime: summary[9],
-    closed: closedResult === true,
-    closedReadError:
-      closedResult && typeof closedResult === "object"
-        ? closedResult.readError
-        : "",
-  };
-  const ended = Number(auction.endTime) * 1000 <= Date.now();
-  const transactions = normalizeTransactions(
-    rawTransactions,
-    auction.highestBid,
-    auction.highestBidder
-  );
-  const uniqueBidders = Array.from(
-    new Map(transactions.map((tx) => [tx.bidderKey, tx.bidder])).values()
-  );
-  const bidderStatuses = await mapWithConcurrency(
-    uniqueBidders,
-    BIDDER_STATUS_CONCURRENCY,
-    async (bidder) => {
-      try {
-        const status = await readOnlyCall(({ campaign }) =>
-          campaign(address).methods.getUserAuctionStatus(bidder)
-        );
-        return {
-          auctionAddress: address,
-          bidderAddress: bidder,
-          participated: Boolean(status[0]) ? "Yes" : "No",
-          currentBidWei: status[1],
-          refunded: Boolean(status[2]) ? "Yes" : "No",
-          isSeller: Boolean(status[3]) ? "Yes" : "No",
-          isHighestBidder: Boolean(status[4]) ? "Yes" : "No",
-          readError: "",
-        };
-      } catch (error) {
-        return {
-          auctionAddress: address,
-          bidderAddress: bidder,
-          participated: "Yes",
-          currentBidWei: "",
-          refunded: "",
-          isSeller: "",
-          isHighestBidder:
-            bidder.toLowerCase() === auction.highestBidder.toLowerCase()
-              ? "Yes"
-              : "No",
-          readError: error.message || "Status read failed",
-        };
-      }
-    }
-  );
-
-  await wait(80);
-  return { auction, ended, transactions, bidderStatuses };
-};
-
-const getSellerPaymentState = (auction, ended) => {
-  if (!ended) return "Open";
-  if (auction.closedReadError) return "Needs review";
-  if (!hasWei(auction.highestBid)) return "No bids";
-  return auction.closed ? "Seller payment finalized" : "Seller payment pending";
-};
-
-const getBidderPaymentState = (auction, ended, status) => {
-  if (!ended) return "Auction open";
-  if (status.readError) return "Needs review";
-  if (status.isHighestBidder === "Yes") return "Winner / charged";
-  if (status.refunded === "Yes") return "Refunded";
-  if (hasWei(status.currentBidWei)) return "Refund pending";
-  return "No active balance";
-};
-
-const buildReportAnalysis = (reports, errors) => {
-  const sellerMap = new Map();
-  const bidderMap = new Map();
-  const paymentRows = [];
-  const flagRows = [];
-
-  reports.forEach(({ auction, ended, transactions, bidderStatuses }) => {
-    const sellerKey = (auction.seller || "").toLowerCase();
-    const uniqueBidders = new Set(transactions.map((tx) => tx.bidderKey));
-    const sellerRow =
-      sellerMap.get(sellerKey) || {
-        "Seller Address": auction.seller,
-        "Auctions Created": 0,
-        "Open Auctions": 0,
-        "Closed Auctions": 0,
-        "Auctions With Bids": 0,
-        "Total Bid Rows": 0,
-        "Unique Bidders": new Set(),
-        "Total Highest Bids (wei)": 0n,
-        "Pending Seller Payments": 0,
-      };
-
-    sellerRow["Auctions Created"] += 1;
-    sellerRow[ended ? "Closed Auctions" : "Open Auctions"] += 1;
-    sellerRow["Auctions With Bids"] += hasWei(auction.highestBid) ? 1 : 0;
-    sellerRow["Total Bid Rows"] += transactions.length;
-    sellerRow["Total Highest Bids (wei)"] += toBigIntSafe(auction.highestBid);
-    if (ended && hasWei(auction.highestBid) && !auction.closed) {
-      sellerRow["Pending Seller Payments"] += 1;
-    }
-    uniqueBidders.forEach((bidderKey) => sellerRow["Unique Bidders"].add(bidderKey));
-    sellerMap.set(sellerKey, sellerRow);
-
-    paymentRows.push({
-      "Auction #": auction.index,
-      "Auction Address": auction.address,
-      Description: auction.dataDescription,
-      "Actor Role": "Seller",
-      "Actor Address": auction.seller,
-      "Payment Review": getSellerPaymentState(auction, ended),
-      "Current Bid (wei)": "",
-      Refunded: "",
-      "Read Error": "",
-    });
-
-    bidderStatuses.forEach((status) => {
-      const bidderKey = (status.bidderAddress || "").toLowerCase();
-      const bidderRow =
-        bidderMap.get(bidderKey) || {
-          "Bidder Address": status.bidderAddress,
-          "Auctions Participated": new Set(),
-          "Bid Transactions": 0,
-          "Total Transaction Amount (wei)": 0n,
-          "Current Bid Balance Sum (wei)": 0n,
-          "Highest Bidder Statuses": 0,
-          "Refunded Auctions": 0,
-          "Status Read Errors": 0,
-        };
-
-      bidderRow["Auctions Participated"].add(auction.address);
-      bidderRow["Current Bid Balance Sum (wei)"] += toBigIntSafe(
-        status.currentBidWei
-      );
-      bidderRow["Highest Bidder Statuses"] +=
-        status.isHighestBidder === "Yes" ? 1 : 0;
-      bidderRow["Refunded Auctions"] += status.refunded === "Yes" ? 1 : 0;
-      bidderRow["Status Read Errors"] += status.readError ? 1 : 0;
-      bidderMap.set(bidderKey, bidderRow);
-
-      paymentRows.push({
-        "Auction #": auction.index,
-        "Auction Address": auction.address,
-        Description: auction.dataDescription,
-        "Actor Role": "Bidder",
-        "Actor Address": status.bidderAddress,
-        "Payment Review": getBidderPaymentState(auction, ended, status),
-        "Current Bid (wei)": status.currentBidWei,
-        Refunded: status.refunded,
-        "Read Error": status.readError,
-      });
-    });
-
-    transactions.forEach((tx) => {
-      const bidderRow =
-        bidderMap.get(tx.bidderKey) || {
-          "Bidder Address": tx.bidder,
-          "Auctions Participated": new Set(),
-          "Bid Transactions": 0,
-          "Total Transaction Amount (wei)": 0n,
-          "Current Bid Balance Sum (wei)": 0n,
-          "Highest Bidder Statuses": 0,
-          "Refunded Auctions": 0,
-          "Status Read Errors": 0,
-        };
-
-      bidderRow["Auctions Participated"].add(auction.address);
-      bidderRow["Bid Transactions"] += 1;
-      bidderRow["Total Transaction Amount (wei)"] += toBigIntSafe(
-        tx.transactionAmountWei
-      );
-      bidderMap.set(tx.bidderKey, bidderRow);
-    });
-
-    if (!transactions.length) {
-      flagRows.push({
-        "Auction #": auction.index,
-        "Auction Address": auction.address,
-        Description: auction.dataDescription,
-        Severity: "Info",
-        Flag: "No bids recorded",
-        Detail: "Auction has no bid transactions.",
-      });
-    }
-
-    if (uniqueBidders.size === 1) {
-      flagRows.push({
-        "Auction #": auction.index,
-        "Auction Address": auction.address,
-        Description: auction.dataDescription,
-        Severity: "Info",
-        Flag: "Single bidder",
-        Detail: "Only one unique bidder appears in the transaction history.",
-      });
-    }
-
-    if (ended && hasWei(auction.highestBid) && !auction.closed) {
-      flagRows.push({
-        "Auction #": auction.index,
-        "Auction Address": auction.address,
-        Description: auction.dataDescription,
-        Severity: auction.closedReadError ? "Medium" : "High",
-        Flag: auction.closedReadError
-          ? "Payment status read failed"
-          : "Seller payment pending",
-        Detail:
-          auction.closedReadError ||
-          "Auction has ended with a highest bid, but getStatus is false.",
-      });
-    }
-
-    if (hasWei(auction.highestBid) && !transactions.some((tx) => tx.isHighestBid)) {
-      flagRows.push({
-        "Auction #": auction.index,
-        "Auction Address": auction.address,
-        Description: auction.dataDescription,
-        Severity: "Medium",
-        Flag: "Highest bid not matched to a bid row",
-        Detail:
-          "Summary highestBid/highestBidder did not map cleanly to the cumulative bid history.",
-      });
-    }
-
-    if (Number(auction.approversCount || 0) !== uniqueBidders.size) {
-      flagRows.push({
-        "Auction #": auction.index,
-        "Auction Address": auction.address,
-        Description: auction.dataDescription,
-        Severity: "Low",
-        Flag: "Bidder count mismatch",
-        Detail: `Summary says ${auction.approversCount}; transaction history has ${uniqueBidders.size} unique bidders.`,
-      });
-    }
-
-    bidderStatuses
-      .filter((status) => status.readError)
-      .forEach((status) => {
-        flagRows.push({
-          "Auction #": auction.index,
-          "Auction Address": auction.address,
-          Description: auction.dataDescription,
-          Severity: "Medium",
-          Flag: "Bidder status read failed",
-          Detail: `${status.bidderAddress}: ${status.readError}`,
-        });
-      });
-  });
-
-  const sellerRows = Array.from(sellerMap.values())
-    .map((row) => ({
-      ...row,
-      "Unique Bidders": row["Unique Bidders"].size,
-      "Total Highest Bids (wei)": row["Total Highest Bids (wei)"].toString(),
-    }))
-    .sort((a, b) => b["Auctions Created"] - a["Auctions Created"]);
-
-  const bidderRows = Array.from(bidderMap.values())
-    .map((row) => ({
-      ...row,
-      "Auctions Participated": row["Auctions Participated"].size,
-      "Total Transaction Amount (wei)":
-        row["Total Transaction Amount (wei)"].toString(),
-      "Current Bid Balance Sum (wei)":
-        row["Current Bid Balance Sum (wei)"].toString(),
-    }))
-    .sort((a, b) =>
-      compareWeiDesc(
-        a["Total Transaction Amount (wei)"],
-        b["Total Transaction Amount (wei)"]
-      )
-    );
-
-  const topAuctionRows = [...reports]
-    .sort((a, b) => compareWeiDesc(a.auction.highestBid, b.auction.highestBid))
-    .slice(0, 20)
-    .map(({ auction, transactions }, index) => ({
-      Section: "Top auctions by highest bid",
-      Rank: index + 1,
-      "Auction #": auction.index,
-      "Auction Address": auction.address,
-      Description: auction.dataDescription,
-      Metric: "Highest Bid (wei)",
-      Value: auction.highestBid,
-      "Supporting Count": transactions.length,
-    }));
-
-  const busiestAuctionRows = [...reports]
-    .sort((a, b) => b.transactions.length - a.transactions.length)
-    .slice(0, 20)
-    .map(({ auction, transactions }, index) => ({
-      Section: "Busiest auctions by bid rows",
-      Rank: index + 1,
-      "Auction #": auction.index,
-      "Auction Address": auction.address,
-      Description: auction.dataDescription,
-      Metric: "Bid Rows",
-      Value: transactions.length,
-      "Supporting Count": new Set(transactions.map((tx) => tx.bidderKey)).size,
-    }));
-
-  const topBidderRows = bidderRows.slice(0, 20).map((row, index) => ({
-    Section: "Top bidders by total bid volume",
-    Rank: index + 1,
-    "Actor Address": row["Bidder Address"],
-    Metric: "Total Transaction Amount (wei)",
-    Value: row["Total Transaction Amount (wei)"],
-    "Supporting Count": row["Auctions Participated"],
-  }));
-
-  const dictionaryRows = [
-    {
-      Field: "Auction Summary",
-      Meaning:
-        "One row per contract auction, read directly from getSummary and getStatus.",
-    },
-    {
-      Field: "All Bids",
-      Meaning:
-        "One row per bid transaction returned by the auction contract getTransactions method.",
-    },
-    {
-      Field: "Cumulative Bid",
-      Meaning:
-        "Running total per bidder. This is the value compared to highestBid.",
-    },
-    {
-      Field: "Payment Review",
-      Meaning:
-        "Frontend analysis of seller/winner/refund state based on contract reads; it does not send transactions.",
-    },
-    {
-      Field: "Flags",
-      Meaning:
-        "Rows that deserve human review, such as pending seller payment or mismatched bidder counts.",
-    },
-    {
-      Field: "Etherscan",
-      Meaning:
-        "Etherscan shows method calls and ETH transfers. Some report rows are decoded from contract state, not separate Etherscan rows.",
-    },
-  ];
-
-  return {
-    sellerRows,
-    bidderRows,
-    paymentRows,
-    flagRows: flagRows.length
-      ? flagRows
-      : [{ Severity: "Info", Flag: "No review flags", Detail: "" }],
-    leaderboardRows: [...topAuctionRows, ...busiestAuctionRows, ...topBidderRows],
-    dictionaryRows,
-    errorRows: errors.length
-      ? errors
-      : [{ Notice: "No auction read errors during export" }],
-  };
-};
-
-const buildCoreReportTables = (reports, errors, generatedAt) => {
-  const summaryRows = reports.map(({ auction, ended, transactions }) => ({
-    "Auction #": auction.index,
-    "Auction Address": auction.address,
-    "Etherscan URL": `${SEPOLIA_ADDRESS_URL}${auction.address}`,
-    Description: auction.dataDescription,
-    "Data For Sale": auction.dataForSell,
-    "Seller Address": auction.seller,
-    "Minimum Bid (wei)": auction.minimumContribution,
-    "Highest Bid (wei)": auction.highestBid,
-    "Highest Bidder": auction.highestBidder,
-    "Number Of Bidders": auction.approversCount,
-    "Unique Bidders In Transactions": new Set(
-      transactions.map((tx) => tx.bidderKey)
-    ).size,
-    "End Time": toDateTime(auction.endTime),
-    "End Time ISO": toIsoDateTime(auction.endTime),
-    "Auction Status": ended ? "Closed" : "Open",
-    "Payment Finalized": auction.closed ? "Yes" : "No",
-    "Payment State": getSellerPaymentState(auction, ended),
-    "Payment Status Read Error": auction.closedReadError,
-    "Generated At": generatedAt,
-  }));
-  const allBidRows = reports.flatMap(({ auction, transactions }) =>
-    transactions.map((tx, txIndex) => ({
-      "Auction #": auction.index,
-      "Auction Address": auction.address,
-      Description: auction.dataDescription,
-      "Bid #": txIndex + 1,
-      "Bidder Address": tx.bidder,
-      "Transaction Amount (wei)": tx.transactionAmountWei,
-      "Cumulative Bid (wei)": tx.cumulativeBidWei,
-      "Bid Time": tx.time,
-      "Bid Time ISO": tx.isoTime,
-      "Is Highest Bid": tx.isHighestBid ? "Yes" : "No",
-    }))
-  );
-  const timelineRows = [
-    ...reports.map(({ auction }) => ({
-      "Time ISO": toIsoDateTime(auction.endTime),
-      Time: toDateTime(auction.endTime),
-      "Event Type": "Auction End Time",
-      "Auction #": auction.index,
-      "Auction Address": auction.address,
-      Description: auction.dataDescription,
-      Actor: "",
-      "Amount (wei)": "",
-      "Cumulative Bid (wei)": "",
-    })),
-    ...reports.flatMap(({ auction, transactions }) =>
-      transactions.map((tx) => ({
-        "Time ISO": tx.isoTime,
-        Time: tx.time,
-        "Event Type": "Bid",
-        "Auction #": auction.index,
-        "Auction Address": auction.address,
-        Description: auction.dataDescription,
-        Actor: tx.bidder,
-        "Amount (wei)": tx.transactionAmountWei,
-        "Cumulative Bid (wei)": tx.cumulativeBidWei,
-      }))
-    ),
-  ].sort((a, b) => String(a["Time ISO"]).localeCompare(String(b["Time ISO"])));
-  const bidderStatusRows = reports.flatMap(({ auction, bidderStatuses }) =>
-    bidderStatuses.map((status) => ({
-      "Auction #": auction.index,
-      "Auction Address": auction.address,
-      Description: auction.dataDescription,
-      "Bidder Address": status.bidderAddress,
-      Participated: status.participated,
-      "Current Bid (wei)": status.currentBidWei,
-      Refunded: status.refunded,
-      "Is Seller": status.isSeller,
-      "Is Highest Bidder": status.isHighestBidder,
-      "Payment Review": getBidderPaymentState(
-        auction,
-        Number(auction.endTime) * 1000 <= Date.now(),
-        status
-      ),
-      "Read Error": status.readError,
-    }))
-  );
-
-  return {
-    generatedAt,
-    summaryRows,
-    allBidRows,
-    timelineRows,
-    bidderStatusRows,
-    analysis: buildReportAnalysis(reports, errors),
-  };
-};
-
-const buildReportSheets = (reports, errors) => {
-  const generatedAt = new Date().toLocaleString();
-  const {
-    summaryRows,
-    allBidRows,
-    timelineRows,
-    bidderStatusRows,
-    analysis,
-  } = buildCoreReportTables(reports, errors, generatedAt);
-  const usedSheetNames = new Set([
-    "Report Info",
-    "Auction Summary",
-    "All Bids",
-    "Timeline",
-    "Bidder Statuses",
-    "Seller Analysis",
-    "Bidder Analysis",
-    "Payment Review",
-    "Review Flags",
-    "Leaderboards",
-    "Analysis Guide",
-    "Errors",
-  ]);
-  const perAuctionSheets = reports.map(({ auction, transactions }) => {
-    const baseName = normalizeSheetName(
-      `A${auction.index} ${auction.dataDescription}`,
-      `Auction ${auction.index}`
-    );
-    let sheetName = baseName;
-    let duplicateIndex = 2;
-
-    while (usedSheetNames.has(sheetName)) {
-      const suffix = ` ${duplicateIndex}`;
-      sheetName = `${baseName.slice(0, 31 - suffix.length)}${suffix}`;
-      duplicateIndex += 1;
-    }
-    usedSheetNames.add(sheetName);
-
-    return {
-      name: sheetName,
-      rows: transactions.length
-        ? transactions.map((tx, txIndex) => ({
-            "Bid #": txIndex + 1,
-            "Bidder Address": tx.bidder,
-            "Transaction Amount (wei)": tx.transactionAmountWei,
-            "Cumulative Bid (wei)": tx.cumulativeBidWei,
-            "Bid Time": tx.time,
-            "Bid Time ISO": tx.isoTime,
-            "Is Highest Bid": tx.isHighestBid ? "Yes" : "No",
-          }))
-        : [
-            {
-              "Auction Address": auction.address,
-              Description: auction.dataDescription,
-              Notice: "No bids found for this auction",
-            },
-          ],
-    };
-  });
-
-  return [
-    {
-      name: "Report Info",
-      rows: [
-        { Field: "Generated At", Value: generatedAt },
-        { Field: "Auctions Exported", Value: reports.length },
-        { Field: "Auctions With Errors", Value: errors.length },
-        { Field: "Total Bid Rows", Value: allBidRows.length },
-        { Field: "Report Products", Value: "Workbook, printable HTML, JSON" },
-      ],
-    },
-    { name: "Auction Summary", rows: summaryRows },
-    { name: "All Bids", rows: allBidRows },
-    { name: "Timeline", rows: timelineRows },
-    { name: "Bidder Statuses", rows: bidderStatusRows },
-    { name: "Seller Analysis", rows: analysis.sellerRows },
-    { name: "Bidder Analysis", rows: analysis.bidderRows },
-    { name: "Payment Review", rows: analysis.paymentRows },
-    { name: "Review Flags", rows: analysis.flagRows },
-    { name: "Leaderboards", rows: analysis.leaderboardRows },
-    { name: "Analysis Guide", rows: analysis.dictionaryRows },
-    { name: "Errors", rows: analysis.errorRows },
-    ...perAuctionSheets,
-  ];
-};
-
-const buildReportPayload = (reports, errors) => {
-  const generatedDate = new Date();
-  const generatedAt = generatedDate.toLocaleString();
-  const tables = buildCoreReportTables(reports, errors, generatedAt);
-  const uniqueBidders = new Set();
-  let totalBidValue = 0n;
-  let totalHighestBid = 0n;
-
-  reports.forEach(({ auction, transactions }) => {
-    totalHighestBid += toBigIntSafe(auction.highestBid);
-    transactions.forEach((tx) => {
-      uniqueBidders.add(tx.bidderKey);
-      totalBidValue += toBigIntSafe(tx.transactionAmountWei);
-    });
-  });
-
-  return {
-    generatedAt,
-    generatedAtIso: generatedDate.toISOString(),
-    totals: {
-      auctions: reports.length,
-      auctionsWithErrors: errors.length,
-      bidRows: tables.allBidRows.length,
-      uniqueBidders: uniqueBidders.size,
-      totalBidValueWei: totalBidValue.toString(),
-      totalHighestBidWei: totalHighestBid.toString(),
-      pendingSellerPayments: tables.analysis.flagRows.filter(
-        (row) => row.Flag === "Seller payment pending"
-      ).length,
-    },
-    tables,
-    auctions: reports.map(({ auction, ended, transactions, bidderStatuses }) => ({
-      auction,
-      ended,
-      transactions,
-      bidderStatuses,
-    })),
-    errors,
-  };
-};
-
-const renderHtmlTable = (title, rows, limit = 20) => {
-  const safeRows = rows.slice(0, limit);
-  if (!safeRows.length) return "";
-  const headers = Array.from(
-    safeRows.reduce((set, row) => {
-      Object.keys(row).forEach((key) => set.add(key));
-      return set;
-    }, new Set())
-  );
-
-  return `<section>
-    <h2>${escapeXml(title)}</h2>
-    <table>
-      <thead><tr>${headers
-        .map((header) => `<th>${escapeXml(header)}</th>`)
-        .join("")}</tr></thead>
-      <tbody>${safeRows
-        .map(
-          (row) =>
-            `<tr>${headers
-              .map((header) => `<td>${escapeXml(row[header])}</td>`)
-              .join("")}</tr>`
-        )
-        .join("")}</tbody>
-    </table>
-  </section>`;
-};
-
-const downloadHtmlReport = (payload) => {
-  const { totals, tables } = payload;
-  const html = `<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <title>Auction Admin Report</title>
-  <style>
-    body { font-family: Arial, sans-serif; color: #07105c; margin: 32px; }
-    h1 { margin-bottom: 4px; }
-    h2 { margin-top: 32px; }
-    .meta { color: #5e638a; margin-bottom: 24px; }
-    .cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
-    .card { border: 1px solid #d9dcef; border-radius: 8px; padding: 12px; }
-    .label { color: #5e638a; font-size: 12px; text-transform: uppercase; }
-    .value { font-size: 20px; font-weight: 700; margin-top: 4px; }
-    table { width: 100%; border-collapse: collapse; font-size: 12px; }
-    th, td { border-bottom: 1px solid #e2e4f1; padding: 8px; text-align: left; vertical-align: top; }
-    th { background: #f3f4fb; }
-  </style>
-</head>
-<body>
-  <h1>Auction Admin Report</h1>
-  <div class="meta">Generated ${escapeXml(payload.generatedAt)}</div>
-  <div class="cards">
-    <div class="card"><div class="label">Auctions</div><div class="value">${escapeXml(
-      totals.auctions
-    )}</div></div>
-    <div class="card"><div class="label">Bid Rows</div><div class="value">${escapeXml(
-      totals.bidRows
-    )}</div></div>
-    <div class="card"><div class="label">Unique Bidders</div><div class="value">${escapeXml(
-      totals.uniqueBidders
-    )}</div></div>
-    <div class="card"><div class="label">Total Bid Value Wei</div><div class="value">${escapeXml(
-      totals.totalBidValueWei
-    )}</div></div>
-    <div class="card"><div class="label">Pending Seller Payments</div><div class="value">${escapeXml(
-      totals.pendingSellerPayments
-    )}</div></div>
-    <div class="card"><div class="label">Read Errors</div><div class="value">${escapeXml(
-      totals.auctionsWithErrors
-    )}</div></div>
-  </div>
-  ${renderHtmlTable("Review Flags", tables.analysis.flagRows, 30)}
-  ${renderHtmlTable("Leaderboards", tables.analysis.leaderboardRows, 40)}
-  ${renderHtmlTable("Seller Analysis", tables.analysis.sellerRows, 30)}
-  ${renderHtmlTable("Bidder Analysis", tables.analysis.bidderRows, 30)}
-  ${renderHtmlTable("Auction Summary", tables.summaryRows, 50)}
-</body>
-</html>`;
-
-  downloadBlob(html, "text/html;charset=utf-8;", "html", "printable-report");
 };
 
 const ManageBudgetPage = () => {
@@ -1093,6 +217,15 @@ const ManageBudgetPage = () => {
   const [auctionSearch, setAuctionSearch] = useState("");
   const [auctionSort, setAuctionSort] = useState("index-asc");
   const [reportFilters, setReportFilters] = useState({ from: "", to: "" });
+  const [reportIncludeAllAuctions, setReportIncludeAllAuctions] =
+    useState(false);
+  const [reportSections, setReportSections] = useState(() =>
+    makeDefaultReportSelection(REPORT_SECTION_OPTIONS)
+  );
+  const [reportDiagnostics, setReportDiagnostics] = useState(() =>
+    makeDefaultReportSelection(REPORT_DIAGNOSTIC_OPTIONS)
+  );
+  const [reportBuilderOpen, setReportBuilderOpen] = useState(false);
   const [bulkText, setBulkText] = useState("");
   const [bulkDefaults, setBulkDefaults] = useState({
     rowCount: "10",
@@ -1105,7 +238,9 @@ const ManageBudgetPage = () => {
   const [bulkLoading, setBulkLoading] = useState(false);
   const [bulkProgress, setBulkProgress] = useState({ current: 0, total: 0 });
   const [bulkResults, setBulkResults] = useState([]);
+  const reportCancelRef = useRef(false);
   const bulkSubmittingRef = useRef(false);
+  const autoLoadedAuctionRangeRef = useRef("");
 
   useEffect(() => {
     if (!window.ethereum) {
@@ -1471,36 +606,43 @@ const ManageBudgetPage = () => {
     }
   };
 
-  const handleLoadAuctionSelector = async () => {
-    if (auctionSelectorLoading || reportState.loading) return;
+  const handleLoadAuctionSelector = useCallback(
+    async ({ quiet = false } = {}) => {
+      if (auctionSelectorLoading || reportState.loading) return false;
 
-    setAuctionSelectorLoading(true);
-    try {
-      const addresses = await readOnlyCall(({ factory: readFactory }) =>
-        readFactory.methods.getDeployedCampaigns()
-      );
-      const options = await mapWithConcurrency(
-        addresses,
-        REPORT_CONCURRENCY,
-        (address, index) => readAuctionOption(address, index)
-      );
+      setAuctionSelectorLoading(true);
+      try {
+        const addresses = await readOnlyCall(({ factory: readFactory }) =>
+          readFactory.methods.getDeployedCampaigns()
+        );
+        const options = await mapWithConcurrency(
+          addresses,
+          REPORT_CONCURRENCY,
+          (address, index) => readAuctionOption(address, index)
+        );
 
-      setAuctionOptions(options.filter(Boolean));
-      setSelectedAuctions((current) => {
-        const next = {};
-        options.forEach((option) => {
-          if (current[option.address]) next[option.address] = true;
+        setAuctionOptions(options.filter(Boolean));
+        setSelectedAuctions((current) => {
+          const next = {};
+          options.forEach((option) => {
+            if (current[option.address]) next[option.address] = true;
+          });
+          return next;
         });
-        return next;
-      });
-      toast.success(`Loaded ${options.length} auctions`);
-    } catch (loadError) {
-      console.error("Auction selector load failed:", loadError);
-      toast.error(loadError.message || "Could not load auction selector");
-    } finally {
-      setAuctionSelectorLoading(false);
-    }
-  };
+        if (!quiet) {
+          toast.success(`Loaded ${options.length} auctions`);
+        }
+        return true;
+      } catch (loadError) {
+        console.error("Auction selector load failed:", loadError);
+        toast.error(loadError.message || "Could not load auction selector");
+        return false;
+      } finally {
+        setAuctionSelectorLoading(false);
+      }
+    },
+    [auctionSelectorLoading, reportState.loading]
+  );
 
   const handleToggleAuctionSelection = (address) => {
     setSelectedAuctions((current) => ({
@@ -1516,14 +658,129 @@ const ManageBudgetPage = () => {
     }));
   };
 
+  useEffect(() => {
+    const hasCompleteDateRange =
+      reportFilters.from &&
+      reportFilters.to &&
+      reportFilters.from <= reportFilters.to;
+
+    if (
+      reportIncludeAllAuctions ||
+      !hasCompleteDateRange ||
+      auctionOptions.length ||
+      auctionSelectorLoading ||
+      reportState.loading
+    ) {
+      return;
+    }
+
+    const rangeKey = `${reportFilters.from}|${reportFilters.to}`;
+    if (autoLoadedAuctionRangeRef.current === rangeKey) return;
+
+    autoLoadedAuctionRangeRef.current = rangeKey;
+    handleLoadAuctionSelector({ quiet: true }).then((loaded) => {
+      if (!loaded && autoLoadedAuctionRangeRef.current === rangeKey) {
+        autoLoadedAuctionRangeRef.current = "";
+      }
+    });
+  }, [
+    auctionOptions.length,
+    auctionSelectorLoading,
+    handleLoadAuctionSelector,
+    reportFilters.from,
+    reportFilters.to,
+    reportIncludeAllAuctions,
+    reportState.loading,
+  ]);
+
+  const handleToggleReportSection = (key) => {
+    setReportSections((current) => ({
+      ...current,
+      [key]: !current[key],
+    }));
+  };
+
+  const handleToggleReportDiagnostic = (key) => {
+    setReportDiagnostics((current) => ({
+      ...current,
+      [key]: !current[key],
+    }));
+  };
+
+  const handleSetAllReportSections = (selected) => {
+    setReportSections(
+      REPORT_SECTION_OPTIONS.reduce((next, option) => {
+        next[option.key] = selected;
+        return next;
+      }, {})
+    );
+  };
+
+  const handleSetAllReportDiagnostics = (selected) => {
+    setReportDiagnostics(
+      REPORT_DIAGNOSTIC_OPTIONS.reduce((next, option) => {
+        next[option.key] = selected;
+        return next;
+      }, {})
+    );
+  };
+
+  const handleCancelReportGeneration = () => {
+    reportCancelRef.current = true;
+    setReportState((current) => ({
+      ...current,
+      message: "Cancelling after current reads finish...",
+    }));
+    toast("Cancelling report generation...");
+  };
+
   const handleGenerateReports = async (product = "excel") => {
     if (reportState.loading) return;
-    const productLabel =
-      product === "html"
-        ? "printable HTML"
-        : product === "json"
-        ? "raw JSON"
-        : "Excel workbook";
+    reportCancelRef.current = false;
+    const exportOption =
+      REPORT_EXPORT_OPTIONS.find((option) => option.product === product) ||
+      REPORT_EXPORT_OPTIONS[0];
+    const productLabel = exportOption.label.toLowerCase();
+    const selectedSectionCount = Object.values(reportSections).filter(Boolean)
+      .length;
+
+    if (selectedSectionCount === 0) {
+      toast.error("Choose at least one report tab.");
+      return;
+    }
+
+    if (
+      exportOption.requiresSection &&
+      !reportSections[exportOption.requiresSection]
+    ) {
+      toast.error(`Enable ${exportOption.label.replace(" CSV", "")} first.`);
+      return;
+    }
+
+    if (
+      !reportIncludeAllAuctions &&
+      (!reportFilters.from || !reportFilters.to)
+    ) {
+      toast.error(
+        "Choose both report dates, or enable every auction in the contract."
+      );
+      return;
+    }
+
+    if (
+      !reportIncludeAllAuctions &&
+      reportFilters.from &&
+      reportFilters.to &&
+      reportFilters.from > reportFilters.to
+    ) {
+      toast.error("The from date must be before the to date.");
+      return;
+    }
+
+    const reportOptions = {
+      sections: reportSections,
+      diagnostics: reportDiagnostics,
+    };
 
     setReportState({
       loading: true,
@@ -1537,6 +794,10 @@ const ManageBudgetPage = () => {
       const addresses = await readOnlyCall(({ factory: readFactory }) =>
         readFactory.methods.getDeployedCampaigns()
       );
+      if (reportCancelRef.current) {
+        toast("Report generation cancelled.");
+        return;
+      }
       const reports = [];
       const errors = [];
       const selectedSet = new Set(
@@ -1544,7 +805,7 @@ const ManageBudgetPage = () => {
           .filter(([, selected]) => selected)
           .map(([address]) => address)
       );
-      const hasDateFilter = Boolean(reportFilters.from || reportFilters.to);
+      const shouldFilterByDate = !reportIncludeAllAuctions;
       let targets = auctionOptions.length
         ? auctionOptions.map((option) => ({
             address: option.address,
@@ -1557,7 +818,7 @@ const ManageBudgetPage = () => {
         targets = targets.filter((target) => selectedSet.has(target.address));
       }
 
-      if (hasDateFilter && auctionOptions.length) {
+      if (shouldFilterByDate && auctionOptions.length) {
         targets = targets.filter((target) =>
           isEndTimeInDateRange(target.endTime, reportFilters)
         );
@@ -1579,18 +840,21 @@ const ManageBudgetPage = () => {
         targets,
         REPORT_CONCURRENCY,
         async (target, targetIndex) => {
+          if (reportCancelRef.current) return;
           try {
             const report = await readAuctionReport(
               target.address,
               target.index,
               targets.length,
               (message) =>
+                !reportCancelRef.current &&
                 setReportState((current) => ({
                   ...current,
                   message,
                 })),
               targetIndex
             );
+            if (reportCancelRef.current) return;
             reports[targetIndex] = report;
           } catch (readError) {
             errors.push({
@@ -1607,20 +871,32 @@ const ManageBudgetPage = () => {
         }
       );
 
-      const cleanReports = filterReportsByDate(
-        reports.filter(Boolean),
-        reportFilters
-      );
+      if (reportCancelRef.current) {
+        toast("Report generation cancelled.");
+        return;
+      }
+
+      const cleanReports = shouldFilterByDate
+        ? filterReportsByDate(reports.filter(Boolean), reportFilters)
+        : reports.filter(Boolean);
       if (!cleanReports.length) {
         throw new Error("No auctions could be exported for these filters");
       }
 
+      const payload = buildReportPayload(cleanReports, errors, reportOptions);
+
       if (product === "json") {
-        downloadJsonReport(buildReportPayload(cleanReports, errors));
+        downloadJsonReport(payload);
       } else if (product === "html") {
-        downloadHtmlReport(buildReportPayload(cleanReports, errors));
+        downloadHtmlReport(payload);
+      } else if (product === "timeline") {
+        downloadCsvReport(payload.tables.timelineRows, "timeline");
+      } else if (product === "bids") {
+        downloadCsvReport(payload.tables.allBidRows, "all-bids");
+      } else if (product === "payments") {
+        downloadCsvReport(payload.tables.analysis.paymentRows, "payment-review");
       } else {
-        downloadWorkbook(buildReportSheets(cleanReports, errors));
+        downloadWorkbook(buildReportSheets(cleanReports, errors, reportOptions));
       }
 
       toast.success(
@@ -1630,6 +906,7 @@ const ManageBudgetPage = () => {
       console.error("Report generation failed:", reportError);
       toast.error(reportError.message || "Report generation failed");
     } finally {
+      reportCancelRef.current = false;
       setReportState({
         loading: false,
         current: 0,
@@ -1677,7 +954,29 @@ const ManageBudgetPage = () => {
       : `Create ${bulkAuctions.length || ""} Auctions`;
   const selectedAuctionCount = Object.values(selectedAuctions).filter(Boolean)
     .length;
-  const hasReportFilters = Boolean(reportFilters.from || reportFilters.to);
+  const hasReportFilters = Boolean(reportFilters.from && reportFilters.to);
+  const datesRequired = !reportIncludeAllAuctions;
+  const reportDateRangeInvalid =
+    datesRequired &&
+    Boolean(reportFilters.from && reportFilters.to) &&
+    reportFilters.from > reportFilters.to;
+  const reportScopeReady =
+    reportIncludeAllAuctions ||
+    Boolean(reportFilters.from && reportFilters.to && !reportDateRangeInvalid);
+  const selectedReportSectionCount = Object.values(reportSections).filter(Boolean)
+    .length;
+  const selectedDiagnosticCount = Object.values(reportDiagnostics).filter(Boolean)
+    .length;
+  const selectedReportSectionSummary = summarizeReportSelection(
+    REPORT_SECTION_OPTIONS,
+    reportSections,
+    "No tabs selected"
+  );
+  const selectedDiagnosticSummary = summarizeReportSelection(
+    REPORT_DIAGNOSTIC_OPTIONS,
+    reportDiagnostics,
+    "No diagnostics active"
+  );
   const normalizedAuctionSearch = auctionSearch.trim().toLowerCase();
   const visibleAuctionOptions = auctionOptions
     .filter((option) => {
@@ -1695,7 +994,9 @@ const ManageBudgetPage = () => {
           .toLowerCase()
           .includes(normalizedAuctionSearch);
       const matchesDate =
-        !hasReportFilters || isEndTimeInDateRange(option.endTime, reportFilters);
+        reportIncludeAllAuctions ||
+        !hasReportFilters ||
+        isEndTimeInDateRange(option.endTime, reportFilters);
 
       return matchesSearch && matchesDate;
     })
@@ -1734,7 +1035,9 @@ const ManageBudgetPage = () => {
       }`
     : hasReportFilters
     ? "all auctions in the selected date range"
-    : "all auctions";
+    : reportIncludeAllAuctions
+    ? "every auction in the contract"
+    : "choose report dates";
 
   const handleSelectVisibleAuctions = () => {
     setSelectedAuctions((current) => {
@@ -1744,10 +1047,6 @@ const ManageBudgetPage = () => {
       });
       return next;
     });
-  };
-
-  const handleClearAuctionSelection = () => {
-    setSelectedAuctions({});
   };
 
   return (
@@ -2379,9 +1678,9 @@ const ManageBudgetPage = () => {
             <Box sx={{ width: "100%" }}>
               <Typography variant="h6">Auction Reports</Typography>
               <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                Create a full chain-snapshot report: auction summaries, all bids,
-                timelines, seller/bidder analysis, payment review, review flags,
-                leaderboards, raw data, and one sheet per auction.
+                Build a focused export from selected auctions. Choose the date
+                range, optional auction list, report tabs, diagnostics, and file
+                type before downloading.
               </Typography>
 
               <Box
@@ -2400,6 +1699,12 @@ const ManageBudgetPage = () => {
                     handleDateFilterChange("from", e.target.value)
                   }
                   InputLabelProps={{ shrink: true }}
+                  required={datesRequired}
+                  disabled={reportIncludeAllAuctions}
+                  error={reportDateRangeInvalid}
+                  helperText={
+                    datesRequired ? "Required for normal reports" : "Ignored"
+                  }
                   fullWidth
                 />
                 <TextField
@@ -2408,8 +1713,60 @@ const ManageBudgetPage = () => {
                   value={reportFilters.to}
                   onChange={(e) => handleDateFilterChange("to", e.target.value)}
                   InputLabelProps={{ shrink: true }}
+                  required={datesRequired}
+                  disabled={reportIncludeAllAuctions}
+                  error={reportDateRangeInvalid}
+                  helperText={
+                    reportDateRangeInvalid
+                      ? "Must be after the from date"
+                      : datesRequired
+                      ? "Required for normal reports"
+                      : "Ignored"
+                  }
                   fullWidth
                 />
+              </Box>
+
+              <Box
+                component="label"
+                sx={{
+                  mt: 1,
+                  display: "grid",
+                  gridTemplateColumns: "auto 1fr",
+                  gap: 1,
+                  alignItems: "flex-start",
+                  p: 1.25,
+                  borderRadius: 2,
+                  border: reportIncludeAllAuctions
+                    ? "1px solid #b9c7f2"
+                    : "1px solid #e5e8f6",
+                  backgroundColor: reportIncludeAllAuctions
+                    ? "#f1f5ff"
+                    : "#fbfcff",
+                  cursor: "pointer",
+                }}
+              >
+                <Checkbox
+                  size="small"
+                  checked={reportIncludeAllAuctions}
+                  onChange={(e) =>
+                    setReportIncludeAllAuctions(e.target.checked)
+                  }
+                  sx={{ p: 0.15 }}
+                />
+                <Box>
+                  <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                    Export every auction in the contract
+                  </Typography>
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    display="block"
+                  >
+                    Use this only when you intentionally want to ignore the date
+                    range and read the full deployed auction list.
+                  </Typography>
+                </Box>
               </Box>
 
               <Box
@@ -2433,7 +1790,8 @@ const ManageBudgetPage = () => {
                       Optional auction selection
                     </Typography>
                     <Typography variant="caption" color="text.secondary">
-                      Leave empty to export all matching auctions.
+                      Leave empty to export the current date scope, or the full
+                      contract only when that override is enabled.
                     </Typography>
                   </Box>
                   <Button
@@ -2442,7 +1800,11 @@ const ManageBudgetPage = () => {
                     onClick={handleLoadAuctionSelector}
                     disabled={auctionSelectorLoading || reportState.loading}
                   >
-                    {auctionSelectorLoading ? "Loading..." : "Load Auctions"}
+                    {auctionSelectorLoading
+                      ? "Loading..."
+                      : auctionOptions.length
+                      ? "Reload Auctions"
+                      : "Load Auctions"}
                   </Button>
                 </Box>
 
@@ -2558,14 +1920,6 @@ const ManageBudgetPage = () => {
                           disabled={!visibleAuctionOptions.length}
                         >
                           Select shown
-                        </Button>
-                        <Button
-                          variant="text"
-                          size="small"
-                          onClick={handleClearAuctionSelection}
-                          disabled={!selectedAuctionCount}
-                        >
-                          Use all matching
                         </Button>
                       </Box>
                     </Box>
@@ -2696,44 +2050,353 @@ const ManageBudgetPage = () => {
                 )}
               </Box>
 
+
+              <Box
+                sx={{
+                  mt: 2,
+                  border: "1px solid #d8def4",
+                  borderRadius: 3,
+                  backgroundColor: "#f8faff",
+                  overflow: "hidden",
+                }}
+              >
+                <Box sx={{ p: { xs: 1.5, sm: 2 } }}>
+                  <Box
+                    sx={{
+                      display: "grid",
+                      gridTemplateColumns: { xs: "1fr", sm: "1fr auto" },
+                      gap: 1.5,
+                      alignItems: "center",
+                    }}
+                  >
+                    <Box sx={{ minWidth: 0 }}>
+                      <Typography variant="subtitle2" sx={{ fontWeight: 800 }}>
+                        Report builder
+                      </Typography>
+                      <Typography
+                        variant="caption"
+                        color="text.secondary"
+                        display="block"
+                        sx={{ mt: 0.25 }}
+                      >
+                        Pick the workbook content once, then export it in any
+                        format below.
+                      </Typography>
+                    </Box>
+                    <Button
+                      variant={reportBuilderOpen ? "contained" : "outlined"}
+                      size="small"
+                      onClick={() => setReportBuilderOpen((current) => !current)}
+                      sx={{
+                        borderRadius: 999,
+                        px: 2,
+                        justifySelf: { xs: "start", sm: "end" },
+                        backgroundColor: reportBuilderOpen
+                          ? "#103090"
+                          : undefined,
+                      }}
+                    >
+                      {reportBuilderOpen ? "Close options" : "Edit options"}
+                    </Button>
+                  </Box>
+
+                  <Box
+                    sx={{
+                      display: "grid",
+                      gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" },
+                      gap: 1,
+                      mt: 1.5,
+                    }}
+                  >
+                    {[
+                      {
+                        label: "Tabs",
+                        count: `${selectedReportSectionCount}/${REPORT_SECTION_OPTIONS.length}`,
+                        summary: selectedReportSectionSummary,
+                      },
+                      {
+                        label: "Diagnostics",
+                        count: `${selectedDiagnosticCount}/${REPORT_DIAGNOSTIC_OPTIONS.length}`,
+                        summary: selectedDiagnosticSummary,
+                      },
+                    ].map((item) => (
+                      <Box
+                        key={item.label}
+                        sx={{
+                          display: "grid",
+                          gridTemplateColumns: "auto 1fr",
+                          gap: 1,
+                          alignItems: "center",
+                          minHeight: 62,
+                          px: 1.25,
+                          py: 1,
+                          borderRadius: 2,
+                          backgroundColor: "#ffffff",
+                          border: "1px solid #e7ebfb",
+                        }}
+                      >
+                        <Box
+                          sx={{
+                            minWidth: 52,
+                            px: 1,
+                            py: 0.5,
+                            borderRadius: 999,
+                            textAlign: "center",
+                            backgroundColor: "#eef3ff",
+                            color: "#103090",
+                            fontWeight: 800,
+                            fontSize: 13,
+                          }}
+                        >
+                          {item.count}
+                        </Box>
+                        <Box sx={{ minWidth: 0 }}>
+                          <Typography variant="caption" sx={{ fontWeight: 800 }}>
+                            {item.label}
+                          </Typography>
+                          <Typography
+                            variant="caption"
+                            color="text.secondary"
+                            display="block"
+                            sx={{
+                              mt: 0.25,
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {item.summary}
+                          </Typography>
+                        </Box>
+                      </Box>
+                    ))}
+                  </Box>
+                </Box>
+
+                {reportBuilderOpen && (
+                  <Box
+                    sx={{
+                      borderTop: "1px solid #e5e9fa",
+                      p: { xs: 1.5, sm: 2 },
+                      display: "grid",
+                      gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" },
+                      gap: 2,
+                      backgroundColor: "#ffffff",
+                    }}
+                  >
+                    {[
+                      {
+                        title: "Tabs to include",
+                        caption: "These become sheets in Excel and sections in HTML/JSON.",
+                        options: REPORT_SECTION_OPTIONS,
+                        selection: reportSections,
+                        onToggle: handleToggleReportSection,
+                        onAll: handleSetAllReportSections,
+                      },
+                      {
+                        title: "Diagnostics to run",
+                        caption: "These rules feed the Review Flags checklist.",
+                        options: REPORT_DIAGNOSTIC_OPTIONS,
+                        selection: reportDiagnostics,
+                        onToggle: handleToggleReportDiagnostic,
+                        onAll: handleSetAllReportDiagnostics,
+                      },
+                    ].map((group) => (
+                      <Box key={group.title}>
+                        <Box
+                          display="flex"
+                          justifyContent="space-between"
+                          alignItems="flex-start"
+                          gap={1}
+                          flexWrap="wrap"
+                        >
+                          <Box>
+                            <Typography
+                              variant="caption"
+                              sx={{ fontWeight: 800 }}
+                            >
+                              {group.title}
+                            </Typography>
+                            <Typography
+                              variant="caption"
+                              color="text.secondary"
+                              display="block"
+                              sx={{ maxWidth: 360 }}
+                            >
+                              {group.caption}
+                            </Typography>
+                          </Box>
+                          <Box display="flex" gap={0.5}>
+                            <Button
+                              size="small"
+                              variant="text"
+                              onClick={() => group.onAll(true)}
+                              sx={{ minWidth: 0 }}
+                            >
+                              All
+                            </Button>
+                            <Button
+                              size="small"
+                              variant="text"
+                              onClick={() => group.onAll(false)}
+                              sx={{ minWidth: 0 }}
+                            >
+                              None
+                            </Button>
+                          </Box>
+                        </Box>
+
+                        <Box sx={{ display: "grid", gap: 0.75, mt: 1.25 }}>
+                          {group.options.map((option) => {
+                            const checked = Boolean(group.selection[option.key]);
+
+                            return (
+                              <Box
+                                key={option.key}
+                                component="label"
+                                sx={{
+                                  display: "grid",
+                                  gridTemplateColumns: "auto 1fr",
+                                  gap: 0.75,
+                                  alignItems: "flex-start",
+                                  cursor: "pointer",
+                                  p: 1,
+                                  borderRadius: 2,
+                                  backgroundColor: checked
+                                    ? "#f1f5ff"
+                                    : "#fbfcff",
+                                  border: checked
+                                    ? "1px solid #c7d2f5"
+                                    : "1px solid #edf0fb",
+                                  transition:
+                                    "border-color 140ms ease, background-color 140ms ease",
+                                  "&:hover": {
+                                    backgroundColor: checked
+                                      ? "#eef3ff"
+                                      : "#f7f9ff",
+                                  },
+                                }}
+                              >
+                                <Checkbox
+                                  checked={checked}
+                                  onChange={() => group.onToggle(option.key)}
+                                  size="small"
+                                  sx={{ p: 0.15 }}
+                                />
+                                <Box sx={{ minWidth: 0 }}>
+                                  <Typography
+                                    variant="caption"
+                                    sx={{ fontWeight: 800 }}
+                                  >
+                                    {option.label}
+                                  </Typography>
+                                  <Typography
+                                    variant="caption"
+                                    color="text.secondary"
+                                    display="block"
+                                  >
+                                    {option.description}
+                                  </Typography>
+                                </Box>
+                              </Box>
+                            );
+                          })}
+                        </Box>
+                      </Box>
+                    ))}
+                  </Box>
+                )}
+              </Box>
               <Box
                 sx={{
                   display: "grid",
-                  gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr 1fr" },
+                  gridTemplateColumns: {
+                    xs: "1fr",
+                    sm: "1fr 1fr",
+                    md: "1fr 1fr 1fr",
+                  },
                   gap: 1.5,
                   mt: 2,
                 }}
               >
-                <Button
-                  variant="contained"
-                  sx={{ backgroundColor: "#103090" }}
-                  onClick={() => handleGenerateReports("excel")}
-                  disabled={reportState.loading}
-                >
-                  Excel Workbook
-                </Button>
-                <Button
-                  variant="outlined"
-                  onClick={() => handleGenerateReports("html")}
-                  disabled={reportState.loading}
-                >
-                  Printable HTML
-                </Button>
-                <Button
-                  variant="outlined"
-                  onClick={() => handleGenerateReports("json")}
-                  disabled={reportState.loading}
-                >
-                  Raw JSON
-                </Button>
+                {REPORT_EXPORT_OPTIONS.map((option) => {
+                  const disabled =
+                    reportState.loading ||
+                    selectedReportSectionCount === 0 ||
+                    !reportScopeReady ||
+                    (option.requiresSection &&
+                      !reportSections[option.requiresSection]);
+
+                  return (
+                    <Box
+                      key={option.product}
+                      sx={{
+                        border: option.primary
+                          ? "1px solid #bdc9f2"
+                          : "1px solid #dce1f4",
+                        borderRadius: 2,
+                        p: 1.25,
+                        backgroundColor: option.primary ? "#f6f8ff" : "#fff",
+                        transition:
+                          "border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease",
+                        "&:hover": {
+                          borderColor: disabled ? undefined : "#aebbef",
+                          boxShadow: disabled
+                            ? undefined
+                            : "0 8px 20px rgba(16, 48, 144, 0.08)",
+                          transform: disabled ? undefined : "translateY(-1px)",
+                        },
+                      }}
+                    >
+                      <Button
+                        variant={option.primary ? "contained" : "outlined"}
+                        sx={{
+                          width: "100%",
+                          minHeight: 42,
+                          borderRadius: 1.5,
+                          backgroundColor: option.primary ? "#103090" : undefined,
+                        }}
+                        onClick={() => handleGenerateReports(option.product)}
+                        disabled={disabled}
+                      >
+                        {option.label}
+                      </Button>
+                      <Typography
+                        variant="caption"
+                        color="text.secondary"
+                        display="block"
+                        sx={{ mt: 0.75, minHeight: 34 }}
+                      >
+                        {option.description}
+                      </Typography>
+                    </Box>
+                  );
+                })}
               </Box>
               {reportState.loading && (
                 <Box sx={{ mt: 2, width: "100%" }}>
                   <LinearProgress variant="determinate" value={reportProgress} />
-                  <Typography variant="caption" color="text.secondary">
-                    {reportState.current}/{reportState.total} auctions -{" "}
-                    {reportState.message}
-                  </Typography>
+                  <Box
+                    display="flex"
+                    justifyContent="space-between"
+                    alignItems="center"
+                    gap={1}
+                    flexWrap="wrap"
+                    sx={{ mt: 0.75 }}
+                  >
+                    <Typography variant="caption" color="text.secondary">
+                      {reportState.current}/{reportState.total} auctions -{" "}
+                      {reportState.message}
+                    </Typography>
+                    <Button
+                      variant="outlined"
+                      color="error"
+                      size="small"
+                      onClick={handleCancelReportGeneration}
+                    >
+                      Cancel
+                    </Button>
+                  </Box>
                 </Box>
               )}
             </Box>
@@ -2776,3 +2439,4 @@ const ManageBudgetPage = () => {
 };
 
 export default ManageBudgetPage;
+

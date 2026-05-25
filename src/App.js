@@ -13,6 +13,133 @@ const MetamaskGuidePage = lazy(() => import("./pages/MetamaskGuide/MetamaskGuide
 const ManageBudgetPage = lazy(() => import("./pages/ManageBudget/ManageBudgetPage.js"));
 const ShowAuctionPage = lazy(() => import("./pages/ShowAuction/ShowAuctionPage.js"));
 
+const AppLoadingFallback = () => (
+  <>
+    <style>
+      {`
+        .app-loading-shell {
+          min-height: 100vh;
+          display: grid;
+          place-items: center;
+          background: #f5d762;
+          color: #07105c;
+          font-family: Arial, sans-serif;
+        }
+        .app-loading-panel {
+          width: min(420px, calc(100vw - 48px));
+          padding: 28px;
+          border: 1px solid rgba(16, 48, 144, 0.14);
+          border-radius: 18px;
+          background: rgba(255, 255, 255, 0.88);
+          box-shadow: 0 18px 45px rgba(16, 48, 144, 0.12);
+        }
+        .app-loading-brand {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          margin-bottom: 18px;
+        }
+        .app-loading-mark {
+          width: 44px;
+          height: 44px;
+          border-radius: 14px;
+          display: grid;
+          place-items: center;
+          background: #103090;
+          color: #ffffff;
+          box-shadow: 0 8px 18px rgba(16, 48, 144, 0.22);
+        }
+        .app-loading-mark svg {
+          width: 24px;
+          height: 24px;
+        }
+        .app-loading-title {
+          margin: 0;
+          font-size: 18px;
+          font-weight: 800;
+          letter-spacing: 0;
+        }
+        .app-loading-copy {
+          margin: 3px 0 0;
+          color: #5e638a;
+          font-size: 13px;
+        }
+        .app-loading-bar {
+          position: relative;
+          height: 6px;
+          overflow: hidden;
+          border-radius: 999px;
+          background: #e3e8fb;
+        }
+        .app-loading-bar::after {
+          content: "";
+          position: absolute;
+          inset: 0;
+          width: 42%;
+          border-radius: inherit;
+          background: #103090;
+          animation: app-loading-slide 1.15s ease-in-out infinite;
+        }
+        .app-loading-status {
+          display: flex;
+          justify-content: space-between;
+          gap: 16px;
+          margin-top: 12px;
+          color: #5e638a;
+          font-size: 12px;
+        }
+        @keyframes app-loading-slide {
+          0% { transform: translateX(-110%); }
+          55% { transform: translateX(90%); }
+          100% { transform: translateX(250%); }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .app-loading-bar::after {
+            animation: none;
+            transform: none;
+            width: 100%;
+          }
+        }
+      `}
+    </style>
+    <div
+      className="app-loading-shell"
+      role="status"
+      aria-live="polite"
+      aria-label="Loading Blockchain Data Market"
+    >
+      <div className="app-loading-panel">
+        <div className="app-loading-brand">
+          <div className="app-loading-mark" aria-hidden="true">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M12 3v18" />
+              <path d="M7 8h8.5a3.5 3.5 0 0 1 0 7H6" />
+              <path d="M16 3v3" />
+              <path d="M8 18v3" />
+            </svg>
+          </div>
+          <div>
+            <h1 className="app-loading-title">Blockchain Data Market</h1>
+            <p className="app-loading-copy">Preparing the workspace</p>
+          </div>
+        </div>
+        <div className="app-loading-bar" />
+        <div className="app-loading-status">
+          <span>Loading app modules</span>
+          <span>Please wait</span>
+        </div>
+      </div>
+    </div>
+  </>
+);
+
 function App() {
   const [isMobile, setIsMobile] = useState(false);
 
@@ -122,7 +249,7 @@ function App() {
         </>
       ) : (
         <>
-          <Suspense fallback={<div style={{ padding: "2rem" }}>Loading...</div>}>
+          <Suspense fallback={<AppLoadingFallback />}>
             <Routes>
               <Route path="/" element={<HomePage />} />
               <Route path="/metamask-login" element={<MetamaskTutorialPage />} />
