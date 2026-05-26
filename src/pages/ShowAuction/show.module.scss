@@ -16,7 +16,7 @@ $border-radius: 2rem;
   display: flex;
   justify-content: center;
   gap: 20px;
-  animation: softFadeIn 220ms ease both;
+  animation: softFadeUp 240ms var(--motion-ease, ease) both;
 }
 
 .campaignInfo,
@@ -26,15 +26,18 @@ $border-radius: 2rem;
   margin-top: 2rem;
   padding: 1.5rem;
   background: white;
-  animation: softFadeUp 240ms ease both;
+  animation: softScaleIn 260ms var(--motion-ease, ease) both;
   transition:
     box-shadow 180ms ease,
-    transform 180ms ease;
+    transform 180ms var(--motion-ease, ease);
 }
 
 .campaignInfo:hover,
 .contributeForm:hover {
-  box-shadow: rgba(100, 100, 111, 0.26) 0px 10px 32px 0px;
+  @media (hover: hover) and (pointer: fine) {
+    transform: translateY(-2px);
+    box-shadow: rgba(100, 100, 111, 0.26) 0px 10px 32px 0px;
+  }
 }
 
 .campaignInfo {
@@ -53,7 +56,7 @@ $border-radius: 2rem;
 }
 
 .contributeForm:nth-of-type(2) {
-  animation-delay: 50ms;
+  animation-delay: 70ms;
 }
 
 .introductionTitle {
@@ -88,7 +91,7 @@ $border-radius: 2rem;
 
 .revealedData {
   margin-top: 1rem;
-  animation: softFadeUp 220ms ease both;
+  animation: softRevealLeft 240ms var(--motion-ease, ease) both;
 }
 
 .headerCell {

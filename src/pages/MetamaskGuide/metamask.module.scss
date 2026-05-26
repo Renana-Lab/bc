@@ -8,13 +8,13 @@
   padding: 2rem;
   max-width: 1200px;
   gap: 2rem;
-  animation: softFadeIn 220ms ease both;
+  animation: softFadeUp 240ms var(--motion-ease, ease) both;
 }
 
 .hero {
   text-align: center;
   padding: 2rem 0;
-  animation: softFadeUp 240ms ease both;
+  animation: softFadeUp 260ms var(--motion-ease, ease) both;
 }
 
 .metamaskTitle {
@@ -42,11 +42,13 @@
   font-weight: 600;
   transition:
     background-color 160ms ease,
-    transform 160ms ease,
+    transform 160ms var(--motion-ease, ease),
     box-shadow 160ms ease;
   &:hover {
-    background-color: #e9e9f6 !important;
-    box-shadow: 0 8px 18px rgba(0, 40, 132, 0.1);
+    @media (hover: hover) and (pointer: fine) {
+      background-color: #e9e9f6 !important;
+      box-shadow: 0 8px 18px rgba(0, 40, 132, 0.1);
+    }
   }
 }
 
@@ -57,7 +59,7 @@
   padding: 1.5rem;
   width: 100%;
   max-width: 960px;
-  animation: softFadeUp 260ms ease both;
+  animation: softScaleIn 280ms var(--motion-ease, ease) both;
 }
 
 .stepNumber {
@@ -72,13 +74,15 @@
   margin-right: 0.5rem;
   font-weight: 600;
   transition:
-    transform 160ms ease,
+    transform 160ms var(--motion-ease, ease),
     background-color 160ms ease;
 }
 
 .stepNumber:hover {
-  transform: translateY(-1px);
-  background-color: #7b7bc0;
+  @media (hover: hover) and (pointer: fine) {
+    transform: translateY(-1px);
+    background-color: #7b7bc0;
+  }
 }
 
 .actionButton {
@@ -91,11 +95,13 @@
   font-weight: 600 !important;
   transition:
     background-color 160ms ease,
-    transform 160ms ease,
+    transform 160ms var(--motion-ease, ease),
     box-shadow 160ms ease;
   &:hover {
-    background-color: #7b7bc0 !important;
-    box-shadow: 0 8px 18px rgba(16, 48, 144, 0.14);
+    @media (hover: hover) and (pointer: fine) {
+      background-color: #7b7bc0 !important;
+      box-shadow: 0 8px 18px rgba(16, 48, 144, 0.14);
+    }
   }
 }
 
@@ -107,17 +113,20 @@
   margin: 1rem 0;
   transition:
     box-shadow 180ms ease,
-    transform 180ms ease;
+    transform 180ms var(--motion-ease, ease);
 }
 
 .video:hover {
-  box-shadow: 0 8px 24px rgba(16, 48, 144, 0.12);
+  @media (hover: hover) and (pointer: fine) {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(16, 48, 144, 0.12);
+  }
 }
 
 .footer {
   text-align: center;
   padding: 2rem 0;
-  animation: softFadeIn 240ms ease both;
+  animation: softFadeIn 260ms ease 80ms both;
 }
 
 @media (max-width: 768px) {

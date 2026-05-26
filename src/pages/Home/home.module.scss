@@ -1,10 +1,10 @@
-.container {
+  .container {
     display: flex;
     flex-direction: column;
     height: 100%;
     justify-content: center;
     align-items: center;
-    animation: softFadeIn 220ms ease both;
+    animation: softFadeUp 240ms var(--motion-ease, ease) both;
   }
   
   .contentContainer {
@@ -23,7 +23,7 @@
     flex-wrap: wrap;
     gap: 3rem;
     text-align: left;
-    animation: softFadeUp 260ms ease both;
+    animation: softScaleIn 280ms var(--motion-ease, ease) both;
   }
   
   .metamaskimg {
@@ -31,13 +31,15 @@
     width: clamp(280px, 40vw, 400px);
     border-radius: 12px;
     transition:
-      transform 180ms ease,
+      transform 220ms var(--motion-ease, ease),
       filter 180ms ease;
   }
 
   .metamaskimg:hover {
-    filter: brightness(1.03);
-    transform: translateY(-2px);
+    @media (hover: hover) and (pointer: fine) {
+      filter: brightness(1.03);
+      transform: translateY(-3px) scale(1.01);
+    }
   }
   
   .introText {
@@ -66,7 +68,7 @@
     position: fixed;
     bottom: 0;
     left: 0;
-    animation: softFadeUp 260ms ease both;
+    animation: softFadeUp 300ms var(--motion-ease, ease) 80ms both;
   }
   
   .primaryButton {
@@ -80,12 +82,14 @@
     border: 1px solid #002884;
     transition:
       background-color 160ms ease,
-      transform 160ms ease,
+      transform 160ms var(--motion-ease, ease),
       box-shadow 160ms ease;
   
     &:hover {
-      background-color: #001f5c;
-      box-shadow: 0 8px 18px rgba(0, 40, 132, 0.18);
+      @media (hover: hover) and (pointer: fine) {
+        background-color: #001f5c;
+        box-shadow: 0 8px 18px rgba(0, 40, 132, 0.18);
+      }
     }
   }
   
@@ -99,7 +103,7 @@
     border: 1px solid #002884;
     transition:
       background-color 160ms ease,
-      transform 160ms ease,
+      transform 160ms var(--motion-ease, ease),
       box-shadow 160ms ease;
   
     a {
@@ -113,8 +117,10 @@
     }
   
     &:hover {
-      background-color: #f5f5f5;
-      box-shadow: 0 8px 18px rgba(0, 40, 132, 0.12);
+      @media (hover: hover) and (pointer: fine) {
+        background-color: #f5f5f5;
+        box-shadow: 0 8px 18px rgba(0, 40, 132, 0.12);
+      }
     }
   }
   

@@ -7,24 +7,26 @@
   margin: 0 auto;
   padding: 40px;
   gap: 30px;
-  animation: softFadeIn 220ms ease both;
+  animation: softFadeUp 240ms var(--motion-ease, ease) both;
 }
 
 
 .metamaskimg {
   border-radius: 2rem;
-  animation: softFadeUp 260ms ease both;
+  animation: softScaleIn 280ms var(--motion-ease, ease) both;
   transition:
-    transform 180ms ease,
+    transform 220ms var(--motion-ease, ease),
     filter 180ms ease;
 }
 .metamaskimg:hover {
-  filter: brightness(1.03);
-  transform: translateY(-2px);
+  @media (hover: hover) and (pointer: fine) {
+    filter: brightness(1.03);
+    transform: translateY(-3px) scale(1.01);
+  }
 }
 .metamaskQuestion {
   height: 100%;
-  animation: softFadeUp 240ms ease both;
+  animation: softFadeUp 260ms var(--motion-ease, ease) 60ms both;
 }
 .metamaskTitle {
   color: #002884;
@@ -45,7 +47,7 @@
   display: flex;
   justify-content: flex-start;
   gap:40px;
-  animation: softFadeIn 260ms ease both;
+  animation: softRevealLeft 260ms var(--motion-ease, ease) 90ms both;
 }
 
 .metamaskVideo {
@@ -55,12 +57,15 @@
   box-shadow: rgba(100, 100, 111, 0.2) 0px 7px 29px 0px;
   margin: 0 auto;
   color: white;
-  animation: softFadeUp 260ms ease both;
+  animation: softScaleIn 280ms var(--motion-ease, ease) both;
   transition:
     box-shadow 180ms ease,
-    transform 180ms ease;
+    transform 180ms var(--motion-ease, ease);
 }
 
 .metamaskVideo:hover {
-  box-shadow: rgba(100, 100, 111, 0.28) 0px 10px 32px 0px;
+  @media (hover: hover) and (pointer: fine) {
+    transform: translateY(-2px);
+    box-shadow: rgba(100, 100, 111, 0.28) 0px 10px 32px 0px;
+  }
 }

@@ -6,7 +6,7 @@
   display: flex;
   justify-content: center;
   height: 100%;
-  animation: softFadeIn 220ms ease both;
+  animation: softFadeUp 220ms var(--motion-ease, ease) both;
 }
 .Image {
   position: absolute;
@@ -16,14 +16,19 @@
   width: 22rem;
   height: 18rem;
   filter: brightness(85%);
-  animation: softFadeUp 280ms ease both;
+  animation:
+    softRevealLeft 320ms var(--motion-ease, ease) both,
+    auctionImageBreathe 7s ease-in-out 420ms infinite;
   transition:
     filter 180ms ease,
-    transform 180ms ease;
+    transform 220ms var(--motion-ease, ease);
 }
 
 .Image:hover {
-  filter: brightness(92%);
+  @media (hover: hover) and (pointer: fine) {
+    filter: brightness(92%);
+    transform: translateX(-25rem) translateY(-2px);
+  }
 }
 .form {
   text-align: left;
@@ -36,14 +41,15 @@
   background-color: white;
   box-shadow: rgba(100, 100, 111, 0.2) 0px 7px 29px 0px;
   border-radius: 20px;
-  animation: softFadeUp 240ms ease both;
+  animation: softScaleIn 260ms var(--motion-ease, ease) both;
   transition:
     box-shadow 180ms ease,
-    transform 180ms ease;
+    transform 180ms var(--motion-ease, ease);
 }
 
 .form:focus-within {
   box-shadow: rgba(100, 100, 111, 0.26) 0px 10px 32px 0px;
+  transform: translateY(-1px);
 }
 .introductionTitle {
   color: #002884;
@@ -83,7 +89,7 @@
   cursor: pointer;
   transition:
     background-color 150ms ease,
-    transform 150ms ease;
+    transform 150ms var(--motion-ease, ease);
 }
 
 .circleIcon:hover {
@@ -93,5 +99,30 @@
 .description {
   font-style: oblique;
   font-size: 0.9rem;
-  animation: softFadeIn 160ms ease both;
+  animation: softRevealLeft 180ms var(--motion-ease, ease) both;
+}
+
+.returnButton {
+  border: 0 !important;
+  outline: 0 !important;
+  box-shadow: 0 7px 15px rgba(16, 48, 144, 0.2) !important;
+
+  &::before {
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.24),
+      inset 0 -1px 0 rgba(0, 0, 0, 0.04);
+  }
+}
+
+@keyframes auctionImageBreathe {
+  0%,
+  100% {
+    filter: brightness(85%) saturate(1);
+    transform: translateX(-25rem) translateY(0);
+  }
+
+  50% {
+    filter: brightness(90%) saturate(1.03);
+    transform: translateX(-25rem) translateY(-4px);
+  }
 }

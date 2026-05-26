@@ -4,8 +4,10 @@ import MenuIcon from "@mui/icons-material/Menu";
 import HomeIcon from "@mui/icons-material/Home";
 import { useNavigate } from "react-router-dom";
 import { getDefaultBudget } from "../real_ethereum/budget";
+import { subscribeToBudgetChanges } from "../real_ethereum/budget";
 import {
   getActiveMarket,
+  getActiveFactoryAddress,
   getMarketOptions,
   isValidAddress,
   setActiveMarket,
@@ -33,14 +35,14 @@ const ToolbarComponent = (props) => {
     return () => clearInterval(interval);
   }, []);
 
-  const fetchBudget = useCallback(async () => {
+  const fetchBudget = useCallback(async ({ force = false } = {}) => {
     const marketIdForRequest = activeMarketIdRef.current;
     const requestId = budgetRequestIdRef.current + 1;
     budgetRequestIdRef.current = requestId;
     setBudgetRefreshing(true);
 
     try {
-      const result = await getDefaultBudget();
+      const result = await getDefaultBudget({ force });
       if (
         requestId === budgetRequestIdRef.current &&
         marketIdForRequest === activeMarketIdRef.current
@@ -61,6 +63,32 @@ const ToolbarComponent = (props) => {
 
   useEffect(() => {
     fetchBudget();
+  }, [fetchBudget]);
+
+  useEffect(() => {
+    return subscribeToBudgetChanges(async ({ userAddress, factoryAddress, budget: nextBudget }) => {
+      const activeFactoryAddress = String(getActiveFactoryAddress() || "").toLowerCase();
+
+      if (factoryAddress && factoryAddress !== activeFactoryAddress) return;
+
+      try {
+        const accounts = await window.ethereum?.request?.({ method: "eth_accounts" });
+        const account = String(accounts?.[0] || "").toLowerCase();
+
+        if (userAddress && account && userAddress !== account) return;
+
+        if (nextBudget !== null && nextBudget !== undefined) {
+          budgetRequestIdRef.current += 1;
+          setBudget(String(nextBudget));
+          setBudgetRefreshing(false);
+          return;
+        }
+
+        fetchBudget({ force: true });
+      } catch (error) {
+        fetchBudget({ force: true });
+      }
+    });
   }, [fetchBudget]);
 
   useEffect(() => {
@@ -99,7 +127,6 @@ const ToolbarComponent = (props) => {
       activeMarketIdRef.current = nextMarket.id;
       setActiveMarketState(nextMarket);
       window.setTimeout(() => setSwitchingMarketId(""), 520);
-      navigate("/auctions-list");
     } catch (error) {
       window.alert(error.message || "Could not switch market.");
     }
@@ -120,23 +147,34 @@ const ToolbarComponent = (props) => {
     <div style={{ flexGrow: 1 }}>
       <AppBar position="static">
         <Toolbar
+          className={componentStyles.appToolbar}
           style={{
             display: "flex",
             justifyContent: "space-between",
             alignItems: "center",
-            backgroundColor: "#103090",
           }}
         >
           <div style={{ display: "flex", gap: "1rem", alignItems: "center" }}>
-            <Button variant="text" onClick={props.openDrawerHandler}>
+            <Button
+              variant="text"
+              className={componentStyles.toolbarIconButton}
+              onClick={props.openDrawerHandler}
+            >
               <MenuIcon htmlColor="#F0B030" fontSize="large" />
             </Button>
 
-            <Button variant="text" onClick={() => navigate("/auctions-list")}>
+            <Button
+              variant="text"
+              className={componentStyles.toolbarIconButton}
+              onClick={() => navigate("/auctions-list")}
+            >
               <HomeIcon htmlColor="#F0B030" fontSize="large" />
             </Button>
 
-            <Typography variant="h6" className={componentStyles.bigTitle}>
+            <Typography
+              component="div"
+              className={`${componentStyles.bigTitle} ${componentStyles.toolbarTitle}`}
+            >
               Blockchain Data Market
             </Typography>
           </div>
@@ -187,7 +225,7 @@ const ToolbarComponent = (props) => {
               }`}
               title={budgetRefreshing ? "Budget is refreshing" : "Current budget"}
             >
-              <span className={componentStyles.toolbarPillLabel}>Budget</span>
+              <span className={componentStyles.toolbarPillLabel}>Budget:</span>
               <span className={componentStyles.toolbarPillValue}>
                 {budget ?? "—"}
               </span>

@@ -1660,11 +1660,12 @@ const ManageBudgetPage = () => {
               }}
             >
               <Box
-                display="flex"
-                justifyContent="space-between"
-                alignItems="center"
-                gap={2}
-                flexWrap="wrap"
+                sx={{
+                  display: "grid",
+                  gridTemplateColumns: "minmax(0, 1fr) auto",
+                  alignItems: "start",
+                  gap: 2,
+                }}
               >
                 <Box sx={{ minWidth: 0 }}>
                   <Typography variant="h6">Batch Auction Studio</Typography>
@@ -1676,7 +1677,7 @@ const ManageBudgetPage = () => {
                     Pick a template, fine tune the rows, then create the batch.
                   </Typography>
                 </Box>
-                <Box display="flex" gap={1} flexWrap="wrap" alignItems="center">
+                <Box display="flex" gap={1} alignItems="center" justifyContent="flex-end">
                   <IconButton
                     onClick={() => setBatchStudioOpen((current) => !current)}
                     aria-expanded={batchStudioOpen}
@@ -2299,11 +2300,12 @@ const ManageBudgetPage = () => {
               }}
             >
               <Box
-                display="flex"
-                justifyContent="space-between"
-                alignItems="center"
-                gap={2}
-                flexWrap="wrap"
+                sx={{
+                  display: "grid",
+                  gridTemplateColumns: "minmax(0, 1fr) auto",
+                  alignItems: "start",
+                  gap: 2,
+                }}
               >
                 <Box sx={{ minWidth: 0 }}>
                   <Typography variant="h6">Auction Reports</Typography>

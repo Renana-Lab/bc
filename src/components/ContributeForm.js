@@ -141,15 +141,25 @@ class ContributeForm extends Component {
     try {
 
 
-      await campaign.methods.contribute().send({
+      const receipt = await campaign.methods.contribute().send({
         from: connectedAccount,
         value: additionalBid.toString(),
       });
+      const bidRecordedEvent = Array.isArray(receipt?.events?.BidRecorded)
+        ? receipt.events.BidRecorded[0]
+        : receipt?.events?.BidRecorded;
+      const budgetAfter = bidRecordedEvent?.returnValues?.budgetAfter;
 
       toast.success(
         `Bid placed successfully!`
       );
-      onSuccessfulBid(newBid, address);
+      await onSuccessfulBid?.({
+        totalBid: newBid.toString(),
+        additionalBid: additionalBid.toString(),
+        budgetAfter,
+        address,
+        receipt,
+      });
 
       this.setState({ bidAmount: "", transactionIsLoading: false });
     } catch (err) {

@@ -19,6 +19,7 @@ const AppLoadingFallback = () => (
       {`
         .app-loading-shell {
           min-height: 100vh;
+          min-height: 100dvh;
           display: grid;
           place-items: center;
           background: #f5d762;
@@ -148,8 +149,13 @@ function App() {
     const handleChange = (event) => setIsMobile(event.matches);
 
     setIsMobile(mediaQuery.matches);
-    mediaQuery.addEventListener?.("change", handleChange);
-    return () => mediaQuery.removeEventListener?.("change", handleChange);
+    if (typeof mediaQuery.addEventListener === "function") {
+      mediaQuery.addEventListener("change", handleChange);
+      return () => mediaQuery.removeEventListener("change", handleChange);
+    }
+
+    mediaQuery.addListener?.(handleChange);
+    return () => mediaQuery.removeListener?.(handleChange);
   }, []);
 
   return (
@@ -160,6 +166,7 @@ function App() {
             {`
               .mobile-not-supported {
                 min-height: 100vh;
+                min-height: 100dvh;
                 background: linear-gradient(to bottom, #1e3a8a, #111827);
                 display: flex;
                 flex-direction: column;

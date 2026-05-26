@@ -355,6 +355,7 @@ function NewAuctionPage() {
       >
         <Button
           variant="contained"
+          className={styles.returnButton}
           style={{
             backgroundColor: "#103090",
             color: "white",
