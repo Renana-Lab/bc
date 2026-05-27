@@ -2,6 +2,7 @@ import React, { lazy, Suspense, useState, useEffect } from "react";
 import { Routes, Route, useNavigate } from "react-router-dom";
 import { MetaMaskProvider } from "./Context/Context.js";
 import { Toaster } from "react-hot-toast";
+import PageSeo from "./components/Seo.js";
 
 const HomePage = lazy(() => import("./pages/Home/HomePage.js"));
 const NewAuctionPage = lazy(() => import("./pages/NewAuction/NewAuctionPage.js"));
@@ -263,13 +264,62 @@ function App() {
         <>
           <Suspense fallback={<AppLoadingFallback />}>
             <Routes>
-              <Route path="/" element={<HomePage />} />
-              <Route path="/metamask-login" element={<MetamaskTutorialPage />} />
-              <Route path="/metamask-guide" element={<MetamaskGuidePage />} />
-              <Route path="/open-auction" element={<NewAuctionPage />} />
-              <Route path="/auctions-list" element={<AuctionsListPage />} />
-              <Route path="/auction/:address" element={<ShowAuctionPage />} />
-              <Route path="/manage-budget" element={<ManageBudgetPage />} />
+              <Route
+                path="/"
+                element={
+                  <PageSeo page="home">
+                    <HomePage />
+                  </PageSeo>
+                }
+              />
+              <Route
+                path="/metamask-login"
+                element={
+                  <PageSeo page="metamaskLogin">
+                    <MetamaskTutorialPage />
+                  </PageSeo>
+                }
+              />
+              <Route
+                path="/metamask-guide"
+                element={
+                  <PageSeo page="metamaskGuide">
+                    <MetamaskGuidePage />
+                  </PageSeo>
+                }
+              />
+              <Route
+                path="/open-auction"
+                element={
+                  <PageSeo page="createAuction">
+                    <NewAuctionPage />
+                  </PageSeo>
+                }
+              />
+              <Route
+                path="/auctions-list"
+                element={
+                  <PageSeo page="auctionsList">
+                    <AuctionsListPage />
+                  </PageSeo>
+                }
+              />
+              <Route
+                path="/auction/:address"
+                element={
+                  <PageSeo page="auctionDetails">
+                    <ShowAuctionPage />
+                  </PageSeo>
+                }
+              />
+              <Route
+                path="/manage-budget"
+                element={
+                  <PageSeo page="admin">
+                    <ManageBudgetPage />
+                  </PageSeo>
+                }
+              />
             </Routes>
           </Suspense>
           <Toaster />

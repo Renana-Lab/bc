@@ -24,11 +24,12 @@ function HomePage() {
               src={Welcomepic}
               height="330"
               width="400"
-              alt="metamask"
+              alt="Blockchain data marketplace illustration"
             />
             <div className={styles.introText}>
-              <h2 style={{ margin: "0" }}>Welcome</h2>
-              <h3 style={{ margin: "0" }}>to our data marketplace</h3>
+              <h1 style={{ margin: "0", lineHeight: 1.08 }}>
+                Welcome to our data marketplace
+              </h1>
               <br />
               <p style={{ margin: "0", fontSize: "1.2rem" }}>
                 This is a blockchain based research platform, for running <br />

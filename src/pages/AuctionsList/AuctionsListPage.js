@@ -1810,11 +1810,15 @@ function AuctionsListPage() {
           <div className={styles.introduction}>
             <div className={styles.introductionText}>
               <div className={styles.heroContent}>
-                <img className={styles.heroImage} src={picSrc} alt="metamask" />
+                <img
+                  className={styles.heroImage}
+                  src={picSrc}
+                  alt="Blockchain auction marketplace dashboard"
+                />
                 <div className={styles.heroCopy}>
-                  <p className={styles.introductionTitle}>
+                  <h1 className={styles.introductionTitle}>
                     Welcome to the Blockchain Data Market Platform
-                  </p>
+                  </h1>
                   <p className={styles.introductionSubtitle}>
                     Scroll down to see all the open and closed auctions.
                     <br />

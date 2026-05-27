@@ -14,7 +14,9 @@ const Layout = (props) => {
         ></link>
       </Head> */}
       <Navbar className={styles.navbar} />
-      <div className={styles.pageData}>{props.children}</div>
+      <main className={styles.pageData} id="main-content">
+        {props.children}
+      </main>
     </Container>
   );
 };

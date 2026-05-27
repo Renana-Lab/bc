@@ -577,9 +577,9 @@ function ShowAuctionPage() {
         }}
       >
         <div className={showPageStyles.campaignInfo}>
-          <p className={showPageStyles.introductionTitle}>
+          <h1 className={showPageStyles.introductionTitle}>
             Auction # {address}
-          </p>
+          </h1>
           <hr />
           <InfoItem label="Data description" value={state.dataDescription} />
           <InfoItem label="Seller address" value={state.manager} />
@@ -720,7 +720,7 @@ function ShowAuctionPage() {
         {!isAuctionActive && isHighestBidder && (
           <div className={showPageStyles.contributeForm}>
             <div className={showPageStyles.centered}>
-              <img alt="medal" width="80px" src={picSrc} />
+              <img alt="Auction winner medal" width="80px" src={picSrc} />
               <div className={showPageStyles.winnerTitle}>Congrats!</div>
               <div className={showPageStyles.winnerLabel}>
                 You won the auction and have now access to the data

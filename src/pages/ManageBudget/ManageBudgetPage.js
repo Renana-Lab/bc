@@ -1481,7 +1481,7 @@ const ManageBudgetPage = () => {
       >
         {isAdmin ? (
           <>
-            <Typography variant="h4" gutterBottom>
+            <Typography component="h1" variant="h4" gutterBottom>
               Admin Zone
             </Typography>
             <Typography

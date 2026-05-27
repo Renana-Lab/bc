@@ -1,3 +1,7 @@
 # https://www.robotstxt.org/robotstxt.html
 User-agent: *
-Disallow:
+
+# Keep wallet-only and operational SPA routes out of crawler queues.
+Disallow: /manage-budget
+Disallow: /open-auction
+Disallow: /auction/

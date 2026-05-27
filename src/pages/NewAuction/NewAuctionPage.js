@@ -222,7 +222,11 @@ function NewAuctionPage() {
   return (
     <Layout>
       <div className={styles.direction}>
-        <img className={styles.Image} src={picSrc} alt="Auction Preview" />
+        <img
+          className={styles.Image}
+          src={picSrc}
+          alt="Create a blockchain data auction"
+        />
         <FormControl
           component="form"
           style={{
@@ -234,7 +238,7 @@ function NewAuctionPage() {
           className={styles.form}
           onSubmit={handleSubmit}
         >
-          <h3 className={styles.introductionTitle}>Create Auction</h3>
+          <h1 className={styles.introductionTitle}>Create Auction</h1>
           <Box
             sx={{
               width: "85%",

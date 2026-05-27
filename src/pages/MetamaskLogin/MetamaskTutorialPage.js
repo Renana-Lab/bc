@@ -54,13 +54,13 @@ function MetamaskTutorialPage() {
             src={metamaskImg}
             height="250px"
             width="200px"
-            alt="metamask"
+            alt="MetaMask wallet setup illustration"
           />
 
           <div className={styles.metamaskQuestion}>
-            <div className={styles.metamaskTitle}>
+            <h1 className={styles.metamaskTitle}>
               Are you logged in to MetaMask?
-            </div>
+            </h1>
             <div className={styles.metamaskText}>
               Before starting buying/selling data, please make sure you are
               logged into a Metamask account.
