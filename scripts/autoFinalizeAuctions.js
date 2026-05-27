@@ -4,25 +4,13 @@ require("dotenv").config({ path: path.resolve(__dirname, "../.env") });
 const Web3 = require("web3");
 const campaignJson = require("../src/real_ethereum/build/Campaign.json");
 const factoryJson = require("../src/real_ethereum/build/CampaignFactory.json");
+const { loadFactoryAddress } = require("./factoryAddressLoader");
 
 const DEFAULT_RPC_URLS = [
   "https://ethereum-sepolia-rpc.publicnode.com",
   "https://sepolia.drpc.org",
   "https://1rpc.io/sepolia",
 ];
-const factoryAddressPath = path.resolve(__dirname, "../src/real_ethereum/factoryAddress.js");
-
-function loadFactoryAddress() {
-  const factoryAddressSource = require("fs").readFileSync(factoryAddressPath, "utf8");
-  const match = factoryAddressSource.match(/0x[a-fA-F0-9]{40}/);
-
-  if (!match) {
-    throw new Error(`Could not find factory address in ${factoryAddressPath}`);
-  }
-
-  return match[0];
-}
-
 const RPC_URLS = [
   ...(process.env.RPC_URLS || process.env.REACT_APP_RPC_URLS || "")
     .split(",")
@@ -33,7 +21,7 @@ const RPC_URLS = [
   ...DEFAULT_RPC_URLS,
 ].filter((url, index, urls) => url && urls.indexOf(url) === index);
 const PRIVATE_KEY = process.env.PRIVATE_KEY || process.env.AUTO_FINALIZE_PRIVATE_KEY;
-const FACTORY_ADDRESS = process.env.FACTORY_ADDRESS || loadFactoryAddress();
+const FACTORY_ADDRESS = loadFactoryAddress();
 const INTERVAL_MS = Number(process.env.AUTO_FINALIZE_INTERVAL_MS || 15000);
 const CONCURRENCY = 1;
 const REFUND_BATCH_SIZE = Number(process.env.AUTO_REFUND_BATCH_SIZE || 0);

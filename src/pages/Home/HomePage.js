@@ -41,17 +41,8 @@ function HomePage() {
         </div>
         <div className={styles.buttonsContainer}>
           <Button
-            style={{
-              width: "17rem",
-              height: "3rem",
-              padding: "0.8rem",
-              borderRadius: "1rem",
-              backgroundColor: "#002884",
-              color: "#D8DCF0",
-              fontWeight: "600",
-              border: "1px solid #002884",
-            }}
-            variant="outlined"
+            className={styles.primaryButton}
+            variant="contained"
             onClick={() => {
               navigate("metamask-login");
             }}

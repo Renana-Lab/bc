@@ -72,23 +72,60 @@
   }
   
   .primaryButton {
+    position: relative;
+    overflow: hidden;
     width: 17rem;
     height: 3rem;
-    padding: 0.8rem;
-    border-radius: 1rem;
-    background-color: #002884;
-    color: #d8dcf0;
+    padding: 12px 22px;
+    border-radius: 1rem !important;
+    background:
+      linear-gradient(
+        145deg,
+        rgba(255, 255, 255, 0.14),
+        rgba(255, 255, 255, 0.02) 42%,
+        rgba(0, 0, 0, 0.08)
+      ),
+      rgb(16, 48, 144) !important;
+    color: #ffffff !important;
     font-weight: 600;
-    border: 1px solid #002884;
+    border: 1px solid rgb(16, 48, 144) !important;
+    box-shadow:
+      0 6px 12px rgba(16, 48, 144, 0.24),
+      inset 0 1px 0 rgba(255, 255, 255, 0.28) !important;
+    text-transform: uppercase;
     transition:
       background-color 160ms ease,
       transform 160ms var(--motion-ease, ease),
       box-shadow 160ms ease;
+
+    &::after {
+      content: "";
+      position: absolute;
+      inset: 1px;
+      border-radius: inherit;
+      background:
+        linear-gradient(
+          180deg,
+          rgba(255, 255, 255, 0.2),
+          transparent 42%
+        );
+      opacity: 0.34;
+      pointer-events: none;
+    }
   
     &:hover {
       @media (hover: hover) and (pointer: fine) {
-        background-color: #001f5c;
-        box-shadow: 0 8px 18px rgba(0, 40, 132, 0.18);
+        background:
+          linear-gradient(
+            145deg,
+            rgba(255, 255, 255, 0.16),
+            rgba(255, 255, 255, 0.03) 42%,
+            rgba(0, 0, 0, 0.09)
+          ),
+          rgb(13, 42, 130) !important;
+        box-shadow:
+          0 8px 18px rgba(16, 48, 144, 0.26),
+          inset 0 1px 0 rgba(255, 255, 255, 0.3) !important;
       }
     }
   }

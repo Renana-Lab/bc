@@ -1,11 +1,11 @@
 const http = require("http");
 const path = require("path");
-const fs = require("fs");
 require("dotenv").config({ path: path.resolve(__dirname, "../.env") });
 
 const Web3 = require("web3");
 const campaignJson = require("../src/real_ethereum/build/Campaign.json");
 const factoryJson = require("../src/real_ethereum/build/CampaignFactory.json");
+const { loadFactoryAddress } = require("./factoryAddressLoader");
 
 const DEFAULT_RPC_URLS = [
   "https://ethereum-sepolia-rpc.publicnode.com",
@@ -16,22 +16,6 @@ const DEFAULT_WS_URL = "wss://sepolia.infura.io/ws/v3/b27d53291ceb44bd864dbf7b0e
 const PORT = Number(process.env.AUCTION_INDEXER_PORT || 8787);
 const REFRESH_INTERVAL_MS = Number(process.env.AUCTION_INDEXER_REFRESH_MS || 60000);
 const FETCH_CONCURRENCY = Number(process.env.AUCTION_INDEXER_CONCURRENCY || 5);
-
-const factoryAddressPath = path.resolve(
-  __dirname,
-  "../src/real_ethereum/factoryAddress.js"
-);
-
-function loadFactoryAddress() {
-  const factoryAddressSource = fs.readFileSync(factoryAddressPath, "utf8");
-  const match = factoryAddressSource.match(/0x[a-fA-F0-9]{40}/);
-
-  if (!match) {
-    throw new Error(`Could not find factory address in ${factoryAddressPath}`);
-  }
-
-  return match[0];
-}
 
 const RPC_URLS = [
   ...(process.env.RPC_URLS || process.env.REACT_APP_RPC_URLS || "")
@@ -48,7 +32,7 @@ const WS_URL =
   process.env.REACT_APP_WS_RPC_URL ||
   (process.env.INFURA_KEY ? `wss://sepolia.infura.io/ws/v3/${process.env.INFURA_KEY}` : "") ||
   DEFAULT_WS_URL;
-const FACTORY_ADDRESS = process.env.FACTORY_ADDRESS || loadFactoryAddress();
+const FACTORY_ADDRESS = loadFactoryAddress();
 
 const web3Clients = RPC_URLS.map((url) => ({ url, web3: new Web3(url) }));
 const socketWeb3 = new Web3(new Web3.providers.WebsocketProvider(WS_URL));
