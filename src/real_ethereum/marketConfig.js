@@ -3,9 +3,12 @@ const DEFAULT_DEV_FACTORY_ADDRESS = "0xec38565FAeeef009F57037F2804D186928E63629"
 const MARKET_STORAGE_KEY = "data-market:active-factory";
 const REAL_FACTORY_STORAGE_KEY = "data-market:real-factory-address";
 const DEV_FACTORY_STORAGE_KEY = "data-market:dev-factory-address";
+const REAL_LABEL_STORAGE_KEY = "data-market:real-label";
+const DEV_LABEL_STORAGE_KEY = "data-market:dev-label";
 export const MARKET_CHANGED_EVENT = "data-market:factory-changed";
 
 const normalizeAddress = (address) => String(address || "").trim();
+const normalizeLabel = (label) => String(label || "").trim();
 
 export const isValidAddress = (address) =>
   /^0x[a-fA-F0-9]{40}$/.test(normalizeAddress(address));
@@ -28,12 +31,29 @@ const removeStoredValue = (key) => {
 const firstValidAddress = (...addresses) =>
   addresses.map(normalizeAddress).find((address) => isValidAddress(address)) || "";
 
+const getMarketLabel = (market) =>
+  normalizeLabel(getStoredValue(market.labelStorageKey)) || market.label;
+
+const dispatchMarketChanged = (market = getActiveMarket(), reason = "config") => {
+  if (typeof window === "undefined") return;
+
+  window.dispatchEvent(
+    new CustomEvent(MARKET_CHANGED_EVENT, {
+      detail: {
+        market,
+        reason,
+      },
+    })
+  );
+};
+
 export const MARKET_DEFINITIONS = [
   {
     id: "real",
     label: "Real",
     description: "Production market",
     storageKey: REAL_FACTORY_STORAGE_KEY,
+    labelStorageKey: REAL_LABEL_STORAGE_KEY,
     envAddress: process.env.REACT_APP_REAL_FACTORY_ADDRESS,
     fallbackAddress: DEFAULT_FACTORY_ADDRESS,
   },
@@ -42,6 +62,7 @@ export const MARKET_DEFINITIONS = [
     label: "Dev",
     description: "Testing market",
     storageKey: DEV_FACTORY_STORAGE_KEY,
+    labelStorageKey: DEV_LABEL_STORAGE_KEY,
     envAddress:
       process.env.REACT_APP_DEV_FACTORY_ADDRESS ||
       process.env.REACT_APP_TEST_FACTORY_ADDRESS,
@@ -76,14 +97,7 @@ export const setMarketFactoryAddress = (marketId, address) => {
   }
 
   setStoredValue(market.storageKey, normalizedAddress);
-
-  if (typeof window !== "undefined") {
-    window.dispatchEvent(
-      new CustomEvent(MARKET_CHANGED_EVENT, {
-        detail: getActiveMarket(),
-      })
-    );
-  }
+  dispatchMarketChanged(getActiveMarket(), "factory-address");
 
   return normalizedAddress;
 };
@@ -95,25 +109,49 @@ export const clearMarketFactoryAddress = (marketId) => {
   }
 
   removeStoredValue(market.storageKey);
-
-  if (typeof window !== "undefined") {
-    window.dispatchEvent(
-      new CustomEvent(MARKET_CHANGED_EVENT, {
-        detail: getActiveMarket(),
-      })
-    );
-  }
+  dispatchMarketChanged(getActiveMarket(), "factory-address");
 };
 
 export const setDevelopmentFactoryAddress = (address) =>
   setMarketFactoryAddress("dev", address);
 
+export const setMarketLabel = (marketId, label) => {
+  const market = MARKET_DEFINITIONS.find((option) => option.id === marketId);
+  if (!market) {
+    throw new Error("Unknown market");
+  }
+
+  const normalizedLabel = normalizeLabel(label);
+  if (!normalizedLabel) {
+    throw new Error("Market name cannot be empty");
+  }
+
+  if (normalizedLabel.length > 18) {
+    throw new Error("Market name must be 18 characters or fewer");
+  }
+
+  setStoredValue(market.labelStorageKey, normalizedLabel);
+  dispatchMarketChanged(getActiveMarket(), "label");
+  return normalizedLabel;
+};
+
+export const clearMarketLabel = (marketId) => {
+  const market = MARKET_DEFINITIONS.find((option) => option.id === marketId);
+  if (!market) {
+    throw new Error("Unknown market");
+  }
+
+  removeStoredValue(market.labelStorageKey);
+  dispatchMarketChanged(getActiveMarket(), "label");
+};
+
 export const getMarketOptions = () =>
-  MARKET_DEFINITIONS.map(({ id, label, description }) => ({
-    id,
-    label,
-    description,
-    address: getMarketFactoryAddress(id),
+  MARKET_DEFINITIONS.map((market) => ({
+    id: market.id,
+    label: getMarketLabel(market),
+    defaultLabel: market.label,
+    description: market.description,
+    address: getMarketFactoryAddress(market.id),
   }));
 
 export const getActiveMarket = () => {
@@ -134,14 +172,7 @@ export const setActiveMarket = (marketId) => {
   }
 
   setStoredValue(MARKET_STORAGE_KEY, market.id);
-
-  if (typeof window !== "undefined") {
-    window.dispatchEvent(
-      new CustomEvent(MARKET_CHANGED_EVENT, {
-        detail: market,
-      })
-    );
-  }
+  dispatchMarketChanged(market, "active-market");
 
   return market;
 };
@@ -149,7 +180,11 @@ export const setActiveMarket = (marketId) => {
 export const subscribeToMarketChanges = (callback) => {
   if (typeof window === "undefined") return () => {};
 
-  const handler = (event) => callback(event.detail || getActiveMarket());
+  const handler = (event) => {
+    const detail = event.detail || {};
+    const market = detail.market || (detail.id ? detail : getActiveMarket());
+    callback(market, detail);
+  };
   window.addEventListener(MARKET_CHANGED_EVENT, handler);
   window.addEventListener("storage", handler);
 

@@ -132,6 +132,7 @@ const AutoFinalizerMonitor = ({ marketOptions }) => {
     () => (marketOptions || getMarketOptions()).filter((market) => market.address),
     [marketOptions]
   );
+  const marketNamesText = markets.map((market) => market.label).join(" and ");
   const [runs, setRuns] = useState([]);
   const [runsLoading, setRunsLoading] = useState(false);
   const [runsError, setRunsError] = useState("");
@@ -287,8 +288,9 @@ const AutoFinalizerMonitor = ({ marketOptions }) => {
             Auto Finalizer
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ maxWidth: 620 }}>
-            Checks the GitHub Actions runner and scans Real/Dev contracts for
-            ended auctions that still need payment finalization.
+            Checks the GitHub Actions runner and scans
+            {marketNamesText ? ` ${marketNamesText}` : " configured"} contracts
+            for ended auctions that still need payment finalization.
           </Typography>
         </Box>
         <Box display="flex" gap={1} flexWrap="wrap" justifyContent="flex-end">

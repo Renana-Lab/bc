@@ -92,11 +92,15 @@ const ToolbarComponent = (props) => {
   }, [fetchBudget]);
 
   useEffect(() => {
-    return subscribeToMarketChanges((market) => {
+    return subscribeToMarketChanges((market, meta = {}) => {
       activeMarketIdRef.current = market.id;
-      budgetRequestIdRef.current += 1;
       setActiveMarketState(market);
       setMarketOptions(getMarketOptions());
+      if (meta.reason === "label") {
+        return;
+      }
+
+      budgetRequestIdRef.current += 1;
       setSwitchingMarketId(market.id);
       window.setTimeout(() => setSwitchingMarketId(""), 520);
       fetchBudget();

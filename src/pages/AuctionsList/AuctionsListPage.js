@@ -1236,7 +1236,9 @@ function AuctionsListPage() {
   }, [fetchAuctionsList]);
 
   useEffect(() => {
-    return subscribeToMarketChanges(() => {
+    return subscribeToMarketChanges((_market, meta = {}) => {
+      if (meta.reason === "label") return;
+
       const nextFactoryAddress = getActiveFactoryAddress();
       activeFactoryAddressRef.current = nextFactoryAddress;
       requestIdRef.current += 1;

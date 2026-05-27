@@ -22,10 +22,12 @@ import { readOnlyCall } from "../../real_ethereum/readOnly";
 import componentStyles from "../../styles/components.module.scss";
 import AutoFinalizerMonitor from "./AutoFinalizerMonitor";
 import {
+  clearMarketLabel,
   clearMarketFactoryAddress,
   getActiveMarket,
   getMarketOptions,
   setActiveMarket,
+  setMarketLabel,
   setMarketFactoryAddress,
   subscribeToMarketChanges,
 } from "../../real_ethereum/marketConfig";
@@ -199,6 +201,12 @@ const makeContractDrafts = (options) =>
     return drafts;
   }, {});
 
+const makeMarketLabelDrafts = (options) =>
+  options.reduce((drafts, option) => {
+    drafts[option.id] = option.label || "";
+    return drafts;
+  }, {});
+
 const normalizeReportConcurrency = (value) => {
   const parsed = Number(value);
   if (!Number.isInteger(parsed)) return DEFAULT_REPORT_READ_CONCURRENCY;
@@ -249,6 +257,9 @@ const ManageBudgetPage = () => {
   const [contractDrafts, setContractDrafts] = useState(() =>
     makeContractDrafts(getMarketOptions())
   );
+  const [marketLabelDrafts, setMarketLabelDrafts] = useState(() =>
+    makeMarketLabelDrafts(getMarketOptions())
+  );
   const [contractStats, setContractStats] = useState({});
   const [contractManagerLoading, setContractManagerLoading] = useState(false);
   const [reportFilters, setReportFilters] = useState({ from: "", to: "" });
@@ -297,6 +308,7 @@ const ManageBudgetPage = () => {
     const nextOptions = getMarketOptions();
     setMarketOptionsState(nextOptions);
     setContractDrafts(makeContractDrafts(nextOptions));
+    setMarketLabelDrafts(makeMarketLabelDrafts(nextOptions));
     return nextOptions;
   }, []);
 
@@ -315,10 +327,15 @@ const ManageBudgetPage = () => {
   }, [loadBudget, navigate]);
 
   useEffect(() => {
-    return subscribeToMarketChanges((market) => {
+    return subscribeToMarketChanges((market, meta = {}) => {
       setActiveMarketState(market);
-      setSwitchingMarketId(market.id);
       refreshMarketOptions();
+
+      if (meta.reason === "label") {
+        return;
+      }
+
+      setSwitchingMarketId(market.id);
       setBudget(null);
       setAuctionOptions([]);
       setSelectedAuctions({});
@@ -754,6 +771,33 @@ const ManageBudgetPage = () => {
       ...current,
       [marketId]: value.trim(),
     }));
+  };
+
+  const handleMarketLabelDraftChange = (marketId, value) => {
+    setMarketLabelDrafts((current) => ({
+      ...current,
+      [marketId]: value,
+    }));
+  };
+
+  const handleSaveMarketLabel = (marketId) => {
+    try {
+      const nextLabel = setMarketLabel(marketId, marketLabelDrafts[marketId] || "");
+      refreshMarketOptions();
+      toast.success(`${nextLabel} market name saved`);
+    } catch (labelError) {
+      toast.error(labelError.message || "Could not save market name");
+    }
+  };
+
+  const handleClearMarketLabel = (marketId) => {
+    try {
+      clearMarketLabel(marketId);
+      refreshMarketOptions();
+      toast.success("Market name reset");
+    } catch (labelError) {
+      toast.error(labelError.message || "Could not reset market name");
+    }
   };
 
   const handleSaveContractAddress = (marketId) => {
@@ -1330,17 +1374,21 @@ const ManageBudgetPage = () => {
   const selectedVisibleCount = visibleAuctionOptions.filter(
     (option) => selectedAuctions[option.selectionKey]
   ).length;
+  const marketNamesText = marketOptions
+    .filter((market) => market.address)
+    .map((market) => market.label)
+    .join(" and ");
   const reportScopeText = selectedAuctionCount
     ? `${selectedAuctionCount} selected auction${
         selectedAuctionCount === 1 ? "" : "s"
       }`
     : hasReportFilters
     ? reportLoadAllMarkets
-      ? "all Real and Dev auctions in the selected date range"
+      ? `all ${marketNamesText || "configured"} auctions in the selected date range`
       : `all ${activeMarket.label} auctions in the selected date range`
     : reportIncludeAllAuctions
     ? reportLoadAllMarkets
-      ? "every auction in every configured contract"
+      ? `every auction in every configured ${marketNamesText ? `contract (${marketNamesText})` : "contract"}`
       : `every auction in the ${activeMarket.label} contract`
     : "choose report dates";
 
@@ -1376,6 +1424,15 @@ const ManageBudgetPage = () => {
             <Typography variant="h4" gutterBottom>
               Admin Zone
             </Typography>
+            <Typography
+              variant="body2"
+              color="text.secondary"
+              textAlign="center"
+              sx={{ maxWidth: 680, mb: 3 }}
+            >
+              Manage market contracts, global budgets, automation health, batch
+              auction creation, and exports from one operational control area.
+            </Typography>
 
             <Box
               sx={{
@@ -1410,8 +1467,9 @@ const ManageBudgetPage = () => {
                     color="text.secondary"
                     sx={{ display: "block", maxWidth: 560 }}
                   >
-                    Writes use the active factory. Reports can inspect Real and
-                    Dev together when multi-contract loading is enabled.
+                    Writes use the active factory. Reports and automation can
+                    inspect every configured market together when multi-contract
+                    loading is enabled.
                   </Typography>
                 </Box>
                 <Button
@@ -1437,7 +1495,10 @@ const ManageBudgetPage = () => {
                   const isActive = activeMarket.id === market.id;
                   const stats = contractStats[market.id] || {};
                   const draft = contractDrafts[market.id] || "";
+                  const labelDraft = marketLabelDrafts[market.id] || "";
                   const draftLooksValid = !draft || /^0x[a-fA-F0-9]{40}$/.test(draft);
+                  const labelLooksValid =
+                    labelDraft.trim().length > 0 && labelDraft.trim().length <= 18;
 
                   return (
                     <Box
@@ -1498,6 +1559,23 @@ const ManageBudgetPage = () => {
                       </Box>
 
                       <TextField
+                        label="Market name"
+                        value={labelDraft}
+                        onChange={(event) =>
+                          handleMarketLabelDraftChange(market.id, event.target.value)
+                        }
+                        error={!labelLooksValid}
+                        helperText={
+                          labelLooksValid
+                            ? "Used in the toolbar, reports, auction creation, and admin views."
+                            : "Use 1-18 characters."
+                        }
+                        size="small"
+                        fullWidth
+                        sx={{ mt: 1.25 }}
+                      />
+
+                      <TextField
                         label="Factory address"
                         value={draft}
                         onChange={(event) =>
@@ -1538,11 +1616,28 @@ const ManageBudgetPage = () => {
                         <Button
                           variant="outlined"
                           size="small"
+                          onClick={() => handleSaveMarketLabel(market.id)}
+                          disabled={!labelLooksValid || labelDraft.trim() === market.label}
+                          sx={{ borderRadius: 999 }}
+                        >
+                          Save Name
+                        </Button>
+                        <Button
+                          variant="outlined"
+                          size="small"
                           onClick={() => handleSaveContractAddress(market.id)}
                           disabled={!draftLooksValid || !draft}
                           sx={{ borderRadius: 999 }}
                         >
-                          Save
+                          Save Address
+                        </Button>
+                        <Button
+                          variant="text"
+                          size="small"
+                          onClick={() => handleClearMarketLabel(market.id)}
+                          disabled={market.label === market.defaultLabel}
+                        >
+                          Reset Name
                         </Button>
                         <Button
                           variant="text"
@@ -1694,9 +1789,9 @@ const ManageBudgetPage = () => {
                     color="text.secondary"
                     sx={{ mt: 0.5, maxWidth: 680 }}
                   >
-                    Watch GitHub Actions health, scan Real and Dev for ended
-                    auctions, and quickly re-run the finalizer if something is
-                    stuck.
+                    Watch GitHub Actions health, scan configured markets for
+                    ended auctions, and quickly re-run the finalizer if
+                    something is stuck.
                   </Typography>
                 </Box>
                 <IconButton
@@ -2522,7 +2617,7 @@ const ManageBudgetPage = () => {
                   />
                   <Box>
                     <Typography variant="body2" sx={{ fontWeight: 700 }}>
-                      Multi-load Real and Dev contracts
+                      Multi-load configured markets
                     </Typography>
                     <Typography
                       variant="caption"
@@ -2530,8 +2625,9 @@ const ManageBudgetPage = () => {
                       display="block"
                     >
                       Load report auction choices from every configured market
-                      at the same time. Budget changes and batch creation still
-                      use only the active {activeMarket.label} contract.
+                      {marketNamesText ? ` (${marketNamesText})` : ""} at the
+                      same time. Budget changes and batch creation still use
+                      only the active {activeMarket.label} contract.
                     </Typography>
                   </Box>
                 </Box>
