@@ -276,20 +276,39 @@
 }
 
 .searchBar {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  padding: 1rem 0 1.25rem;
+  display: block;
+  padding: 0.8rem 0.85rem 1.4rem;
   animation: softRevealLeft 240ms var(--motion-ease, ease) both;
   position: relative;
+
+  &::before {
+    content: "";
+    position: absolute;
+    inset: 0.3rem 0 0.55rem;
+    border: 1px solid rgba(16, 48, 144, 0.07);
+    border-radius: 16px;
+    background:
+      linear-gradient(
+        135deg,
+        rgba(255, 255, 255, 0.58),
+        rgba(255, 255, 255, 0.28) 52%,
+        rgba(244, 246, 255, 0.32)
+      );
+    backdrop-filter: blur(7px) saturate(1.04);
+    -webkit-backdrop-filter: blur(7px) saturate(1.04);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.7),
+      0 8px 20px rgba(16, 48, 144, 0.035);
+    pointer-events: none;
+  }
 
   &::after {
     content: "";
     position: absolute;
-    left: 0.25rem;
-    right: auto;
+    left: 0.85rem;
+    right: 0.85rem;
     bottom: 0.75rem;
-    width: min(22rem, 42%);
+    width: auto;
     height: 1px;
     background:
       linear-gradient(
@@ -299,9 +318,9 @@
         rgba(255, 255, 255, 0.5),
         transparent
       );
+    background-size: 220% 100%;
     opacity: 0.42;
-    transform: translate3d(-120%, 0, 0);
-    will-change: transform, opacity;
+    will-change: background-position, opacity;
     animation: searchBarCurrent 7s ease-in-out infinite;
     pointer-events: none;
   }
@@ -340,8 +359,8 @@
     position: absolute;
     top: 0.2rem;
     left: 1rem;
-    right: auto;
-    width: min(24rem, 40%);
+    right: 1rem;
+    width: auto;
     height: 1px;
     background:
       linear-gradient(
@@ -351,9 +370,9 @@
         rgba(255, 255, 255, 0.68),
         transparent
       );
+    background-size: 220% 100%;
     opacity: 0.5;
-    transform: translate3d(-120%, 0, 0);
-    will-change: transform, opacity;
+    will-change: background-position, opacity;
     animation: tableAmbientLine 6.5s ease-in-out infinite;
     pointer-events: none;
   }
@@ -379,16 +398,29 @@
 }
 
 .tableStatus {
+  position: absolute;
+  right: 0.35rem;
+  bottom: 0.2rem;
+  z-index: 3;
   display: inline-flex;
   align-items: center;
   gap: 0.32rem;
-  min-width: 4.5rem;
+  min-width: 0;
+  padding: 0.18rem 0.5rem;
+  border: 1px solid rgba(16, 48, 144, 0.08);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.86);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
   color: rgba(13, 13, 78, 0.42);
   font-size: 0.76rem;
   font-weight: 500;
+  line-height: 1;
   white-space: nowrap;
-  opacity: 0.72;
-  animation: softFadeIn 160ms ease both;
+  opacity: 0.82;
+  box-shadow: 0 4px 12px rgba(16, 48, 144, 0.05);
+  pointer-events: none;
+  animation: softFadeIn 90ms ease both;
 }
 
 .syncDot {
@@ -414,12 +446,24 @@
 }
 
 .searchInput {
+  position: relative;
+  z-index: 1;
+
   :global(.MuiOutlinedInput-root) {
-    background: #fbfbfe;
+    background:
+      linear-gradient(
+        180deg,
+        rgba(255, 255, 255, 0.88),
+        rgba(251, 251, 254, 0.76)
+      );
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
     border-radius: 12px;
     color: #0d0d4e;
     font-size: 0.98rem;
-    box-shadow: none;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.72),
+      0 4px 14px rgba(16, 48, 144, 0.035);
     transition:
       box-shadow 160ms ease,
       background-color 160ms ease,
@@ -736,12 +780,12 @@
   0%,
   100% {
     opacity: 0.32;
-    transform: translate3d(-120%, 0, 0);
+    background-position: 110% 0;
   }
 
   50% {
     opacity: 0.62;
-    transform: translate3d(250%, 0, 0);
+    background-position: -10% 0;
   }
 }
 
@@ -749,12 +793,12 @@
   0%,
   100% {
     opacity: 0.22;
-    transform: translate3d(-120%, 0, 0);
+    background-position: 110% 0;
   }
 
   50% {
     opacity: 0.48;
-    transform: translate3d(250%, 0, 0);
+    background-position: -10% 0;
   }
 }
 
@@ -818,7 +862,6 @@
     border-radius: 16px !important;
   }
 
-  .searchBar,
   .tableToolbar,
   .tableTools,
   .listMeta {
@@ -827,7 +870,8 @@
   }
 
   .tableStatus {
-    min-width: 0;
+    right: 0.5rem;
+    bottom: 0.15rem;
   }
 }
 
@@ -849,4 +893,36 @@
 .viewAuctionBtn{
   border-radius: 20px;
   background: #002884;
+}
+
+.viewDataButton {
+  position: relative;
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, #14783c 0%, #0d5d2d 48%, #073d1f 100%) !important;
+  color: #ffffff !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.34),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.18),
+    0 7px 16px rgba(7, 61, 31, 0.22) !important;
+
+  &::after {
+    content: "";
+    position: absolute;
+    inset: 1px 2px auto;
+    height: 46%;
+    border-radius: inherit;
+    background:
+      linear-gradient(
+        180deg,
+        rgba(255, 255, 255, 0.34),
+        rgba(255, 255, 255, 0.08)
+      );
+    pointer-events: none;
+  }
+
+  &:hover {
+    background:
+      linear-gradient(180deg, #168242 0%, #0e6631 48%, #084422 100%) !important;
+  }
 }

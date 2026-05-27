@@ -94,6 +94,42 @@ $border-radius: 2rem;
   animation: softRevealLeft 240ms var(--motion-ease, ease) both;
 }
 
+.viewDataButton {
+  position: relative;
+  overflow: hidden;
+  margin: 1rem 0 !important;
+  height: 2.5rem;
+  border-radius: 1rem !important;
+  background:
+    linear-gradient(180deg, #14783c 0%, #0d5d2d 48%, #073d1f 100%) !important;
+  color: #ffffff !important;
+  font-weight: 700 !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.34),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.18),
+    0 7px 16px rgba(7, 61, 31, 0.22) !important;
+
+  &::after {
+    content: "";
+    position: absolute;
+    inset: 1px 2px auto;
+    height: 46%;
+    border-radius: inherit;
+    background:
+      linear-gradient(
+        180deg,
+        rgba(255, 255, 255, 0.34),
+        rgba(255, 255, 255, 0.08)
+      );
+    pointer-events: none;
+  }
+
+  &:hover {
+    background:
+      linear-gradient(180deg, #168242 0%, #0e6631 48%, #084422 100%) !important;
+  }
+}
+
 .headerCell {
   @include text-style($secondary-blue, 1rem);
 }

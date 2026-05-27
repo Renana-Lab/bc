@@ -1720,10 +1720,9 @@ const ManageBudgetPage = () => {
                     color: "#103090",
                     backgroundColor: "#ffffff",
                     transition:
-                      "background-color 160ms ease, transform 160ms ease, box-shadow 160ms ease",
+                      "background-color 160ms ease, box-shadow 160ms ease",
                     "&:hover": {
                       backgroundColor: "#f1f5ff",
-                      transform: "translateY(-1px)",
                       boxShadow: "0 6px 14px rgba(16, 48, 144, 0.08)",
                     },
                   }}
@@ -1750,11 +1749,7 @@ const ManageBudgetPage = () => {
                   sx={{
                     pt: 2,
                     opacity: autoFinalizerOpen ? 1 : 0,
-                    transform: autoFinalizerOpen
-                      ? "translateY(0)"
-                      : "translateY(-6px)",
-                    transition:
-                      "opacity 180ms ease 70ms, transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1)",
+                    transition: "opacity 180ms ease 70ms",
                   }}
                 >
                   <AutoFinalizerMonitor marketOptions={marketOptions} />
@@ -1818,10 +1813,9 @@ const ManageBudgetPage = () => {
                       color: "#103090",
                       backgroundColor: "#ffffff",
                       transition:
-                        "background-color 160ms ease, transform 160ms ease, box-shadow 160ms ease",
+                        "background-color 160ms ease, box-shadow 160ms ease",
                       "&:hover": {
                         backgroundColor: "#f1f5ff",
-                        transform: "translateY(-1px)",
                         boxShadow: "0 6px 14px rgba(16, 48, 144, 0.08)",
                       },
                     }}
@@ -1849,9 +1843,7 @@ const ManageBudgetPage = () => {
                 sx={{
                   pt: 2,
                   opacity: batchStudioOpen ? 1 : 0,
-                  transform: batchStudioOpen ? "translateY(0)" : "translateY(-6px)",
-                  transition:
-                    "opacity 180ms ease 70ms, transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1)",
+                  transition: "opacity 180ms ease 70ms",
                 }}
               >
               <Box display="flex" justifyContent="flex-end" sx={{ mb: 1.25 }}>
@@ -2459,10 +2451,9 @@ const ManageBudgetPage = () => {
                     color: "#103090",
                     backgroundColor: "#ffffff",
                     transition:
-                      "background-color 160ms ease, transform 160ms ease, box-shadow 160ms ease",
+                      "background-color 160ms ease, box-shadow 160ms ease",
                     "&:hover": {
                       backgroundColor: "#f1f5ff",
-                      transform: "translateY(-1px)",
                       boxShadow: "0 6px 14px rgba(16, 48, 144, 0.08)",
                     },
                   }}
@@ -2486,16 +2477,12 @@ const ManageBudgetPage = () => {
                 unmountOnExit={false}
               >
               <Box
-                sx={{
-                  pt: 2,
-                  opacity: auctionReportsOpen ? 1 : 0,
-                  transform: auctionReportsOpen
-                    ? "translateY(0)"
-                    : "translateY(-6px)",
-                  transition:
-                    "opacity 180ms ease 70ms, transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1)",
-                }}
-              >
+                  sx={{
+                    pt: 2,
+                    opacity: auctionReportsOpen ? 1 : 0,
+                    transition: "opacity 180ms ease 70ms",
+                  }}
+                >
               <Box
                 sx={{
                   display: "grid",

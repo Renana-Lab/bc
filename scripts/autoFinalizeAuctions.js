@@ -22,6 +22,7 @@ const RPC_URLS = [
 const PRIVATE_KEY = process.env.PRIVATE_KEY || process.env.AUTO_FINALIZE_PRIVATE_KEY;
 const FACTORY_ADDRESSES = loadFactoryAddresses();
 const INTERVAL_MS = Number(process.env.AUTO_FINALIZE_INTERVAL_MS || 15000);
+const RUN_FOR_MS = Number(process.env.AUTO_FINALIZE_RUN_MS || 0);
 const CONCURRENCY = 1;
 const REFUND_BATCH_SIZE = Number(process.env.AUTO_REFUND_BATCH_SIZE || 0);
 const RUN_ONCE = process.argv.includes("--once");
@@ -248,18 +249,33 @@ async function main() {
   console.log(`Auto-finalizer running from ${account.address}`);
   console.log(`Watching ${FACTORY_ADDRESSES.length} factory contract(s): ${FACTORY_ADDRESSES.join(", ")}`);
 
-  for (const factoryAddress of FACTORY_ADDRESSES) {
-    await finalizeReadyAuctions(factoryAddress);
-  }
+  const runCycle = async () => {
+    await Promise.all(
+      FACTORY_ADDRESSES.map((factoryAddress) => finalizeReadyAuctions(factoryAddress))
+    );
+  };
+
+  await runCycle();
   if (RUN_ONCE) return;
 
-  setInterval(() => {
-    Promise.all(
-      FACTORY_ADDRESSES.map((factoryAddress) => finalizeReadyAuctions(factoryAddress))
-    ).catch((error) => {
+  const startedAt = Date.now();
+
+  while (!RUN_FOR_MS || Date.now() - startedAt < RUN_FOR_MS) {
+    const remainingMs = RUN_FOR_MS ? RUN_FOR_MS - (Date.now() - startedAt) : INTERVAL_MS;
+    await wait(Math.max(0, Math.min(INTERVAL_MS, remainingMs)));
+
+    if (RUN_FOR_MS && Date.now() - startedAt >= RUN_FOR_MS) break;
+
+    try {
+      await runCycle();
+    } catch (error) {
       console.error("Auto-finalizer cycle failed:", error.message || error);
-    });
-  }, INTERVAL_MS);
+    }
+  }
+
+  if (RUN_FOR_MS) {
+    console.log(`Auto-finalizer watch window completed after ${RUN_FOR_MS}ms`);
+  }
 }
 
 main().catch((error) => {

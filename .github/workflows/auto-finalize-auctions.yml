@@ -15,7 +15,7 @@ concurrency:
 jobs:
   auto-finalize:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 8
 
     steps:
       - name: Checkout
@@ -34,11 +34,13 @@ jobs:
         run: yarn install --frozen-lockfile --non-interactive
 
       - name: Finalize ended auctions
-        run: yarn auto-finalize
+        run: yarn auto-finalize:watch
         env:
           RPC_URL: ${{ secrets.RPC_URL }}
           INFURA_KEY: ${{ secrets.INFURA_KEY }}
           PRIVATE_KEY: ${{ secrets.AUTO_FINALIZE_PRIVATE_KEY }}
           FACTORY_MARKETS: real,dev
           AUTO_FINALIZE_CONCURRENCY: 1
+          AUTO_FINALIZE_INTERVAL_MS: 15000
+          AUTO_FINALIZE_RUN_MS: 240000
           AUTO_REFUND_BATCH_SIZE: 20

@@ -1997,13 +1997,14 @@ function AuctionsListPage() {
                       <TableCell align="center">
                         <Button
                           variant="contained"
+                          className={userWon ? styles.viewDataButton : ""}
                           style={{
                             backgroundColor: userWon
-                              ? "#2e7d32"
+                              ? undefined
                               : auction.isRefunded
                                 ? "#FFD700"
                                 : "#9090D0",
-                            color: "white",
+                            color: userWon ? undefined : "white",
                             borderRadius: "20px",
                             padding: "6px 20px",
                             textTransform: "uppercase",

@@ -727,8 +727,8 @@ function ShowAuctionPage() {
               </div>
               {!state.displayBiddingDialog && (
                 <Button
-                  variant="outlined"
-                  style={{ ...buttonStyle, margin: "1rem 0" }}
+                  variant="contained"
+                  className={showPageStyles.viewDataButton}
                   onClick={() => dispatch({ type: "TOGGLE_BIDDING_DIALOG" })}
                 >
                   View Data

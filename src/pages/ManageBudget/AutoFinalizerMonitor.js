@@ -519,9 +519,10 @@ const AutoFinalizerMonitor = ({ marketOptions }) => {
           Copy CLI stop command
         </Button>
         <Typography variant="caption" color="text.secondary">
-          This admin panel does not finalize automatically. GitHub Actions runs
-          the daily automation separately; Re-run and stop open GitHub because
-          tokens must not live in the frontend.
+          This admin panel does not finalize automatically. GitHub Actions starts
+          scheduled runs about every 5 minutes; each run checks every 15 seconds
+          while active. Re-run and stop open GitHub because tokens must not live
+          in the frontend.
         </Typography>
       </Box>
     </Box>
