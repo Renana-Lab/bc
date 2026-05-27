@@ -9,6 +9,33 @@ const isValidAddress = (value) => ADDRESS_PATTERN.test(normalizeAddress(value));
 const firstValidAddress = (...addresses) =>
   addresses.map(normalizeAddress).find((address) => isValidAddress(address)) || "";
 
+const splitCsv = (value) =>
+  String(value || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+const uniqueAddresses = (addresses) => {
+  const seen = new Set();
+  const unique = [];
+
+  addresses.forEach((address) => {
+    const key = address.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    unique.push(address);
+  });
+
+  return unique;
+};
+
+const validateAddressList = (name, addresses) => {
+  const invalid = addresses.filter((address) => !isValidAddress(address));
+  if (invalid.length) {
+    throw new Error(`${name} contains invalid factory address: ${invalid.join(", ")}`);
+  }
+};
+
 const readFileIfPresent = (filePath) => {
   try {
     return fs.readFileSync(filePath, "utf8");
@@ -67,7 +94,42 @@ function loadFactoryAddress(options = {}) {
   return address;
 }
 
+function loadFactoryAddresses(options = {}) {
+  const explicitAddresses = splitCsv(options.addresses || process.env.FACTORY_ADDRESSES);
+  if (explicitAddresses.length) {
+    validateAddressList("FACTORY_ADDRESSES", explicitAddresses);
+    return uniqueAddresses(explicitAddresses);
+  }
+
+  const singleAddress = normalizeAddress(process.env.FACTORY_ADDRESS);
+  if (singleAddress) {
+    validateAddressList("FACTORY_ADDRESS", [singleAddress]);
+    return [singleAddress];
+  }
+
+  const requestedMarkets = splitCsv(
+    options.markets ||
+      process.env.FACTORY_MARKETS ||
+      process.env.AUTO_FINALIZE_MARKETS ||
+      process.env.AUCTION_INDEXER_MARKETS ||
+      process.env.FACTORY_MARKET ||
+      process.env.AUTO_FINALIZE_MARKET ||
+      process.env.AUCTION_INDEXER_MARKET ||
+      "real"
+  );
+
+  const addresses = requestedMarkets.map((market) =>
+    loadFactoryAddress({
+      ...options,
+      market,
+    })
+  );
+
+  return uniqueAddresses(addresses);
+}
+
 module.exports = {
   isValidAddress,
   loadFactoryAddress,
+  loadFactoryAddresses,
 };

@@ -4,7 +4,7 @@ require("dotenv").config({ path: path.resolve(__dirname, "../.env") });
 const Web3 = require("web3");
 const campaignJson = require("../src/real_ethereum/build/Campaign.json");
 const factoryJson = require("../src/real_ethereum/build/CampaignFactory.json");
-const { loadFactoryAddress } = require("./factoryAddressLoader");
+const { loadFactoryAddresses } = require("./factoryAddressLoader");
 
 const DEFAULT_RPC_URLS = [
   "https://ethereum-sepolia-rpc.publicnode.com",
@@ -21,7 +21,7 @@ const RPC_URLS = [
   ...DEFAULT_RPC_URLS,
 ].filter((url, index, urls) => url && urls.indexOf(url) === index);
 const PRIVATE_KEY = process.env.PRIVATE_KEY || process.env.AUTO_FINALIZE_PRIVATE_KEY;
-const FACTORY_ADDRESS = loadFactoryAddress();
+const FACTORY_ADDRESSES = loadFactoryAddresses();
 const INTERVAL_MS = Number(process.env.AUTO_FINALIZE_INTERVAL_MS || 15000);
 const CONCURRENCY = 1;
 const REFUND_BATCH_SIZE = Number(process.env.AUTO_REFUND_BATCH_SIZE || 0);
@@ -83,7 +83,8 @@ async function withRpcRetry(task, retries = web3Clients.length + 1) {
   throw lastError;
 }
 
-const factoryFor = (web3) => new web3.eth.Contract(factoryJson.abi, FACTORY_ADDRESS);
+const factoryFor = (web3, factoryAddress) =>
+  new web3.eth.Contract(factoryJson.abi, factoryAddress);
 const campaignFor = (web3, address) => new web3.eth.Contract(campaignJson.abi, address);
 
 const isEnded = (endTime) => Number(endTime) * 1000 <= Date.now();
@@ -170,9 +171,9 @@ async function mapWithConcurrency(items, limit, mapper) {
   return results;
 }
 
-async function finalizeReadyAuctions() {
+async function finalizeReadyAuctions(factoryAddress) {
   const addresses = await withRpcRetry((web3) =>
-    factoryFor(web3).methods.getDeployedCampaigns().call()
+    factoryFor(web3, factoryAddress).methods.getDeployedCampaigns().call()
   );
   const candidates = addresses.filter((address) => !knownClosed.has(address));
 
@@ -239,12 +240,17 @@ async function finalizeReadyAuctions() {
 
 async function main() {
   console.log(`Auto-finalizer running from ${account.address}`);
+  console.log(`Watching ${FACTORY_ADDRESSES.length} factory contract(s): ${FACTORY_ADDRESSES.join(", ")}`);
 
-  await finalizeReadyAuctions();
+  for (const factoryAddress of FACTORY_ADDRESSES) {
+    await finalizeReadyAuctions(factoryAddress);
+  }
   if (RUN_ONCE) return;
 
   setInterval(() => {
-    finalizeReadyAuctions().catch((error) => {
+    Promise.all(
+      FACTORY_ADDRESSES.map((factoryAddress) => finalizeReadyAuctions(factoryAddress))
+    ).catch((error) => {
       console.error("Auto-finalizer cycle failed:", error.message || error);
     });
   }, INTERVAL_MS);

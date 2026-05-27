@@ -39,6 +39,6 @@ jobs:
           RPC_URL: ${{ secrets.RPC_URL }}
           INFURA_KEY: ${{ secrets.INFURA_KEY }}
           PRIVATE_KEY: ${{ secrets.AUTO_FINALIZE_PRIVATE_KEY }}
-          FACTORY_MARKET: real
+          FACTORY_MARKETS: real,dev
           AUTO_FINALIZE_CONCURRENCY: 1
           AUTO_REFUND_BATCH_SIZE: 20
