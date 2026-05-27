@@ -100,11 +100,14 @@ const normalizeFactoryAddress = (address) =>
     .toLowerCase();
 
 const isRpcRateLimitError = (error) => {
-  const message = JSON.stringify(error?.message || error || "");
+  const message = JSON.stringify(error?.message || error || "").toLowerCase();
   return (
     message.includes("429") ||
-    message.includes("Too Many Requests") ||
-    message.includes("Rate limit")
+    message.includes("too many requests") ||
+    message.includes("rate limit") ||
+    message.includes("usage limit") ||
+    message.includes("current plan") ||
+    message.includes("higher limits")
   );
 };
 
@@ -1547,6 +1550,7 @@ function AuctionsListPage() {
           ? "#FFD700"
           : "#E9E9F6",
     marginBottom: "1rem",
+    transition: "background-color 65ms ease, box-shadow 85ms ease",
     "&:hover": {
       backgroundColor: hasWon
         ? "#77DD77"

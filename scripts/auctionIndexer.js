@@ -10,7 +10,6 @@ const { loadFactoryAddress } = require("./factoryAddressLoader");
 const DEFAULT_RPC_URLS = [
   "https://ethereum-sepolia-rpc.publicnode.com",
   "https://sepolia.drpc.org",
-  "https://1rpc.io/sepolia",
 ];
 const DEFAULT_WS_URL = "wss://sepolia.infura.io/ws/v3/b27d53291ceb44bd864dbf7b0eb55581";
 const PORT = Number(process.env.AUCTION_INDEXER_PORT || 8787);
@@ -53,8 +52,15 @@ const getClient = (offset = 0) =>
   web3Clients[(nextRpcIndex + offset) % web3Clients.length];
 
 const isRateLimitError = (error) => {
-  const message = JSON.stringify(error?.message || error || "");
-  return message.includes("429") || message.includes("Too Many Requests");
+  const message = JSON.stringify(error?.message || error || "").toLowerCase();
+  return (
+    message.includes("429") ||
+    message.includes("too many requests") ||
+    message.includes("rate limit") ||
+    message.includes("usage limit") ||
+    message.includes("current plan") ||
+    message.includes("higher limits")
+  );
 };
 
 async function withRpcRetry(task, retries = web3Clients.length + 1) {

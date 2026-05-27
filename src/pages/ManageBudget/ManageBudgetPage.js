@@ -20,6 +20,7 @@ import factory from "../../real_ethereum/factory";
 import { getDefaultBudget } from "../../real_ethereum/budget";
 import { readOnlyCall } from "../../real_ethereum/readOnly";
 import componentStyles from "../../styles/components.module.scss";
+import AutoFinalizerMonitor from "./AutoFinalizerMonitor";
 import {
   clearMarketFactoryAddress,
   getActiveMarket,
@@ -274,6 +275,7 @@ const ManageBudgetPage = () => {
   });
   const [showBulkImport, setShowBulkImport] = useState(false);
   const [batchStudioOpen, setBatchStudioOpen] = useState(false);
+  const [autoFinalizerOpen, setAutoFinalizerOpen] = useState(false);
   const [auctionReportsOpen, setAuctionReportsOpen] = useState(false);
   const [bulkLoading, setBulkLoading] = useState(false);
   const [bulkProgress, setBulkProgress] = useState({ current: 0, total: 0 });
@@ -1605,8 +1607,25 @@ const ManageBudgetPage = () => {
               </Box>
             </Box>
 
-            <Box sx={{ width: "100%" }}>
+            <Box
+              sx={{
+                width: "100%",
+                p: { xs: 1.5, sm: 2 },
+                border: "1px solid #d9dff2",
+                borderRadius: 3,
+                backgroundColor: "#ffffff",
+                boxShadow: "0 4px 14px rgba(16, 48, 144, 0.035)",
+              }}
+            >
               <Typography variant="h6">Set Global Budget</Typography>
+              <Typography
+                variant="body2"
+                color="text.secondary"
+                sx={{ mt: 0.5, maxWidth: 680 }}
+              >
+                Set the default spending budget applied to bidder accounts.
+                Reset restores the standard 2000 wei budget.
+              </Typography>
               <TextField
                 label="Budget (wei)"
                 type="number"
@@ -1629,6 +1648,7 @@ const ManageBudgetPage = () => {
                   color="success"
                   onClick={handleSaveBudget}
                   fullWidth
+                  sx={{ borderRadius: 999 }}
                 >
                   Save
                 </Button>
@@ -1637,10 +1657,109 @@ const ManageBudgetPage = () => {
                   color="secondary"
                   onClick={handleResetBudget}
                   fullWidth
+                  sx={{ borderRadius: 999 }}
                 >
                   Reset
                 </Button>
               </Box>
+            </Box>
+
+            <Box
+              sx={{
+                width: "100%",
+                mt: 3,
+                p: { xs: 1.5, sm: 2 },
+                border: "1px solid #d9dff2",
+                borderRadius: 3,
+                backgroundColor: autoFinalizerOpen ? "#fbfcff" : "#ffffff",
+                boxShadow: autoFinalizerOpen
+                  ? "0 10px 26px rgba(16, 48, 144, 0.06)"
+                  : "0 4px 14px rgba(16, 48, 144, 0.035)",
+                transition:
+                  "background-color 180ms ease, box-shadow 180ms ease, border-color 180ms ease",
+              }}
+            >
+              <Box
+                sx={{
+                  display: "grid",
+                  gridTemplateColumns: "minmax(0, 1fr) auto",
+                  alignItems: "start",
+                  gap: 2,
+                }}
+              >
+                <Box sx={{ minWidth: 0 }}>
+                  <Typography variant="h6">Auto Finalizer Monitor</Typography>
+                  <Typography
+                    variant="body2"
+                    color="text.secondary"
+                    sx={{ mt: 0.5, maxWidth: 680 }}
+                  >
+                    Watch GitHub Actions health, scan Real and Dev for ended
+                    auctions, and quickly re-run the finalizer if something is
+                    stuck.
+                  </Typography>
+                </Box>
+                <IconButton
+                  onClick={() => setAutoFinalizerOpen((current) => !current)}
+                  aria-expanded={autoFinalizerOpen}
+                  aria-controls="auto-finalizer-monitor-panel"
+                  aria-label={
+                    autoFinalizerOpen
+                      ? "Collapse Auto Finalizer Monitor"
+                      : "Expand Auto Finalizer Monitor"
+                  }
+                  title={
+                    autoFinalizerOpen
+                      ? "Collapse Auto Finalizer Monitor"
+                      : "Expand Auto Finalizer Monitor"
+                  }
+                  sx={{
+                    width: 42,
+                    height: 42,
+                    border: "1px solid #b9c7f2",
+                    color: "#103090",
+                    backgroundColor: "#ffffff",
+                    transition:
+                      "background-color 160ms ease, transform 160ms ease, box-shadow 160ms ease",
+                    "&:hover": {
+                      backgroundColor: "#f1f5ff",
+                      transform: "translateY(-1px)",
+                      boxShadow: "0 6px 14px rgba(16, 48, 144, 0.08)",
+                    },
+                  }}
+                >
+                  <KeyboardArrowDownIcon
+                    sx={{
+                      transform: autoFinalizerOpen
+                        ? "rotate(180deg)"
+                        : "rotate(0deg)",
+                      transition:
+                        "transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1)",
+                    }}
+                  />
+                </IconButton>
+              </Box>
+
+              <Collapse
+                id="auto-finalizer-monitor-panel"
+                in={autoFinalizerOpen}
+                timeout="auto"
+                unmountOnExit={false}
+              >
+                <Box
+                  sx={{
+                    pt: 2,
+                    opacity: autoFinalizerOpen ? 1 : 0,
+                    transform: autoFinalizerOpen
+                      ? "translateY(0)"
+                      : "translateY(-6px)",
+                    transition:
+                      "opacity 180ms ease 70ms, transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1)",
+                  }}
+                >
+                  <AutoFinalizerMonitor marketOptions={marketOptions} />
+                </Box>
+              </Collapse>
             </Box>
 
             <Divider flexItem sx={{ my: 4 }} />

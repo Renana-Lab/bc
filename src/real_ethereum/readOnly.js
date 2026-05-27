@@ -6,7 +6,6 @@ import { getActiveFactoryAddress } from "./marketConfig";
 const DEFAULT_RPC_URLS = [
   "https://ethereum-sepolia-rpc.publicnode.com",
   "https://sepolia.drpc.org",
-  "https://1rpc.io/sepolia",
 ];
 const HTTP_TIMEOUT_MS = Number(process.env.REACT_APP_RPC_TIMEOUT_MS || 9000);
 
@@ -24,11 +23,14 @@ const RETRY_DELAY_MS = 2500;
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const isRateLimitError = (error) => {
-  const message = JSON.stringify(error?.message || error || "");
+  const message = JSON.stringify(error?.message || error || "").toLowerCase();
   return (
     message.includes("429") ||
-    message.includes("Too Many Requests") ||
-    message.includes("Rate limit")
+    message.includes("too many requests") ||
+    message.includes("rate limit") ||
+    message.includes("usage limit") ||
+    message.includes("current plan") ||
+    message.includes("higher limits")
   );
 };
 
