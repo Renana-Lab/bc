@@ -17,14 +17,14 @@
   margin: 0 auto;
   padding: 2rem;
   overflow-x: hidden;
-  animation: softFadeIn 220ms ease both;
+  animation: softFadeIn 140ms ease both;
 
   :global(.MuiPaper-root) {
-    animation: softScaleIn 260ms var(--motion-ease, ease) both;
+    animation: softScaleIn 160ms var(--motion-ease, ease) both;
   }
 
   :global(.MuiTableBody-root .MuiTableRow-root) {
-    animation: auctionRowEnter 240ms var(--motion-ease, ease) both;
+    animation: auctionRowEnter 130ms var(--motion-ease, ease) both;
     transition:
       background-color 65ms ease,
       box-shadow 85ms ease,
@@ -33,7 +33,7 @@
 
   @for $i from 1 through 12 {
     :global(.MuiTableBody-root .MuiTableRow-root:nth-child(#{$i})) {
-      animation-delay: #{($i - 1) * 18}ms;
+      animation-delay: #{($i - 1) * 8}ms;
     }
   }
 
@@ -83,8 +83,6 @@
   height: auto;
   max-width: 42%;
   object-fit: contain;
-  animation: heroImageFloat 7.5s ease-in-out infinite;
-  will-change: transform;
 }
 
 .heroCopy {
@@ -130,6 +128,7 @@
   min-width: min(420px, 92vw);
   position: relative;
   overflow: hidden;
+  contain: paint;
   animation: softScaleIn 280ms var(--motion-ease, ease) both;
 
   &::after {
@@ -280,6 +279,7 @@
   padding: 0.8rem 0.85rem 1.4rem;
   animation: softRevealLeft 240ms var(--motion-ease, ease) both;
   position: relative;
+  contain: paint;
 
   &::before {
     content: "";
@@ -294,8 +294,8 @@
         rgba(255, 255, 255, 0.28) 52%,
         rgba(244, 246, 255, 0.32)
       );
-    backdrop-filter: blur(7px) saturate(1.04);
-    -webkit-backdrop-filter: blur(7px) saturate(1.04);
+    backdrop-filter: blur(3px) saturate(1.02);
+    -webkit-backdrop-filter: blur(3px) saturate(1.02);
     box-shadow:
       inset 0 1px 0 rgba(255, 255, 255, 0.7),
       0 8px 20px rgba(16, 48, 144, 0.035);
@@ -317,11 +317,9 @@
         rgba(16, 48, 144, 0.18),
         rgba(255, 255, 255, 0.5),
         transparent
-      );
+    );
     background-size: 220% 100%;
     opacity: 0.42;
-    will-change: background-position, opacity;
-    animation: searchBarCurrent 7s ease-in-out infinite;
     pointer-events: none;
   }
 }
@@ -336,6 +334,7 @@
   overflow-x: auto !important;
   overflow-y: hidden !important;
   -webkit-overflow-scrolling: touch;
+  contain: paint;
   background:
     linear-gradient(
       155deg,
@@ -349,7 +348,7 @@
     0 16px 34px rgba(16, 48, 144, 0.08),
     inset 0 1px 0 #ffffff,
     inset 0 -1px 0 rgba(16, 48, 144, 0.04) !important;
-  animation: softScaleIn 280ms var(--motion-ease, ease) both;
+  animation: softScaleIn 160ms var(--motion-ease, ease) both;
   transition:
     box-shadow 180ms ease,
     transform 180ms var(--motion-ease, ease);
@@ -369,11 +368,9 @@
         rgba(144, 144, 208, 0.36),
         rgba(255, 255, 255, 0.68),
         transparent
-      );
+    );
     background-size: 220% 100%;
     opacity: 0.5;
-    will-change: background-position, opacity;
-    animation: tableAmbientLine 6.5s ease-in-out infinite;
     pointer-events: none;
   }
 
@@ -391,8 +388,8 @@
         rgba(255, 255, 255, 0) 100%
       );
     opacity: 0.34;
-    backdrop-filter: blur(1.5px) saturate(1.02);
-    -webkit-backdrop-filter: blur(1.5px) saturate(1.02);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
     pointer-events: none;
   }
 }
@@ -410,8 +407,8 @@
   border: 1px solid rgba(16, 48, 144, 0.08);
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.86);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
   color: rgba(13, 13, 78, 0.42);
   font-size: 0.76rem;
   font-weight: 500;
@@ -421,6 +418,7 @@
   box-shadow: 0 4px 12px rgba(16, 48, 144, 0.05);
   pointer-events: none;
   animation: softFadeIn 90ms ease both;
+  contain: paint;
 }
 
 .syncDot {
@@ -428,8 +426,6 @@
   height: 0.38rem;
   border-radius: 999px;
   background: rgba(16, 48, 144, 0.34);
-  animation: quietPulse 1.8s ease-in-out infinite;
-  will-change: transform, opacity;
 }
 
 @keyframes quietPulse {
@@ -456,8 +452,8 @@
         rgba(255, 255, 255, 0.88),
         rgba(251, 251, 254, 0.76)
       );
-    backdrop-filter: blur(4px);
-    -webkit-backdrop-filter: blur(4px);
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
     border-radius: 12px;
     color: #0d0d4e;
     font-size: 0.98rem;
@@ -651,8 +647,8 @@
         rgba(255, 255, 255, 0.035) 46%,
         rgba(244, 246, 255, 0.04)
       );
-    backdrop-filter: blur(0.75px) saturate(1.01);
-    -webkit-backdrop-filter: blur(0.75px) saturate(1.01);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
     opacity: 0.68;
     transition: opacity 55ms ease;
     pointer-events: none;
@@ -685,7 +681,7 @@
   }
 
   :global(.MuiTableBody-root .MuiTableRow-root:nth-child(-n + 12) .MuiTableCell-root:first-of-type::after) {
-    animation: rowSignalBreath 4.8s ease-in-out infinite;
+    opacity: 0.28;
   }
 }
 
@@ -812,6 +808,41 @@
   50% {
     opacity: 0.5;
     transform: scaleY(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce), (update: slow) {
+  .heroImage,
+  .loadingContainer,
+  .loadingContainer::after,
+  .auctionLoader span,
+  .inlineLoaderTrack,
+  .inlineLoaderDots span,
+  .searchBar::after,
+  .tableShell,
+  .tableShell::after,
+  .tableStatus,
+  .syncDot,
+  .loadMoreWrap,
+  .loadMoreButton::after,
+  .auctionsTable :global(.MuiTableBody-root .MuiTableRow-root),
+  .auctionsTable :global(.MuiTableBody-root .MuiTableCell-root:first-of-type::after) {
+    animation: none !important;
+  }
+
+  .heroImage,
+  .inlineLoaderDots span,
+  .syncDot {
+    transform: none !important;
+  }
+
+  .searchBar::before,
+  .tableShell::before,
+  .tableStatus,
+  .searchInput :global(.MuiOutlinedInput-root),
+  .auctionsTable :global(.MuiTableBody-root .MuiTableRow-root::after) {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
   }
 }
 

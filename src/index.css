@@ -1,7 +1,7 @@
 :root {
-  --motion-fast: 140ms;
-  --motion-base: 220ms;
-  --motion-slow: 420ms;
+  --motion-fast: 100ms;
+  --motion-base: 170ms;
+  --motion-slow: 260ms;
   --motion-ease: cubic-bezier(0.22, 1, 0.36, 1);
   --motion-spring: cubic-bezier(0.2, 0.9, 0.2, 1);
 }
@@ -66,8 +66,9 @@ code {
   position: relative;
   overflow: hidden;
   isolation: isolate;
-  backdrop-filter: blur(8px) saturate(1.08);
-  -webkit-backdrop-filter: blur(8px) saturate(1.08);
+  contain: paint;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
   transition:
     transform var(--motion-fast) var(--motion-ease),
     box-shadow var(--motion-fast) ease,
@@ -143,7 +144,7 @@ code {
   }
 
   .MuiButton-root:hover::after {
-    animation: buttonGlassBloom 680ms ease both;
+    animation: buttonGlassBloom 360ms ease both;
   }
 }
 
@@ -202,5 +203,14 @@ code {
     animation-iteration-count: 1 !important;
     scroll-behavior: auto !important;
     transition-duration: 0.01ms !important;
+  }
+}
+
+@media (update: slow) {
+  .MuiButton-root,
+  .MuiButton-root::before,
+  .MuiButton-root::after {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
   }
 }

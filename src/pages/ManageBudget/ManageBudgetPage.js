@@ -177,6 +177,36 @@ const REPORT_EXPORT_OPTIONS = [
     requiresSection: "payments",
   },
 ];
+const ADMIN_ZONE_BACKGROUND =
+  "linear-gradient(145deg, rgba(255, 255, 255, 0.98) 0%, rgba(252, 253, 255, 0.95) 54%, rgba(243, 246, 255, 0.92) 100%)";
+const ADMIN_CARD_BACKGROUND =
+  "linear-gradient(145deg, #ffffff 0%, #ffffff 58%, #f7f9ff 100%)";
+const ADMIN_CARD_OPEN_BACKGROUND =
+  "linear-gradient(145deg, #ffffff 0%, #fbfcff 52%, #f1f5ff 100%)";
+
+const getAdminGlossCardSx = (open = false) => ({
+  position: "relative",
+  overflow: "hidden",
+  contain: "paint",
+  background: open ? ADMIN_CARD_OPEN_BACKGROUND : ADMIN_CARD_BACKGROUND,
+  boxShadow: open
+    ? "0 12px 28px rgba(16, 48, 144, 0.07), inset 0 1px 0 rgba(255, 255, 255, 0.9)"
+    : "0 5px 16px rgba(16, 48, 144, 0.04), inset 0 1px 0 rgba(255, 255, 255, 0.82)",
+  transition:
+    "background 180ms ease, box-shadow 180ms ease, border-color 180ms ease",
+  "&::before": {
+    content: '""',
+    position: "absolute",
+    inset: 0,
+    pointerEvents: "none",
+    background:
+      "linear-gradient(115deg, rgba(255, 255, 255, 0.46) 0%, rgba(255, 255, 255, 0.08) 34%, rgba(126, 149, 226, 0.08) 100%)",
+  },
+  "& > *": {
+    position: "relative",
+    zIndex: 1,
+  },
+});
 
 const makeDefaultReportSelection = (options) =>
   options.reduce((selection, option) => {
@@ -285,6 +315,7 @@ const ManageBudgetPage = () => {
     dataPrefix: "Data",
   });
   const [showBulkImport, setShowBulkImport] = useState(false);
+  const [contractManagerOpen, setContractManagerOpen] = useState(false);
   const [batchStudioOpen, setBatchStudioOpen] = useState(false);
   const [autoFinalizerOpen, setAutoFinalizerOpen] = useState(false);
   const [auctionReportsOpen, setAuctionReportsOpen] = useState(false);
@@ -296,6 +327,7 @@ const ManageBudgetPage = () => {
   const reportCancelRef = useRef(false);
   const bulkSubmittingRef = useRef(false);
   const autoLoadedAuctionRangeRef = useRef("");
+  const switchTimerRef = useRef(null);
 
   const loadBudget = useCallback(async () => {
     const stored = await getDefaultBudget();
@@ -310,6 +342,13 @@ const ManageBudgetPage = () => {
     setContractDrafts(makeContractDrafts(nextOptions));
     setMarketLabelDrafts(makeMarketLabelDrafts(nextOptions));
     return nextOptions;
+  }, []);
+
+  const settleMarketSwitch = useCallback((delay = 320) => {
+    window.clearTimeout(switchTimerRef.current);
+    switchTimerRef.current = window.setTimeout(() => {
+      setSwitchingMarketId("");
+    }, delay);
   }, []);
 
   useEffect(() => {
@@ -350,9 +389,13 @@ const ManageBudgetPage = () => {
       reportCancelRef.current = true;
       autoLoadedAuctionRangeRef.current = "";
       loadBudget();
-      window.setTimeout(() => setSwitchingMarketId(""), 560);
+      settleMarketSwitch();
     });
-  }, [loadBudget, refreshMarketOptions]);
+  }, [loadBudget, refreshMarketOptions, settleMarketSwitch]);
+
+  useEffect(() => {
+    return () => window.clearTimeout(switchTimerRef.current);
+  }, []);
 
   useEffect(() => {
     if (bulkText) {
@@ -834,8 +877,9 @@ const ManageBudgetPage = () => {
       setActiveMarketState(market);
       refreshMarketOptions();
       toast.success(`${market.label} market is active`);
-      window.setTimeout(() => setSwitchingMarketId(""), 560);
+      settleMarketSwitch();
     } catch (switchError) {
+      window.clearTimeout(switchTimerRef.current);
       setSwitchingMarketId("");
       toast.error(switchError.message || "Could not switch market");
     }
@@ -1410,13 +1454,29 @@ const ManageBudgetPage = () => {
         alignItems="center"
         sx={{
           marginTop: 16,
-          backgroundColor: "background.paper",
+          position: "relative",
+          overflow: "hidden",
+          background: ADMIN_ZONE_BACKGROUND,
           padding: 4,
           borderRadius: 4,
-          boxShadow: 3,
+          border: "1px solid rgba(16, 48, 144, 0.08)",
+          boxShadow:
+            "0 18px 44px rgba(16, 48, 144, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.78)",
           width: "100%",
           maxWidth: 840,
           mx: "auto",
+          "&::before": {
+            content: '""',
+            position: "absolute",
+            inset: 0,
+            pointerEvents: "none",
+            background:
+              "linear-gradient(115deg, rgba(255, 255, 255, 0.54) 0%, rgba(255, 255, 255, 0.12) 38%, rgba(126, 149, 226, 0.08) 100%)",
+          },
+          "& > *": {
+            position: "relative",
+            zIndex: 1,
+          },
         }}
       >
         {isAdmin ? (
@@ -1441,15 +1501,16 @@ const ManageBudgetPage = () => {
                 p: { xs: 1.5, sm: 2 },
                 border: "1px solid #d9dff2",
                 borderRadius: 3,
-                backgroundColor: "#f8faff",
+                ...getAdminGlossCardSx(contractManagerOpen),
               }}
             >
               <Box
-                display="flex"
-                justifyContent="space-between"
-                alignItems="flex-start"
-                gap={2}
-                flexWrap="wrap"
+                sx={{
+                  display: "grid",
+                  gridTemplateColumns: "minmax(0, 1fr) auto",
+                  alignItems: "start",
+                  gap: 2,
+                }}
               >
                 <Box>
                   <Typography
@@ -1472,56 +1533,106 @@ const ManageBudgetPage = () => {
                     loading is enabled.
                   </Typography>
                 </Box>
-                <Button
-                  variant="outlined"
-                  size="small"
-                  onClick={() => handleInspectContracts()}
-                  disabled={contractManagerLoading}
-                  sx={{ borderRadius: 999 }}
-                >
-                  {contractManagerLoading ? "Inspecting..." : "Inspect All"}
-                </Button>
+                <Box display="flex" gap={1} alignItems="center" justifyContent="flex-end">
+                  {contractManagerOpen && (
+                    <Button
+                      variant="outlined"
+                      size="small"
+                      onClick={() => handleInspectContracts()}
+                      disabled={contractManagerLoading}
+                      sx={{ borderRadius: 999 }}
+                    >
+                      {contractManagerLoading ? "Inspecting..." : "Inspect All"}
+                    </Button>
+                  )}
+                  <IconButton
+                    onClick={() => setContractManagerOpen((current) => !current)}
+                    aria-expanded={contractManagerOpen}
+                    aria-controls="contract-manager-panel"
+                    aria-label={
+                      contractManagerOpen
+                        ? "Collapse Contract Manager"
+                        : "Expand Contract Manager"
+                    }
+                    title={
+                      contractManagerOpen
+                        ? "Collapse Contract Manager"
+                        : "Expand Contract Manager"
+                    }
+                    sx={{
+                      width: 42,
+                      height: 42,
+                      border: "1px solid #b9c7f2",
+                      color: "#103090",
+                      backgroundColor: "#ffffff",
+                      transition:
+                        "background-color 160ms ease, box-shadow 160ms ease",
+                      "&:hover": {
+                        backgroundColor: "#f1f5ff",
+                        boxShadow: "0 6px 14px rgba(16, 48, 144, 0.08)",
+                      },
+                    }}
+                  >
+                    <KeyboardArrowDownIcon
+                      sx={{
+                        transform: contractManagerOpen
+                          ? "rotate(180deg)"
+                          : "rotate(0deg)",
+                        transition:
+                          "transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1)",
+                      }}
+                    />
+                  </IconButton>
+                </Box>
               </Box>
 
-              <Box
-                sx={{
-                  display: "grid",
-                  gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" },
-                  gap: 1.5,
-                  mt: 2,
-                }}
+              <Collapse
+                id="contract-manager-panel"
+                in={contractManagerOpen}
+                timeout="auto"
+                unmountOnExit={false}
               >
-                {marketOptions.map((market) => {
-                  const isActive = activeMarket.id === market.id;
-                  const stats = contractStats[market.id] || {};
-                  const draft = contractDrafts[market.id] || "";
-                  const labelDraft = marketLabelDrafts[market.id] || "";
-                  const draftLooksValid = !draft || /^0x[a-fA-F0-9]{40}$/.test(draft);
-                  const labelLooksValid =
-                    labelDraft.trim().length > 0 && labelDraft.trim().length <= 18;
+                <Box
+                  sx={{
+                    display: "grid",
+                    gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" },
+                    gap: 1.5,
+                    mt: 2,
+                    opacity: contractManagerOpen ? 1 : 0,
+                    transition: "opacity 180ms ease 70ms",
+                  }}
+                >
+                  {marketOptions.map((market) => {
+                    const isActive = activeMarket.id === market.id;
+                    const stats = contractStats[market.id] || {};
+                    const draft = contractDrafts[market.id] || "";
+                    const labelDraft = marketLabelDrafts[market.id] || "";
+                    const draftLooksValid = !draft || /^0x[a-fA-F0-9]{40}$/.test(draft);
+                    const labelLooksValid =
+                      labelDraft.trim().length > 0 && labelDraft.trim().length <= 18;
 
-                  return (
-                    <Box
-                      key={market.id}
-                      className={`${componentStyles.contractCard} ${
-                        isActive ? componentStyles.contractCardActive : ""
-                      } ${
-                        switchingMarketId === market.id
-                          ? componentStyles.contractCardSwitching
-                          : ""
-                      }`}
-                      sx={{
-                        p: 1.5,
-                        borderRadius: 2,
-                        backgroundColor: "#ffffff",
-                        border: isActive
-                          ? "1px solid #9fb0ef"
-                          : "1px solid #e5e9f8",
-                        boxShadow: isActive
-                          ? "0 8px 24px rgba(16, 48, 144, 0.08)"
-                          : "none",
-                      }}
-                    >
+                    return (
+                      <Box
+                        key={market.id}
+                        className={`${componentStyles.contractCard} ${
+                          isActive ? componentStyles.contractCardActive : ""
+                        } ${
+                          switchingMarketId === market.id
+                            ? componentStyles.contractCardSwitching
+                            : ""
+                        }`}
+                        sx={{
+                          p: 1.5,
+                          borderRadius: 2,
+                          backgroundColor: "#ffffff",
+                          border: isActive
+                            ? "1px solid #9fb0ef"
+                            : "1px solid #e5e9f8",
+                          boxShadow: isActive
+                            ? "0 8px 24px rgba(16, 48, 144, 0.08)"
+                            : "none",
+                        }}
+                      >
                       <Box
                         display="flex"
                         justifyContent="space-between"
@@ -1696,10 +1807,11 @@ const ManageBudgetPage = () => {
                           </Typography>
                         )}
                       </Box>
-                    </Box>
-                  );
-                })}
-              </Box>
+                      </Box>
+                    );
+                  })}
+                </Box>
+              </Collapse>
             </Box>
 
             <Box
@@ -1708,8 +1820,7 @@ const ManageBudgetPage = () => {
                 p: { xs: 1.5, sm: 2 },
                 border: "1px solid #d9dff2",
                 borderRadius: 3,
-                backgroundColor: "#ffffff",
-                boxShadow: "0 4px 14px rgba(16, 48, 144, 0.035)",
+                ...getAdminGlossCardSx(false),
               }}
             >
               <Typography variant="h6">Set Global Budget</Typography>
@@ -1766,12 +1877,7 @@ const ManageBudgetPage = () => {
                 p: { xs: 1.5, sm: 2 },
                 border: "1px solid #d9dff2",
                 borderRadius: 3,
-                backgroundColor: autoFinalizerOpen ? "#fbfcff" : "#ffffff",
-                boxShadow: autoFinalizerOpen
-                  ? "0 10px 26px rgba(16, 48, 144, 0.06)"
-                  : "0 4px 14px rgba(16, 48, 144, 0.035)",
-                transition:
-                  "background-color 180ms ease, box-shadow 180ms ease, border-color 180ms ease",
+                ...getAdminGlossCardSx(autoFinalizerOpen),
               }}
             >
               <Box
@@ -1860,12 +1966,7 @@ const ManageBudgetPage = () => {
                 p: { xs: 1.5, sm: 2 },
                 border: "1px solid #d9dff2",
                 borderRadius: 3,
-                backgroundColor: batchStudioOpen ? "#fbfcff" : "#ffffff",
-                boxShadow: batchStudioOpen
-                  ? "0 10px 26px rgba(16, 48, 144, 0.06)"
-                  : "0 4px 14px rgba(16, 48, 144, 0.035)",
-                transition:
-                  "background-color 180ms ease, box-shadow 180ms ease, border-color 180ms ease",
+                ...getAdminGlossCardSx(batchStudioOpen),
               }}
             >
               <Box
@@ -2497,12 +2598,7 @@ const ManageBudgetPage = () => {
                 p: { xs: 1.5, sm: 2 },
                 border: "1px solid #d9dff2",
                 borderRadius: 3,
-                backgroundColor: auctionReportsOpen ? "#fbfcff" : "#ffffff",
-                boxShadow: auctionReportsOpen
-                  ? "0 10px 26px rgba(16, 48, 144, 0.06)"
-                  : "0 4px 14px rgba(16, 48, 144, 0.035)",
-                transition:
-                  "background-color 180ms ease, box-shadow 180ms ease, border-color 180ms ease",
+                ...getAdminGlossCardSx(auctionReportsOpen),
               }}
             >
               <Box

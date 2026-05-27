@@ -59,7 +59,7 @@ const buttonStyle = {
   // border: "1px solid #002884",
 };
 
-const ACTIVE_AUCTION_POLL_INTERVAL_MS = 5000;
+const ACTIVE_AUCTION_POLL_INTERVAL_MS = 10000;
 const ENDED_AUCTION_POLL_INTERVAL_MS = 45000;
 
 const initialState = {
@@ -819,7 +819,10 @@ function ShowAuctionPage() {
           <DialogContent>
             <DialogContentText>
               {state.transactions.length ? (
-                <TableContainer component={Paper}>
+                <TableContainer
+                  component={Paper}
+                  className={showPageStyles.bidHistoryTable}
+                >
                   <Table sx={{ minWidth: 650 }} aria-label="bids">
                     <TableHead>
                       <TableRow>

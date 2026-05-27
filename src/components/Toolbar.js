@@ -16,9 +16,50 @@ import {
 } from "../real_ethereum/marketConfig";
 import componentStyles from "./../styles/components.module.scss";
 
+const ClockDisplay = memo(() => {
+  const [currentTime, setCurrentTime] = useState(() => new Date());
+
+  useEffect(() => {
+    const tick = () => {
+      if (!document.hidden) {
+        setCurrentTime(new Date());
+      }
+    };
+
+    const interval = window.setInterval(tick, 1000);
+    document.addEventListener("visibilitychange", tick);
+
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", tick);
+    };
+  }, []);
+
+  const formattedTime = currentTime.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+
+  return (
+    <Typography
+      variant="body2"
+      style={{
+        color: "#F0F0F0",
+        border: "1px solid rgba(240, 240, 240, 0.06)",
+        padding: "0.5rem",
+        borderRadius: "20px",
+      }}
+    >
+      {formattedTime}
+    </Typography>
+  );
+});
+
+ClockDisplay.displayName = "ClockDisplay";
+
 const ToolbarComponent = (props) => {
   const navigate = useNavigate();
-  const [currentTime, setCurrentTime] = useState(new Date());
   const [budget, setBudget] = useState(null);
   const [budgetRefreshing, setBudgetRefreshing] = useState(false);
   const [activeMarket, setActiveMarketState] = useState(getActiveMarket());
@@ -26,13 +67,17 @@ const ToolbarComponent = (props) => {
   const [switchingMarketId, setSwitchingMarketId] = useState("");
   const activeMarketIdRef = useRef(activeMarket.id);
   const budgetRequestIdRef = useRef(0);
+  const switchTimerRef = useRef(null);
+
+  const settleMarketSwitch = useCallback((delay = 320) => {
+    window.clearTimeout(switchTimerRef.current);
+    switchTimerRef.current = window.setTimeout(() => {
+      setSwitchingMarketId("");
+    }, delay);
+  }, []);
 
   useEffect(() => {
-    const interval = setInterval(() => {
-      setCurrentTime(new Date());
-    }, 1000);
-
-    return () => clearInterval(interval);
+    return () => window.clearTimeout(switchTimerRef.current);
   }, []);
 
   const fetchBudget = useCallback(async ({ force = false } = {}) => {
@@ -102,10 +147,10 @@ const ToolbarComponent = (props) => {
 
       budgetRequestIdRef.current += 1;
       setSwitchingMarketId(market.id);
-      window.setTimeout(() => setSwitchingMarketId(""), 520);
+      settleMarketSwitch();
       fetchBudget();
     });
-  }, [fetchBudget]);
+  }, [fetchBudget, settleMarketSwitch]);
 
   const handleMarketSwitch = (marketId) => {
     try {
@@ -130,18 +175,12 @@ const ToolbarComponent = (props) => {
       const nextMarket = setActiveMarket(marketId);
       activeMarketIdRef.current = nextMarket.id;
       setActiveMarketState(nextMarket);
-      window.setTimeout(() => setSwitchingMarketId(""), 520);
+      settleMarketSwitch();
     } catch (error) {
       window.alert(error.message || "Could not switch market.");
     }
   };
 
-  const formatTime = (date) =>
-    date.toLocaleTimeString([], {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-    });
   const activeMarketIndex = Math.max(
     0,
     marketOptions.findIndex((market) => market.id === activeMarket.id)
@@ -241,17 +280,7 @@ const ToolbarComponent = (props) => {
               )}
             </div>
 
-            <Typography
-              variant="body2"
-              style={{
-                color: "#F0F0F0",
-                border: "1px solid rgba(240, 240, 240, 0.06)",
-                padding: "0.5rem",
-                borderRadius: "20px",
-              }}
-            >
-              {formatTime(currentTime)}
-            </Typography>
+            <ClockDisplay />
           </div>
         </Toolbar>
       </AppBar>

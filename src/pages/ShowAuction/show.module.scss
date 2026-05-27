@@ -21,22 +21,49 @@ $border-radius: 2rem;
 
 .campaignInfo,
 .contributeForm {
+  position: relative;
+  overflow: hidden;
+  contain: paint;
   border-radius: $border-radius;
-  box-shadow: $shadow;
+  box-shadow:
+    rgba(100, 100, 111, 0.16) 0px 7px 29px 0px,
+    inset 0 1px 0 rgba(255, 255, 255, 0.82);
   margin-top: 2rem;
   padding: 1.5rem;
-  background: white;
+  background:
+    linear-gradient(145deg, #ffffff 0%, #ffffff 58%, #f7f9ff 100%);
   animation: softScaleIn 260ms var(--motion-ease, ease) both;
   transition:
     box-shadow 180ms ease,
     transform 180ms var(--motion-ease, ease);
+
+  &::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background:
+      linear-gradient(
+        115deg,
+        rgba(255, 255, 255, 0.44) 0%,
+        rgba(255, 255, 255, 0.08) 34%,
+        rgba(126, 149, 226, 0.08) 100%
+      );
+  }
+
+  > * {
+    position: relative;
+    z-index: 1;
+  }
 }
 
 .campaignInfo:hover,
 .contributeForm:hover {
   @media (hover: hover) and (pointer: fine) {
     transform: translateY(-2px);
-    box-shadow: rgba(100, 100, 111, 0.26) 0px 10px 32px 0px;
+    box-shadow:
+      rgba(100, 100, 111, 0.22) 0px 10px 32px 0px,
+      inset 0 1px 0 rgba(255, 255, 255, 0.86);
   }
 }
 
@@ -45,7 +72,8 @@ $border-radius: 2rem;
 }
 
 .contributeForm {
-  background: $accent-yellow;
+  background:
+    linear-gradient(145deg, #f4bc34 0%, $accent-yellow 52%, #e9a420 100%);
   width: 25rem;
   margin-left: 20px;
   padding: 3rem;
@@ -53,6 +81,16 @@ $border-radius: 2rem;
   display: flex;
   flex-direction: column;
   justify-content: flex-start;
+
+  &::before {
+    background:
+      linear-gradient(
+        115deg,
+        rgba(255, 255, 255, 0.24) 0%,
+        rgba(255, 255, 255, 0.06) 36%,
+        rgba(16, 48, 144, 0.05) 100%
+      );
+  }
 }
 
 .contributeForm:nth-of-type(2) {
@@ -134,6 +172,39 @@ $border-radius: 2rem;
   @include text-style($secondary-blue, 1rem);
 }
 
+.bidHistoryTable {
+  position: relative;
+  overflow: hidden;
+  contain: paint;
+  border-radius: 1rem !important;
+  background:
+    linear-gradient(145deg, #ffffff 0%, #ffffff 58%, #f7f9ff 100%) !important;
+  border: 1px solid rgba(16, 48, 144, 0.1);
+  box-shadow:
+    rgba(16, 48, 144, 0.08) 0 10px 28px,
+    inset 0 1px 0 rgba(255, 255, 255, 0.86) !important;
+
+  &::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background:
+      linear-gradient(
+        115deg,
+        rgba(255, 255, 255, 0.4) 0%,
+        rgba(255, 255, 255, 0.08) 34%,
+        rgba(126, 149, 226, 0.07) 100%
+      );
+    z-index: 1;
+  }
+
+  table {
+    position: relative;
+    z-index: 2;
+  }
+}
+
 .flex {
   display: flex;
   flex-direction: column;
@@ -147,4 +218,18 @@ $border-radius: 2rem;
 .subTitle {
   @include text-style($deep-blue, 0.9rem, 500);
   text-align: center;
+}
+
+@media (prefers-reduced-motion: reduce), (update: slow) {
+  .page,
+  .campaignInfo,
+  .contributeForm,
+  .revealedData {
+    animation: none !important;
+  }
+
+  .campaignInfo,
+  .contributeForm {
+    transform: none !important;
+  }
 }

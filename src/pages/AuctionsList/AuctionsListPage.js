@@ -43,7 +43,10 @@ const BATCH_READ_SIZE = 10;
 const BATCH_READ_CONCURRENCY = 1;
 const POLL_INTERVAL_MS = 15000;
 const MAX_LIVE_BID_SUBSCRIPTIONS = 6;
-const COUNTDOWN_TICK_MS = 1000;
+const STATUS_TICK_FAST_MS = 1000;
+const STATUS_TICK_BASE_MS = 5000;
+const STATUS_TICK_IDLE_MS = 15000;
+const FAST_STATUS_TICK_WINDOW_MS = 60000;
 const EVENT_REFRESH_DELAY_MS = 900;
 const CACHE_TTL_MS = 15000;
 const DEPLOYED_CAMPAIGNS_TTL_MS = 60000;
@@ -1060,6 +1063,29 @@ function AuctionsListPage() {
   );
   const currentUserAddress = connectedAccount;
   const searchIsActive = Boolean(searchQuery.trim());
+  const statusTickIntervalMs = useMemo(() => {
+    let hasActiveAuction = false;
+    let hasNearEndingAuction = false;
+
+    for (const auction of auctionsList) {
+      if (auction.isReadPlaceholder) continue;
+
+      const endsInMs = Number(auction.endTime) - now;
+      if (Number.isNaN(endsInMs) || endsInMs <= 0 || auction.closed) {
+        continue;
+      }
+
+      hasActiveAuction = true;
+      if (endsInMs <= FAST_STATUS_TICK_WINDOW_MS) {
+        hasNearEndingAuction = true;
+        break;
+      }
+    }
+
+    if (hasNearEndingAuction) return STATUS_TICK_FAST_MS;
+    if (hasActiveAuction) return STATUS_TICK_BASE_MS;
+    return STATUS_TICK_IDLE_MS;
+  }, [auctionsList, now]);
 
   const loadRemainingBudget = useCallback(async (account) => {
     const factoryAddressForRequest = activeFactoryAddressRef.current;
@@ -1279,10 +1305,18 @@ function AuctionsListPage() {
   useEffect(() => {
     const interval = window.setInterval(() => {
       if (!document.hidden) setNow(Date.now());
-    }, COUNTDOWN_TICK_MS);
+    }, statusTickIntervalMs);
+    const handleVisibilityChange = () => {
+      if (!document.hidden) setNow(Date.now());
+    };
 
-    return () => window.clearInterval(interval);
-  }, []);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [statusTickIntervalMs]);
 
   useEffect(() => {
     if (!didMountVisibleCountRef.current) {
@@ -1321,11 +1355,18 @@ function AuctionsListPage() {
       if (document.hidden) return;
       fetchAuctionsListRef.current?.();
     }, POLL_INTERVAL_MS);
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        fetchAuctionsListRef.current?.();
+      }
+    };
 
     window.ethereum.on?.("accountsChanged", setAccount);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
       clearInterval(interval);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
       window.ethereum.removeListener?.("accountsChanged", setAccount);
     };
   }, [navigate, loadRemainingBudget]);
@@ -1415,13 +1456,14 @@ function AuctionsListPage() {
     const maxSubscriptions = shouldLimitLiveEventLoad()
       ? Math.min(2, MAX_LIVE_BID_SUBSCRIPTIONS)
       : MAX_LIVE_BID_SUBSCRIPTIONS;
+    const currentTime = Date.now();
 
     return auctionsList
       .slice(0, Math.min(AUCTIONS_PAGE_SIZE, maxSubscriptions))
-      .filter((auction) => Number(auction.endTime) > now)
+      .filter((auction) => Number(auction.endTime) > currentTime)
       .map((auction) => auction.address)
       .join("|");
-  }, [auctionsList, now]);
+  }, [auctionsList]);
 
   useEffect(() => {
     if (AUCTIONS_API_URL) return undefined;
@@ -1504,10 +1546,7 @@ function AuctionsListPage() {
   const getLastUpdatedText = () => {
     if (!lastUpdated) return "Waiting for first sync";
 
-    const secondsAgo = Math.max(
-      0,
-      Math.floor((Date.now() - Number(lastUpdated)) / 1000),
-    );
+    const secondsAgo = Math.max(0, Math.floor((now - Number(lastUpdated)) / 1000));
 
     if (secondsAgo < 5) return "Updated now";
     if (secondsAgo < 60) return `Updated ${secondsAgo}s ago`;
@@ -1706,6 +1745,7 @@ function AuctionsListPage() {
       .map(({ auction }) => auction);
   }, [auctionSearchIndex, auctionsList, deferredSearchQuery]);
 
+  const sortClock = sortMode === "ending" ? now : 0;
   const sortedAuctions = useMemo(() => {
     if (sortMode === "normal") return searchedAuctions;
 
@@ -1713,8 +1753,8 @@ function AuctionsListPage() {
 
     sorted.sort((a, b) => {
       if (sortMode === "ending") {
-        const aOpen = Number(a.endTime) > now;
-        const bOpen = Number(b.endTime) > now;
+        const aOpen = Number(a.endTime) > sortClock;
+        const bOpen = Number(b.endTime) > sortClock;
         if (aOpen !== bOpen) return aOpen ? -1 : 1;
         return Number(a.endTime) - Number(b.endTime);
       }
@@ -1731,7 +1771,7 @@ function AuctionsListPage() {
     });
 
     return sorted;
-  }, [searchedAuctions, sortMode, now]);
+  }, [searchedAuctions, sortMode, sortClock]);
 
   const viewIsFiltered = Boolean(deferredSearchQuery.trim());
   const loadedAuctionCount = auctionsList.length;

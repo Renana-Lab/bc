@@ -16,12 +16,11 @@
   width: 22rem;
   height: 18rem;
   filter: brightness(85%);
-  animation:
-    softRevealLeft 320ms var(--motion-ease, ease) both,
-    auctionImageBreathe 7s ease-in-out 420ms infinite;
+  animation: softRevealLeft 180ms var(--motion-ease, ease) both;
   transition:
     filter 180ms ease,
     transform 220ms var(--motion-ease, ease);
+  contain: paint;
 }
 
 .Image:hover {
@@ -41,6 +40,7 @@
   background-color: white;
   box-shadow: rgba(100, 100, 111, 0.2) 0px 7px 29px 0px;
   border-radius: 20px;
+  contain: paint;
   animation: softScaleIn 260ms var(--motion-ease, ease) both;
   transition:
     box-shadow 180ms ease,
@@ -124,5 +124,24 @@
   50% {
     filter: brightness(90%) saturate(1.03);
     transform: translateX(-25rem) translateY(-4px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce), (update: slow) {
+  .direction,
+  .Image,
+  .form,
+  .description {
+    animation: none !important;
+  }
+
+  .Image {
+    filter: brightness(85%);
+    transform: translateX(-25rem) !important;
+  }
+
+  .form,
+  .circleIcon {
+    transform: none !important;
   }
 }

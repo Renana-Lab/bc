@@ -94,7 +94,7 @@ const AppLoadingFallback = () => (
           55% { transform: translateX(90%); }
           100% { transform: translateX(250%); }
         }
-        @media (prefers-reduced-motion: reduce) {
+        @media (prefers-reduced-motion: reduce), (update: slow) {
           .app-loading-bar::after {
             animation: none;
             transform: none;
@@ -218,6 +218,11 @@ function App() {
                 0% { transform: scale(1); }
                 50% { transform: scale(1.1); }
                 100% { transform: scale(1); }
+              }
+              @media (prefers-reduced-motion: reduce), (update: slow) {
+                .icon-container {
+                  animation: none;
+                }
               }
               @media (min-width: 640px) {
                 .mobile-header {

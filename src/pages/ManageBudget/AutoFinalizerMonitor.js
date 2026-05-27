@@ -30,6 +30,27 @@ const getCancelRunCommand = (runId) =>
   `gh run cancel ${runId} --repo ${GITHUB_OWNER}/${GITHUB_REPO}`;
 const STALE_RUN_MS = 12 * 60 * 1000;
 const SCAN_CONCURRENCY = 4;
+const MONITOR_CARD_SX = {
+  position: "relative",
+  overflow: "hidden",
+  contain: "paint",
+  background:
+    "linear-gradient(145deg, #ffffff 0%, #ffffff 58%, #f7f9ff 100%)",
+  boxShadow:
+    "inset 0 1px 0 rgba(255, 255, 255, 0.86), 0 4px 12px rgba(16, 48, 144, 0.035)",
+  "&::before": {
+    content: '""',
+    position: "absolute",
+    inset: 0,
+    pointerEvents: "none",
+    background:
+      "linear-gradient(115deg, rgba(255, 255, 255, 0.38) 0%, rgba(255, 255, 255, 0.06) 38%, rgba(126, 149, 226, 0.06) 100%)",
+  },
+  "& > *": {
+    position: "relative",
+    zIndex: 1,
+  },
+};
 
 const shortAddress = (address) =>
   address ? `${address.slice(0, 6)}...${address.slice(-4)}` : "Unknown";
@@ -342,10 +363,10 @@ const AutoFinalizerMonitor = ({ marketOptions }) => {
       >
         <Box
           sx={{
+            ...MONITOR_CARD_SX,
             p: 1.25,
             borderRadius: 2,
             border: "1px solid #edf0fb",
-            backgroundColor: "#ffffff",
           }}
         >
           <Typography variant="caption" color="text.secondary">
@@ -377,10 +398,10 @@ const AutoFinalizerMonitor = ({ marketOptions }) => {
 
         <Box
           sx={{
+            ...MONITOR_CARD_SX,
             p: 1.25,
             borderRadius: 2,
             border: "1px solid #edf0fb",
-            backgroundColor: "#ffffff",
           }}
         >
           <Typography variant="caption" color="text.secondary">
@@ -404,10 +425,10 @@ const AutoFinalizerMonitor = ({ marketOptions }) => {
 
         <Box
           sx={{
+            ...MONITOR_CARD_SX,
             p: 1.25,
             borderRadius: 2,
             border: "1px solid #edf0fb",
-            backgroundColor: "#ffffff",
           }}
         >
           <Typography variant="caption" color="text.secondary">
@@ -438,10 +459,10 @@ const AutoFinalizerMonitor = ({ marketOptions }) => {
             <Box
               key={market.id}
               sx={{
+                ...MONITOR_CARD_SX,
                 mb: 1,
                 p: 1.25,
                 borderRadius: 2,
-                backgroundColor: "#ffffff",
                 border: "1px solid #edf0fb",
               }}
             >
