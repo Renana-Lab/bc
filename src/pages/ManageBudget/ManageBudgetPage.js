@@ -1453,7 +1453,7 @@ const ManageBudgetPage = () => {
         flexDirection="column"
         alignItems="center"
         sx={{
-          marginTop: 16,
+          marginTop: { xs: 8, sm: 8, md: 8 },
           position: "relative",
           overflow: "hidden",
           background: ADMIN_ZONE_BACKGROUND,
