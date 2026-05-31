@@ -1,5 +1,6 @@
 import { readOnlyCall } from "./readOnly";
 import { getActiveFactoryAddress, subscribeToMarketChanges } from "./marketConfig";
+import { getEthereumAccounts, getEthereumProvider } from "./ethereumProvider";
 
 const CACHE_TTL_MS = 15000;
 export const BUDGET_CHANGED_EVENT = "data-market:budget-changed";
@@ -84,10 +85,10 @@ export const subscribeToBudgetChanges = (callback) => {
 };
 
 export const getDefaultBudget = async ({ force = false } = {}) => {
-  if (!window.ethereum) return undefined;
+  if (!getEthereumProvider()) return undefined;
 
   const factoryAddress = getActiveFactoryAddress();
-  const accounts = await window.ethereum.request({ method: "eth_accounts" });
+  const accounts = await getEthereumAccounts();
   const userAddress = accounts[0] || "";
 
   if (!userAddress) return undefined;

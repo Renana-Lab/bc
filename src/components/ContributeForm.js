@@ -5,6 +5,7 @@ import TextField from "@mui/material/TextField";
 import Button from "@mui/material/Button";
 import Alert from "@mui/material/Alert";
 import Campaign from "../real_ethereum/campaign";
+import { getEthereumAccounts } from "../real_ethereum/ethereumProvider";
 import { readOnlyCall } from "../real_ethereum/readOnly";
 import styles from "./../styles/components.module.scss";
 import CircularProgress from "@mui/material/CircularProgress";
@@ -67,7 +68,7 @@ class ContributeForm extends Component {
     const manager = summary[3];
     const highestBid = summary[4];
     const endTime = summaryIsLight ? summary[7] : summary[9];
-    const accounts = await window.ethereum.request({ method: "eth_accounts" });
+    const accounts = await getEthereumAccounts();
     const connectedAccount = accounts[0];
 
     if (!/^\d+$/.test(String(this.state.bidAmount || ""))) {

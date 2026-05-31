@@ -1,9 +1,11 @@
   .container {
     display: flex;
     flex-direction: column;
-    height: 100%;
+    min-height: calc(100vh - 64px);
     justify-content: center;
     align-items: center;
+    padding: 2rem 1rem 9rem;
+    box-sizing: border-box;
     animation: softFadeUp 240ms var(--motion-ease, ease) both;
   }
   
@@ -13,7 +15,7 @@
     justify-content: center;
     gap: 10px;
     align-items: center;
-    padding-top: 7rem;
+    padding-top: 0;
   }
   
   .welcomeSection {

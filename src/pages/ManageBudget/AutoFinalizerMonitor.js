@@ -153,7 +153,6 @@ const AutoFinalizerMonitor = ({ marketOptions }) => {
     () => (marketOptions || getMarketOptions()).filter((market) => market.address),
     [marketOptions]
   );
-  const marketNamesText = markets.map((market) => market.label).join(" and ");
   const [runs, setRuns] = useState([]);
   const [runsLoading, setRunsLoading] = useState(false);
   const [runsError, setRunsError] = useState("");
@@ -290,31 +289,7 @@ const AutoFinalizerMonitor = ({ marketOptions }) => {
 
   return (
     <Box sx={{ width: "100%" }}>
-      <Box
-        display="flex"
-        justifyContent="space-between"
-        alignItems="flex-start"
-        gap={2}
-        flexWrap="wrap"
-      >
-        <Box>
-          <Typography
-            variant="caption"
-            color="text.secondary"
-            sx={{ textTransform: "uppercase", letterSpacing: 0.4 }}
-          >
-            Automation monitor
-          </Typography>
-          <Typography variant="h6" sx={{ fontWeight: 800 }}>
-            Auto Finalizer
-          </Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ maxWidth: 620 }}>
-            Checks the GitHub Actions runner and scans
-            {marketNamesText ? ` ${marketNamesText}` : " configured"} contracts
-            for ended auctions that still need payment finalization.
-          </Typography>
-        </Box>
-        <Box display="flex" gap={1} flexWrap="wrap" justifyContent="flex-end">
+      <Box display="flex" gap={1} flexWrap="wrap" justifyContent="flex-end">
           <Button
             variant="outlined"
             size="small"
@@ -348,7 +323,6 @@ const AutoFinalizerMonitor = ({ marketOptions }) => {
           >
             Stop run
           </Button>
-        </Box>
       </Box>
 
       {(runsLoading || scanLoading) && <LinearProgress sx={{ mt: 2 }} />}

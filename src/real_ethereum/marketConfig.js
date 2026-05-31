@@ -1,10 +1,9 @@
-const DEFAULT_FACTORY_ADDRESS = "0xb61Cd17D498f82E9F22771254C31bCBBb5781540";
-const DEFAULT_DEV_FACTORY_ADDRESS = "0xec38565FAeeef009F57037F2804D186928E63629";
+const NEW_BUDGET_LEDGER_FACTORY_ADDRESS = "0xec38565FAeeef009F57037F2804D186928E63629";
+const DEFAULT_FACTORY_ADDRESS = NEW_BUDGET_LEDGER_FACTORY_ADDRESS;
+const DEFAULT_DEV_FACTORY_ADDRESS = NEW_BUDGET_LEDGER_FACTORY_ADDRESS;
 const MARKET_STORAGE_KEY = "data-market:active-factory";
-const REAL_FACTORY_STORAGE_KEY = "data-market:real-factory-address";
-const DEV_FACTORY_STORAGE_KEY = "data-market:dev-factory-address";
-const REAL_LABEL_STORAGE_KEY = "data-market:real-label";
-const DEV_LABEL_STORAGE_KEY = "data-market:dev-label";
+const ACTIVE_FACTORY_STORAGE_KEY = "data-market:factory-address:v2";
+const ACTIVE_LABEL_STORAGE_KEY = "data-market:market-label";
 export const MARKET_CHANGED_EVENT = "data-market:factory-changed";
 
 const normalizeAddress = (address) => String(address || "").trim();
@@ -31,6 +30,24 @@ const removeStoredValue = (key) => {
 const firstValidAddress = (...addresses) =>
   addresses.map(normalizeAddress).find((address) => isValidAddress(address)) || "";
 
+const normalizeEnvironment = (value) => {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (["test", "testing", "dev", "development", "staging"].includes(normalized)) {
+    return "testing";
+  }
+  return "production";
+};
+
+export const MARKET_ENVIRONMENT = normalizeEnvironment(
+  process.env.REACT_APP_MARKET_ENV ||
+    process.env.REACT_APP_DEPLOY_ENV ||
+    process.env.REACT_APP_ENVIRONMENT ||
+    process.env.REACT_APP_BRANCH
+);
+
+export const MARKET_ENVIRONMENT_LABEL =
+  MARKET_ENVIRONMENT === "testing" ? "Testing" : "Production";
+
 const getMarketLabel = (market) =>
   normalizeLabel(getStoredValue(market.labelStorageKey)) || market.label;
 
@@ -49,24 +66,25 @@ const dispatchMarketChanged = (market = getActiveMarket(), reason = "config") =>
 
 export const MARKET_DEFINITIONS = [
   {
-    id: "real",
-    label: "Real",
-    description: "Production market",
-    storageKey: REAL_FACTORY_STORAGE_KEY,
-    labelStorageKey: REAL_LABEL_STORAGE_KEY,
-    envAddress: process.env.REACT_APP_REAL_FACTORY_ADDRESS,
-    fallbackAddress: DEFAULT_FACTORY_ADDRESS,
-  },
-  {
-    id: "dev",
-    label: "Dev",
-    description: "Testing market",
-    storageKey: DEV_FACTORY_STORAGE_KEY,
-    labelStorageKey: DEV_LABEL_STORAGE_KEY,
+    id: "primary",
+    label: MARKET_ENVIRONMENT_LABEL,
+    description:
+      MARKET_ENVIRONMENT === "testing"
+        ? "Testing branch contract"
+        : "Production contract",
+    storageKey: ACTIVE_FACTORY_STORAGE_KEY,
+    labelStorageKey: ACTIVE_LABEL_STORAGE_KEY,
     envAddress:
-      process.env.REACT_APP_DEV_FACTORY_ADDRESS ||
-      process.env.REACT_APP_TEST_FACTORY_ADDRESS,
-    fallbackAddress: DEFAULT_DEV_FACTORY_ADDRESS,
+      process.env.REACT_APP_FACTORY_ADDRESS ||
+      process.env.REACT_APP_MARKET_FACTORY_ADDRESS ||
+      (MARKET_ENVIRONMENT === "testing"
+        ? process.env.REACT_APP_TEST_FACTORY_ADDRESS ||
+          process.env.REACT_APP_DEV_FACTORY_ADDRESS
+        : process.env.REACT_APP_REAL_FACTORY_ADDRESS),
+    fallbackAddress:
+      MARKET_ENVIRONMENT === "testing"
+        ? DEFAULT_DEV_FACTORY_ADDRESS
+        : DEFAULT_FACTORY_ADDRESS,
   },
 ];
 
@@ -82,7 +100,7 @@ export const getMarketFactoryAddress = (marketId) => {
 };
 
 export const getDevelopmentFactoryAddress = () => {
-  return getMarketFactoryAddress("dev");
+  return getMarketFactoryAddress("primary");
 };
 
 export const setMarketFactoryAddress = (marketId, address) => {
@@ -113,7 +131,7 @@ export const clearMarketFactoryAddress = (marketId) => {
 };
 
 export const setDevelopmentFactoryAddress = (address) =>
-  setMarketFactoryAddress("dev", address);
+  setMarketFactoryAddress("primary", address);
 
 export const setMarketLabel = (marketId, label) => {
   const market = MARKET_DEFINITIONS.find((option) => option.id === marketId);
@@ -151,6 +169,8 @@ export const getMarketOptions = () =>
     label: getMarketLabel(market),
     defaultLabel: market.label,
     description: market.description,
+    environment: MARKET_ENVIRONMENT,
+    environmentLabel: MARKET_ENVIRONMENT_LABEL,
     address: getMarketFactoryAddress(market.id),
   }));
 
@@ -166,7 +186,7 @@ export const getActiveMarket = () => {
 export const getActiveFactoryAddress = () => getActiveMarket().address;
 
 export const setActiveMarket = (marketId) => {
-  const market = getMarketOptions().find((option) => option.id === marketId);
+  const market = getMarketOptions().find((option) => option.id === marketId) || getActiveMarket();
   if (!market?.address) {
     throw new Error("This market does not have a factory address yet");
   }

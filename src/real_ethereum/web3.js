@@ -1,11 +1,13 @@
 import Web3 from "web3";
+import { getEthereumProvider } from "./ethereumProvider";
 
 let web3;
+const injectedProvider = getEthereumProvider();
 
-if (typeof window !== "undefined" && typeof window.ethereum !== "undefined") {
-  web3 = new Web3(window.ethereum);
+if (injectedProvider) {
+  web3 = new Web3(injectedProvider);
 
-  window.ethereum
+  injectedProvider
     .request({ method: "eth_chainId" })
     .then((chainId) => {
       if (chainId !== "0xaa36a7" && chainId !== "0xAA36A7") {

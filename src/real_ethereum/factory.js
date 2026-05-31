@@ -2,8 +2,22 @@ import web3 from "./web3";
 import CampaignFactory from "./build/CampaignFactory.json";
 import { getActiveFactoryAddress } from "./marketConfig";
 
-export const getFactoryContract = () =>
-  new web3.eth.Contract(CampaignFactory.abi, getActiveFactoryAddress());
+const factoryContractCache = new Map();
+const normalizeAddress = (address) => String(address || "").toLowerCase();
+
+export const getFactoryContract = () => {
+  const factoryAddress = getActiveFactoryAddress();
+  const cacheKey = normalizeAddress(factoryAddress);
+
+  if (!factoryContractCache.has(cacheKey)) {
+    factoryContractCache.set(
+      cacheKey,
+      new web3.eth.Contract(CampaignFactory.abi, factoryAddress)
+    );
+  }
+
+  return factoryContractCache.get(cacheKey);
+};
 
 const factory = new Proxy(
   {},
@@ -21,7 +35,7 @@ export default factory;
 // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
 // Factory addresses are selected through marketConfig.js.
-// Configure REACT_APP_REAL_FACTORY_ADDRESS and REACT_APP_DEV_FACTORY_ADDRESS
-// to switch between real and development markets from the UI.
+// Configure REACT_APP_FACTORY_ADDRESS per branch when deploying a new factory.
+// The UI intentionally exposes one active contract per build.
 
 // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!

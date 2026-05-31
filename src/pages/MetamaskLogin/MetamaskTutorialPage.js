@@ -9,8 +9,8 @@ import { toast } from "react-hot-toast"; // Import hot-toast
 
 function MetamaskTutorialPage() {
   const navigate = useNavigate();
-  const { isMetaMaskInstalled, checkIfConnected } = useMetaMask(); // Access context values
-  const [notConnected, setNotConnected] = useState(true); // Default to true (assumes not connected)
+  const { isMetaMaskInstalled, checkIfConnected, requestConnection } = useMetaMask(); // Access context values
+  const [, setNotConnected] = useState(true); // Default to true (assumes not connected)
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -19,20 +19,25 @@ function MetamaskTutorialPage() {
       setNotConnected(storedNotConnected === "true");
       setLoading(false);
     } else {
-      checkIfConnected().then(() => {
-        const updatedNotConnected = localStorage.getItem("notConnected");
-        setNotConnected(updatedNotConnected === "true");
+      checkIfConnected().then((accounts) => {
+        setNotConnected(!accounts?.length);
         setLoading(false);
       });
     }
   }, [isMetaMaskInstalled, checkIfConnected]);
 
-  const handleContinue = () => {
-    if (!loading && !notConnected && isMetaMaskInstalled) {
+  const handleContinue = async () => {
+    setLoading(true);
+    const accounts = await requestConnection();
+    const connected = Boolean(accounts?.length);
+    setNotConnected(!connected);
+    setLoading(false);
+
+    if (connected) {
       navigate("/auctions-list");
     } else {
       toast.error(
-        "Hi! There might be a problem connecting your MetaMask account."
+        "Hi! MetaMask was not detected or no account was approved. Please unlock MetaMask and try again."
       );
     }
   };
@@ -81,14 +86,11 @@ function MetamaskTutorialPage() {
                 }}
                 variant="contained"
                 onClick={async () => {
-                  await checkIfConnected();
-                  const updatedNotConnected =
-                    localStorage.getItem("notConnected");
-                  setNotConnected(updatedNotConnected === "true");
-                  handleContinue();
+                  await handleContinue();
                 }}
+                disabled={loading}
               >
-                Yes, I am connected
+                {loading ? "Checking MetaMask..." : "Yes, I am connected"}
               </Button>
               <Button
                 onClick={() => {

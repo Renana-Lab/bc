@@ -2,12 +2,19 @@ import Web3 from "web3";
 import CampaignFactory from "./build/CampaignFactory.json";
 import Campaign from "./build/Campaign.json";
 import { getActiveFactoryAddress } from "./marketConfig";
+import { getEthereumProvider } from "./ethereumProvider";
 
 const DEFAULT_RPC_URLS = [
   "https://ethereum-sepolia-rpc.publicnode.com",
   "https://sepolia.drpc.org",
 ];
 const HTTP_TIMEOUT_MS = Number(process.env.REACT_APP_RPC_TIMEOUT_MS || 9000);
+const DEFAULT_PREFER_INJECTED_READS =
+  String(process.env.REACT_APP_PREFER_METAMASK_READS || "").toLowerCase() ===
+  "true";
+const DEFAULT_ALLOW_INJECTED_FALLBACK =
+  String(process.env.REACT_APP_ALLOW_METAMASK_READ_FALLBACK || "").toLowerCase() ===
+  "true";
 
 const RPC_URLS = (
   process.env.REACT_APP_RPC_URLS ||
@@ -46,22 +53,24 @@ const readOnlyWeb3s = RPC_URLS.map(
 let nextProviderIndex = 0;
 let injectedProviderRef = null;
 let injectedWeb3 = null;
-
-const hasInjectedProvider = () =>
-  typeof window !== "undefined" && Boolean(window.ethereum);
+const contractCacheByWeb3 = new WeakMap();
 
 const getInjectedWeb3 = () => {
-  if (!hasInjectedProvider()) return null;
+  const provider = getEthereumProvider();
+  if (!provider) return null;
 
-  if (injectedProviderRef !== window.ethereum || !injectedWeb3) {
-    injectedProviderRef = window.ethereum;
-    injectedWeb3 = new Web3(window.ethereum);
+  if (injectedProviderRef !== provider || !injectedWeb3) {
+    injectedProviderRef = provider;
+    injectedWeb3 = new Web3(provider);
   }
 
   return injectedWeb3;
 };
 
-const getProviderSequence = (preferInjected = true, allowInjectedFallback = true) => {
+const getProviderSequence = (
+  preferInjected = DEFAULT_PREFER_INJECTED_READS,
+  allowInjectedFallback = DEFAULT_ALLOW_INJECTED_FALLBACK
+) => {
   const providers = [];
   const injectedWeb3Instance = getInjectedWeb3();
   const injectedProvider = injectedWeb3Instance
@@ -86,23 +95,54 @@ const getProviderSequence = (preferInjected = true, allowInjectedFallback = true
   return providers;
 };
 
-const getWeb3 = () => getProviderSequence(true)[0].web3;
+const getWeb3 = () =>
+  getProviderSequence(
+    DEFAULT_PREFER_INJECTED_READS,
+    DEFAULT_ALLOW_INJECTED_FALLBACK
+  )[0].web3;
+
+const normalizeAddress = (address) => String(address || "").toLowerCase();
+
+const getContractCache = (web3Instance) => {
+  if (!contractCacheByWeb3.has(web3Instance)) {
+    contractCacheByWeb3.set(web3Instance, new Map());
+  }
+
+  return contractCacheByWeb3.get(web3Instance);
+};
+
+const getCachedContract = (web3Instance, key, abi, address) => {
+  const cache = getContractCache(web3Instance);
+
+  if (!cache.has(key)) {
+    cache.set(key, new web3Instance.eth.Contract(abi, address));
+  }
+
+  return cache.get(key);
+};
 
 const createFactory = (web3Instance, factoryAddress = getActiveFactoryAddress()) =>
-  new web3Instance.eth.Contract(CampaignFactory.abi, factoryAddress);
+  getCachedContract(
+    web3Instance,
+    `factory:${normalizeAddress(factoryAddress)}`,
+    CampaignFactory.abi,
+    factoryAddress
+  );
 
 const createCampaign = (web3Instance, address) =>
-  new web3Instance.eth.Contract(Campaign.abi, address);
+  getCachedContract(
+    web3Instance,
+    `campaign:${normalizeAddress(address)}`,
+    Campaign.abi,
+    address
+  );
 
 export const factoryReadOnly = new Proxy(
   {},
   {
     get(_target, prop) {
       const web3Instance = getWeb3();
-      const instance = new web3Instance.eth.Contract(
-        CampaignFactory.abi,
-        getActiveFactoryAddress()
-      );
+      const instance = createFactory(web3Instance);
       const value = instance[prop];
       return typeof value === "function" ? value.bind(instance) : value;
     },
@@ -111,14 +151,14 @@ export const factoryReadOnly = new Proxy(
 
 export const campaignReadOnly = (address) => {
   const web3Instance = getWeb3();
-  return new web3Instance.eth.Contract(Campaign.abi, address);
+  return createCampaign(web3Instance, address);
 };
 
 export const readOnlyCall = async (createCall, retries, options = {}) => {
   let lastError;
   const providers = getProviderSequence(
-    options.preferInjected !== false,
-    options.allowInjectedFallback !== false
+    options.preferInjected ?? DEFAULT_PREFER_INJECTED_READS,
+    options.allowInjectedFallback ?? DEFAULT_ALLOW_INJECTED_FALLBACK
   );
   const maxAttempts = retries ?? providers.length;
 
@@ -157,8 +197,8 @@ export const readOnlyBatchCall = async (
 ) => {
   let lastError;
   const providers = getProviderSequence(
-    options.preferInjected !== false,
-    options.allowInjectedFallback !== false
+    options.preferInjected ?? DEFAULT_PREFER_INJECTED_READS,
+    options.allowInjectedFallback ?? DEFAULT_ALLOW_INJECTED_FALLBACK
   );
   const maxAttempts = retries ?? providers.length;
 

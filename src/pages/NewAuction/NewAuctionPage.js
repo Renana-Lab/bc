@@ -5,11 +5,12 @@ import Layout from "../../components/Layout";
 import factory from "../../real_ethereum/factory";
 import web3 from "../../real_ethereum/web3";
 import {
+  requestEthereumAccounts,
+  waitForEthereumProvider,
+} from "../../real_ethereum/ethereumProvider";
+import {
   getActiveMarket,
   getMarketOptions,
-  isValidAddress,
-  setActiveMarket,
-  setDevelopmentFactoryAddress,
   subscribeToMarketChanges,
 } from "../../real_ethereum/marketConfig";
 import styles from "./new.module.scss";
@@ -65,9 +66,10 @@ const validateAuctionInput = (auction, label = "Auction") => {
 };
 
 const requestConnectedAccount = async () => {
-  const accounts = window.ethereum
-    ? await window.ethereum.request({ method: "eth_requestAccounts" })
-    : await web3.eth.getAccounts();
+  let accounts = await requestEthereumAccounts();
+  if (!accounts?.length) {
+    accounts = await web3.eth.getAccounts();
+  }
   const account = accounts?.[0];
 
   if (!account) {
@@ -103,15 +105,22 @@ function NewAuctionPage() {
   const [explanation, setExplanation] = useState(null);
   const [loading, setLoading] = useState(false);
   const [activeMarket, setActiveMarketState] = useState(getActiveMarket());
-  const [marketOptions, setMarketOptions] = useState(getMarketOptions());
+  const [, setMarketOptions] = useState(getMarketOptions());
   const submittingRef = useRef(false);
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (!window.ethereum) {
-      navigate("/"); // Redirect away if no MetaMask
-      return;
-    }
+    let cancelled = false;
+
+    waitForEthereumProvider().then((provider) => {
+      if (!cancelled && !provider) {
+        navigate("/"); // Redirect away if no MetaMask
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
 
   }, [navigate]);
 
@@ -121,32 +130,6 @@ function NewAuctionPage() {
       setMarketOptions(getMarketOptions());
     });
   }, []);
-
-  const handleMarketChange = (event) => {
-    const marketId = event.target.value;
-    try {
-      const market = marketOptions.find((option) => option.id === marketId);
-
-      if (marketId === "dev" && !market?.address) {
-        const address = window.prompt(
-          "Paste the development factory contract address"
-        );
-
-        if (!address) return;
-        if (!isValidAddress(address)) {
-          window.alert("That does not look like a valid contract address.");
-          return;
-        }
-
-        setDevelopmentFactoryAddress(address);
-        setMarketOptions(getMarketOptions());
-      }
-
-      setActiveMarketState(setActiveMarket(marketId));
-    } catch (error) {
-      window.alert(error.message || "Could not switch market.");
-    }
-  };
 
   const handleChange = (event) => {
     const { name, value } = event.target;
@@ -257,28 +240,15 @@ function NewAuctionPage() {
               display="block"
               sx={{ mt: 0.25, mb: 1 }}
             >
-              This auction will be opened in the selected factory contract.
+              This auction will be opened in this branch's factory contract.
             </Typography>
             <TextField
-              select
               size="small"
-              label="Market"
-              value={activeMarket.id}
-              onChange={handleMarketChange}
+              label="Environment"
+              value={activeMarket.environmentLabel || activeMarket.label}
               fullWidth
-              SelectProps={{ native: true }}
-            >
-              {marketOptions.map((market) => (
-                <option
-                  key={market.id}
-                  value={market.id}
-                  disabled={!market.address && market.id !== "dev"}
-                >
-                  {market.label}
-                  {market.address ? "" : " - set address"}
-                </option>
-              ))}
-            </TextField>
+              InputProps={{ readOnly: true }}
+            />
             <Typography
               variant="caption"
               color="text.secondary"

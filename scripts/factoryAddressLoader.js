@@ -60,27 +60,35 @@ function loadFactoryAddress(options = {}) {
       process.env.FACTORY_MARKET ||
       process.env.AUTO_FINALIZE_MARKET ||
       process.env.AUCTION_INDEXER_MARKET ||
-      "real"
+      "production"
   ).toLowerCase();
+  const isTestingMarket = ["dev", "test", "testing", "staging"].includes(
+    requestedMarket
+  );
 
   const marketConfigPath = path.resolve(rootDir, "src/real_ethereum/marketConfig.js");
   const factoryAddressPath = path.resolve(rootDir, "src/real_ethereum/factoryAddress.js");
   const marketConfigSource = readFileIfPresent(marketConfigPath);
   const factoryAddressSource = readFileIfPresent(factoryAddressPath);
 
-  const envAddress =
-    requestedMarket === "dev"
-      ? firstValidAddress(
-          process.env.FACTORY_ADDRESS,
-          process.env.REACT_APP_DEV_FACTORY_ADDRESS,
-          process.env.REACT_APP_TEST_FACTORY_ADDRESS
-        )
-      : firstValidAddress(process.env.FACTORY_ADDRESS, process.env.REACT_APP_REAL_FACTORY_ADDRESS);
+  const envAddress = isTestingMarket
+    ? firstValidAddress(
+        process.env.FACTORY_ADDRESS,
+        process.env.REACT_APP_FACTORY_ADDRESS,
+        process.env.REACT_APP_MARKET_FACTORY_ADDRESS,
+        process.env.REACT_APP_DEV_FACTORY_ADDRESS,
+        process.env.REACT_APP_TEST_FACTORY_ADDRESS
+      )
+    : firstValidAddress(
+        process.env.FACTORY_ADDRESS,
+        process.env.REACT_APP_FACTORY_ADDRESS,
+        process.env.REACT_APP_MARKET_FACTORY_ADDRESS,
+        process.env.REACT_APP_REAL_FACTORY_ADDRESS
+      );
 
-  const configAddress =
-    requestedMarket === "dev"
-      ? readConstAddress(marketConfigSource, "DEFAULT_DEV_FACTORY_ADDRESS")
-      : readConstAddress(marketConfigSource, "DEFAULT_FACTORY_ADDRESS");
+  const configAddress = isTestingMarket
+    ? readConstAddress(marketConfigSource, "DEFAULT_DEV_FACTORY_ADDRESS")
+    : readConstAddress(marketConfigSource, "DEFAULT_FACTORY_ADDRESS");
 
   const legacyAddress = factoryAddressSource.match(/0x[a-fA-F0-9]{40}/)?.[0] || "";
   const address = firstValidAddress(envAddress, configAddress, legacyAddress);
@@ -115,7 +123,7 @@ function loadFactoryAddresses(options = {}) {
       process.env.FACTORY_MARKET ||
       process.env.AUTO_FINALIZE_MARKET ||
       process.env.AUCTION_INDEXER_MARKET ||
-      "real"
+      "production"
   );
 
   const addresses = requestedMarkets.map((market) =>

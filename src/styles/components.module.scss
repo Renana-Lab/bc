@@ -560,6 +560,21 @@ $tooltip-color: #3f50b5;
   font-variant-numeric: tabular-nums;
 }
 
+.environmentPill {
+  min-width: 5.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-color: rgba(240, 208, 112, 0.2);
+  background: rgba(255, 255, 255, 0.04);
+
+  .toolbarPillValue {
+    min-width: auto;
+    color: #f0d070;
+    font-size: 0.78rem;
+    font-weight: 800;
+  }
+}
+
 .toolbarPillDot {
   width: 0.28rem;
   height: 0.28rem;

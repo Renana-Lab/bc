@@ -33,6 +33,11 @@ import {
   getActiveFactoryAddress,
   subscribeToMarketChanges,
 } from "../../real_ethereum/marketConfig";
+import {
+  getEthereumAccounts,
+  getEthereumProvider,
+  waitForEthereumProvider,
+} from "../../real_ethereum/ethereumProvider";
 import Layout from "../../components/Layout";
 import styles from "./auctions.module.scss";
 import picSrc from "./Illustration_Start.png";
@@ -369,11 +374,9 @@ export const getRemainingBudget = async (
   factoryAddress = getActiveFactoryAddress(),
   { force = false } = {},
 ) => {
-  if (!window.ethereum) return null;
-
   const accounts = userAddress
     ? [userAddress]
-    : await window.ethereum.request({ method: "eth_accounts" });
+    : await getEthereumAccounts();
   const account = accounts?.[0];
 
   if (!account) return null;
@@ -1328,15 +1331,14 @@ function AuctionsListPage() {
   }, [visibleAuctionCount]);
 
   useEffect(() => {
-    if (!window.ethereum) {
-      navigate("/");
-      return undefined;
-    }
+    let provider;
+    let cancelled = false;
 
     const setAccount = (accounts) => {
+      const currentProvider = provider || getEthereumProvider();
       const nextAccount =
         accounts?.[0]?.toLowerCase() ||
-        window.ethereum?.selectedAddress?.toLowerCase() ||
+        currentProvider?.selectedAddress?.toLowerCase() ||
         null;
       setConnectedAccount(nextAccount || "");
       if (nextAccount) {
@@ -1344,10 +1346,21 @@ function AuctionsListPage() {
       }
     };
 
-    window.ethereum
-      .request({ method: "eth_accounts" })
-      .then(setAccount)
-      .catch((error) => console.error("Error reading accounts:", error));
+    waitForEthereumProvider()
+      .then((detectedProvider) => {
+        if (cancelled) return;
+        provider = detectedProvider;
+        if (!provider) {
+          navigate("/");
+          return;
+        }
+
+        getEthereumAccounts()
+          .then(setAccount)
+          .catch((error) => console.error("Error reading accounts:", error));
+        provider.on?.("accountsChanged", setAccount);
+      })
+      .catch((error) => console.error("Error detecting wallet:", error));
 
     fetchAuctionsListRef.current?.();
 
@@ -1361,13 +1374,13 @@ function AuctionsListPage() {
       }
     };
 
-    window.ethereum.on?.("accountsChanged", setAccount);
     document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
+      cancelled = true;
       clearInterval(interval);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
-      window.ethereum.removeListener?.("accountsChanged", setAccount);
+      provider?.removeListener?.("accountsChanged", setAccount);
     };
   }, [navigate, loadRemainingBudget]);
 

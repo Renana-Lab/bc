@@ -49,6 +49,10 @@ import {
 } from "../AuctionsList/AuctionsListPage";
 import { getActiveFactoryAddress } from "../../real_ethereum/marketConfig";
 import { notifyBudgetChanged } from "../../real_ethereum/budget";
+import {
+  getEthereumAccounts,
+  waitForEthereumProvider,
+} from "../../real_ethereum/ethereumProvider";
 
 const buttonStyle = {
   height: "2.5rem",
@@ -199,15 +203,17 @@ function ShowAuctionPage() {
   );
 
   const fetchAuctionData = useCallback(async () => {
-    if (!window.ethereum) return navigate("/");
     if (fetchInFlightRef.current) return;
 
     fetchInFlightRef.current = true;
 
     try {
-      const accounts = await window.ethereum.request({
-        method: "eth_accounts",
-      });
+      const provider = await waitForEthereumProvider();
+      if (!provider) {
+        navigate("/");
+        return;
+      }
+      const accounts = await getEthereumAccounts();
       const auctionInstance = Campaign(address); // אם סינכרוני
 
       const account = accounts[0] || "";

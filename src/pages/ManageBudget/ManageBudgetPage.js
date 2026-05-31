@@ -17,7 +17,7 @@ import { useNavigate } from "react-router-dom";
 import Layout from "../../components/Layout";
 import toast from "react-hot-toast";
 import factory from "../../real_ethereum/factory";
-import { getDefaultBudget } from "../../real_ethereum/budget";
+import { notifyBudgetChanged } from "../../real_ethereum/budget";
 import { readOnlyCall } from "../../real_ethereum/readOnly";
 import componentStyles from "../../styles/components.module.scss";
 import AutoFinalizerMonitor from "./AutoFinalizerMonitor";
@@ -26,11 +26,14 @@ import {
   clearMarketFactoryAddress,
   getActiveMarket,
   getMarketOptions,
-  setActiveMarket,
   setMarketLabel,
   setMarketFactoryAddress,
   subscribeToMarketChanges,
 } from "../../real_ethereum/marketConfig";
+import {
+  requestEthereumAccounts,
+  waitForEthereumProvider,
+} from "../../real_ethereum/ethereumProvider";
 import {
   BULK_DRAFT_KEY,
   BULK_MAX_AUCTIONS,
@@ -251,9 +254,7 @@ export const saveBudget = (budget) => {
 };
 
 const requestConnectedAccount = async () => {
-  const accounts = await window.ethereum.request({
-    method: "eth_requestAccounts",
-  });
+  const accounts = await requestEthereumAccounts();
   const account = accounts?.[0];
 
   if (!account) {
@@ -265,7 +266,7 @@ const requestConnectedAccount = async () => {
 
 const ManageBudgetPage = () => {
   const navigate = useNavigate();
-  const [budget, setBudget] = useState(null);
+  const [budget, setBudget] = useState(DEFAULT_GLOBAL_BUDGET);
   const [isAdmin, setIsAdmin] = useState(false);
   const [pass, setPass] = useState("");
   const [error, setError] = useState("");
@@ -330,10 +331,7 @@ const ManageBudgetPage = () => {
   const switchTimerRef = useRef(null);
 
   const loadBudget = useCallback(async () => {
-    const stored = await getDefaultBudget();
-    if (stored !== undefined && stored !== null) {
-      setBudget(stored);
-    }
+    setBudget(DEFAULT_GLOBAL_BUDGET);
   }, []);
 
   const refreshMarketOptions = useCallback(() => {
@@ -352,10 +350,13 @@ const ManageBudgetPage = () => {
   }, []);
 
   useEffect(() => {
-    if (!window.ethereum) {
-      navigate("/");
-      return;
-    }
+    let cancelled = false;
+
+    waitForEthereumProvider().then((provider) => {
+      if (!cancelled && !provider) {
+        navigate("/");
+      }
+    });
 
     loadBudget();
 
@@ -363,6 +364,9 @@ const ManageBudgetPage = () => {
     if (savedDraft) {
       setBulkText(savedDraft);
     }
+    return () => {
+      cancelled = true;
+    };
   }, [loadBudget, navigate]);
 
   useEffect(() => {
@@ -427,10 +431,10 @@ const ManageBudgetPage = () => {
 
   const handleSaveBudget = async () => {
     if (budget >= 0) {
-      const userAddress = window.ethereum?.selectedAddress?.toLowerCase();
-
       try {
+        const userAddress = await requestConnectedAccount();
         await factory.methods.resetAllBudgets(budget).send({ from: userAddress });
+        notifyBudgetChanged({ factoryAddress: activeMarket.address });
 
         toast.success(
           budget === 0
@@ -449,13 +453,13 @@ const ManageBudgetPage = () => {
   };
 
   const handleResetBudget = async () => {
-    const userAddress = window.ethereum?.selectedAddress?.toLowerCase();
-
     try {
+      const userAddress = await requestConnectedAccount();
       setBudget(DEFAULT_GLOBAL_BUDGET);
       await factory.methods
         .resetAllBudgets(DEFAULT_GLOBAL_BUDGET)
         .send({ from: userAddress });
+      notifyBudgetChanged({ factoryAddress: activeMarket.address });
       toast.success(`Budget reset to ${DEFAULT_GLOBAL_BUDGET} wei for all users`);
       navigate("/auctions-list");
     } catch (resetError) {
@@ -867,21 +871,6 @@ const ManageBudgetPage = () => {
       toast.success("Local contract override cleared");
     } catch (clearError) {
       toast.error(clearError.message || "Could not clear contract address");
-    }
-  };
-
-  const handleUseMarket = (marketId) => {
-    try {
-      setSwitchingMarketId(marketId);
-      const market = setActiveMarket(marketId);
-      setActiveMarketState(market);
-      refreshMarketOptions();
-      toast.success(`${market.label} market is active`);
-      settleMarketSwitch();
-    } catch (switchError) {
-      window.clearTimeout(switchTimerRef.current);
-      setSwitchingMarketId("");
-      toast.error(switchError.message || "Could not switch market");
     }
   };
 
@@ -1490,8 +1479,9 @@ const ManageBudgetPage = () => {
               textAlign="center"
               sx={{ maxWidth: 680, mb: 3 }}
             >
-              Manage market contracts, global budgets, automation health, batch
-              auction creation, and exports from one operational control area.
+              Manage the active branch contract, global budgets, automation
+              health, batch auction creation, and exports from one operational
+              control area.
             </Typography>
 
             <Box
@@ -1521,16 +1511,16 @@ const ManageBudgetPage = () => {
                     Contract manager
                   </Typography>
                   <Typography variant="body1" sx={{ fontWeight: 800 }}>
-                    Active: {activeMarket.label} market
+                    Environment: {activeMarket.environmentLabel || activeMarket.label}
                   </Typography>
                   <Typography
                     variant="caption"
                     color="text.secondary"
                     sx={{ display: "block", maxWidth: 560 }}
                   >
-                    Writes use the active factory. Reports and automation can
-                    inspect every configured market together when multi-contract
-                    loading is enabled.
+                    This build uses one factory contract. Production and
+                    testing live in separate branches, so users cannot switch
+                    markets inside the app.
                   </Typography>
                 </Box>
                 <Box display="flex" gap={1} alignItems="center" justifyContent="flex-end">
@@ -1542,7 +1532,7 @@ const ManageBudgetPage = () => {
                       disabled={contractManagerLoading}
                       sx={{ borderRadius: 999 }}
                     >
-                      {contractManagerLoading ? "Inspecting..." : "Inspect All"}
+                      {contractManagerLoading ? "Inspecting..." : "Inspect"}
                     </Button>
                   )}
                   <IconButton
@@ -1595,7 +1585,7 @@ const ManageBudgetPage = () => {
                 <Box
                   sx={{
                     display: "grid",
-                    gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" },
+                    gridTemplateColumns: "1fr",
                     gap: 1.5,
                     mt: 2,
                     opacity: contractManagerOpen ? 1 : 0,
@@ -1663,9 +1653,7 @@ const ManageBudgetPage = () => {
                         >
                           {switchingMarketId === market.id
                             ? "Switching"
-                            : isActive
-                            ? "Active"
-                            : "Standby"}
+                            : market.environmentLabel || "Active"}
                         </Typography>
                       </Box>
 
@@ -1678,7 +1666,7 @@ const ManageBudgetPage = () => {
                         error={!labelLooksValid}
                         helperText={
                           labelLooksValid
-                            ? "Used in the toolbar, reports, auction creation, and admin views."
+                            ? "Optional display name for reports and admin views."
                             : "Use 1-18 characters."
                         }
                         size="small"
@@ -1715,15 +1703,6 @@ const ManageBudgetPage = () => {
                         flexWrap="wrap"
                         sx={{ mt: 1.25 }}
                       >
-                        <Button
-                          variant={isActive ? "contained" : "outlined"}
-                          size="small"
-                          onClick={() => handleUseMarket(market.id)}
-                          disabled={!market.address || isActive}
-                          sx={{ borderRadius: 999 }}
-                        >
-                          Use
-                        </Button>
                         <Button
                           variant="outlined"
                           size="small"
@@ -2677,56 +2656,61 @@ const ManageBudgetPage = () => {
               <Box
                 sx={{
                   display: "grid",
-                  gridTemplateColumns: { xs: "1fr", md: "1.4fr 0.6fr" },
+                  gridTemplateColumns:
+                    marketOptions.length > 1
+                      ? { xs: "1fr", md: "1.4fr 0.6fr" }
+                      : "1fr",
                   gap: 1,
                   alignItems: "stretch",
                 }}
               >
-                <Box
-                  component="label"
-                  sx={{
-                    display: "grid",
-                    gridTemplateColumns: "auto 1fr",
-                    gap: 1,
-                    alignItems: "flex-start",
-                    p: 1.25,
-                    borderRadius: 2,
-                    border: reportLoadAllMarkets
-                      ? "1px solid #b9c7f2"
-                      : "1px solid #e5e8f6",
-                    backgroundColor: reportLoadAllMarkets
-                      ? "#f1f5ff"
-                      : "#fbfcff",
-                    cursor: "pointer",
-                  }}
-                >
-                  <Checkbox
-                    size="small"
-                    checked={reportLoadAllMarkets}
-                    onChange={(event) => {
-                      setReportLoadAllMarkets(event.target.checked);
-                      setAuctionOptions([]);
-                      setSelectedAuctions({});
-                      autoLoadedAuctionRangeRef.current = "";
+                {marketOptions.length > 1 && (
+                  <Box
+                    component="label"
+                    sx={{
+                      display: "grid",
+                      gridTemplateColumns: "auto 1fr",
+                      gap: 1,
+                      alignItems: "flex-start",
+                      p: 1.25,
+                      borderRadius: 2,
+                      border: reportLoadAllMarkets
+                        ? "1px solid #b9c7f2"
+                        : "1px solid #e5e8f6",
+                      backgroundColor: reportLoadAllMarkets
+                        ? "#f1f5ff"
+                        : "#fbfcff",
+                      cursor: "pointer",
                     }}
-                    sx={{ p: 0.15 }}
-                  />
-                  <Box>
-                    <Typography variant="body2" sx={{ fontWeight: 700 }}>
-                      Multi-load configured markets
-                    </Typography>
-                    <Typography
-                      variant="caption"
-                      color="text.secondary"
-                      display="block"
-                    >
-                      Load report auction choices from every configured market
-                      {marketNamesText ? ` (${marketNamesText})` : ""} at the
-                      same time. Budget changes and batch creation still use
-                      only the active {activeMarket.label} contract.
-                    </Typography>
+                  >
+                    <Checkbox
+                      size="small"
+                      checked={reportLoadAllMarkets}
+                      onChange={(event) => {
+                        setReportLoadAllMarkets(event.target.checked);
+                        setAuctionOptions([]);
+                        setSelectedAuctions({});
+                        autoLoadedAuctionRangeRef.current = "";
+                      }}
+                      sx={{ p: 0.15 }}
+                    />
+                    <Box>
+                      <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                        Multi-load configured markets
+                      </Typography>
+                      <Typography
+                        variant="caption"
+                        color="text.secondary"
+                        display="block"
+                      >
+                        Load report auction choices from every configured market
+                        {marketNamesText ? ` (${marketNamesText})` : ""} at the
+                        same time. Budget changes and batch creation still use
+                        only the active {activeMarket.label} contract.
+                      </Typography>
+                    </Box>
                   </Box>
-                </Box>
+                )}
 
                 <TextField
                   select
