@@ -45,12 +45,27 @@ const readFileIfPresent = (filePath) => {
   }
 };
 
-const readConstAddress = (source, constName) => {
-  const match = source.match(
-    new RegExp(`(?:const|export\\s+const)\\s+${constName}\\s*=\\s*["'](0x[a-fA-F0-9]{40})["']`)
-  );
+const readConstAddress = (source, constName, visited = new Set()) => {
+  if (!source || visited.has(constName)) return "";
+  visited.add(constName);
 
-  return match?.[1] || "";
+  const match = source.match(
+    new RegExp(
+      `(?:const|export\\s+const)\\s+${constName}\\s*=\\s*([^;\\n]+)`,
+      "m"
+    )
+  );
+  const value = match?.[1]?.trim() || "";
+  const directAddress = value.match(/["'](0x[a-fA-F0-9]{40})["']/)?.[1];
+
+  if (directAddress) return directAddress;
+
+  const alias = value.match(/^([A-Za-z_$][\w$]*)$/)?.[1];
+  if (alias) {
+    return readConstAddress(source, alias, visited);
+  }
+
+  return "";
 };
 
 function loadFactoryAddress(options = {}) {
