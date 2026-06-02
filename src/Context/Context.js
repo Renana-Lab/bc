@@ -1,5 +1,6 @@
 import React, { createContext, useCallback, useState, useContext, useEffect } from 'react';
 import {
+  getMetaMaskErrorMessage,
   getEthereumAccounts,
   requestEthereumAccounts,
   waitForEthereumProvider,
@@ -17,6 +18,7 @@ export const useMetaMask = () => {
 export const MetaMaskProvider = ({ children }) => {
   const [isMetaMaskInstalled, setIsMetaMaskInstalled] = useState(false);
   const [provider, setProvider] = useState(null);
+  const [lastConnectionError, setLastConnectionError] = useState("");
 
   const refreshProvider = useCallback(async () => {
     const nextProvider = await waitForEthereumProvider();
@@ -50,6 +52,7 @@ export const MetaMaskProvider = ({ children }) => {
       const accounts = await getEthereumAccounts();
       const isNotConnected = accounts.length === 0;
       localStorage.setItem('notConnected', isNotConnected);
+      setLastConnectionError("");
       return accounts;
     } catch (error) {
       console.error("Error checking MetaMask connection:", error);
@@ -64,17 +67,26 @@ export const MetaMaskProvider = ({ children }) => {
       const accounts = await requestEthereumAccounts();
       const isNotConnected = accounts.length === 0;
       localStorage.setItem('notConnected', isNotConnected);
-      return accounts;
+      setLastConnectionError("");
+      return { accounts, error: "" };
     } catch (error) {
       console.error("Error requesting MetaMask connection:", error);
+      const message = getMetaMaskErrorMessage(error);
+      setLastConnectionError(message);
       localStorage.setItem('notConnected', true);
-      return [];
+      return { accounts: [], error: message };
     }
   }, [refreshProvider]);
 
   return (
     <MetaMaskContext.Provider
-      value={{ isMetaMaskInstalled, provider, checkIfConnected, requestConnection }}
+      value={{
+        isMetaMaskInstalled,
+        provider,
+        lastConnectionError,
+        checkIfConnected,
+        requestConnection,
+      }}
     >
       {children}
     </MetaMaskContext.Provider>

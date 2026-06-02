@@ -225,35 +225,48 @@ function NewAuctionPage() {
           <Box
             sx={{
               width: "85%",
-              p: 1.5,
-              border: "1px solid #d9dff2",
-              borderRadius: 2,
-              backgroundColor: "#f8faff",
+              px: 1.25,
+              py: 1,
+              border: "1px solid rgba(16, 48, 144, 0.12)",
+              borderRadius: 1.5,
+              backgroundColor: "rgba(248, 250, 255, 0.58)",
             }}
           >
-            <Typography variant="body2" sx={{ fontWeight: 800, color: "#002884" }}>
+            <Typography variant="body2" sx={{ fontWeight: 700, color: "#002884" }}>
               Auction destination
             </Typography>
             <Typography
               variant="caption"
               color="text.secondary"
               display="block"
-              sx={{ mt: 0.25, mb: 1 }}
+              sx={{ mt: 0.15 }}
             >
               This auction will be opened in this branch's factory contract.
             </Typography>
-            <TextField
-              size="small"
-              label="Environment"
-              value={activeMarket.environmentLabel || activeMarket.label}
-              fullWidth
-              InputProps={{ readOnly: true }}
-            />
+            <Box
+              component="span"
+              sx={{
+                display: "inline-flex",
+                alignItems: "center",
+                mt: 0.75,
+                px: 1,
+                py: 0.25,
+                border: "1px solid rgba(16, 48, 144, 0.14)",
+                borderRadius: 999,
+                backgroundColor: "rgba(255, 255, 255, 0.55)",
+                color: "#0d0d4e",
+                fontSize: "0.82rem",
+                fontWeight: 600,
+                lineHeight: 1.35,
+              }}
+            >
+              {activeMarket.environmentLabel || activeMarket.label}
+            </Box>
             <Typography
               variant="caption"
               color="text.secondary"
               display="block"
-              sx={{ mt: 0.75, overflowWrap: "anywhere" }}
+              sx={{ mt: 0.55, overflowWrap: "anywhere", opacity: 0.76 }}
             >
               {activeMarket.address || "No factory address configured"}
             </Typography>

@@ -51,6 +51,18 @@
   animation: softRevealLeft 260ms var(--motion-ease, ease) 90ms both;
 }
 
+.metamaskError {
+  max-width: 42rem;
+  margin: 1rem 5rem 0 0;
+  padding: 0.72rem 0.9rem;
+  border: 1px solid rgba(164, 74, 0, 0.18);
+  border-radius: 12px;
+  background: rgba(255, 247, 235, 0.86);
+  color: #8a4600;
+  font-size: 0.95rem;
+  line-height: 1.45;
+}
+
 .metamaskVideo {
   padding: .5rem 1rem 1rem 1rem;
   border-radius: 20px;

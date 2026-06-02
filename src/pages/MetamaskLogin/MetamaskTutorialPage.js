@@ -12,6 +12,7 @@ function MetamaskTutorialPage() {
   const { isMetaMaskInstalled, checkIfConnected, requestConnection } = useMetaMask(); // Access context values
   const [, setNotConnected] = useState(true); // Default to true (assumes not connected)
   const [loading, setLoading] = useState(true);
+  const [connectionError, setConnectionError] = useState("");
 
   useEffect(() => {
     const storedNotConnected = localStorage.getItem("notConnected");
@@ -28,7 +29,10 @@ function MetamaskTutorialPage() {
 
   const handleContinue = async () => {
     setLoading(true);
-    const accounts = await requestConnection();
+    setConnectionError("");
+    const result = await requestConnection();
+    const accounts = Array.isArray(result) ? result : result?.accounts || [];
+    const errorMessage = Array.isArray(result) ? "" : result?.error || "";
     const connected = Boolean(accounts?.length);
     setNotConnected(!connected);
     setLoading(false);
@@ -36,9 +40,11 @@ function MetamaskTutorialPage() {
     if (connected) {
       navigate("/auctions-list");
     } else {
-      toast.error(
-        "Hi! MetaMask was not detected or no account was approved. Please unlock MetaMask and try again."
-      );
+      const message =
+        errorMessage ||
+        "MetaMask did not return an account. Please unlock MetaMask, select an account, and try again.";
+      setConnectionError(message);
+      toast.error(message);
     }
   };
 
@@ -109,6 +115,9 @@ function MetamaskTutorialPage() {
                 No, I don’t have a MetaMask account
               </Button>
             </div>
+            {connectionError ? (
+              <p className={styles.metamaskError}>{connectionError}</p>
+            ) : null}
           </div>
         </span>
       </div>
