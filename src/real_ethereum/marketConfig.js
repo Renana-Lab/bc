@@ -42,7 +42,8 @@ export const MARKET_ENVIRONMENT = normalizeEnvironment(
   process.env.REACT_APP_MARKET_ENV ||
     process.env.REACT_APP_DEPLOY_ENV ||
     process.env.REACT_APP_ENVIRONMENT ||
-    process.env.REACT_APP_BRANCH
+    process.env.REACT_APP_BRANCH ||
+    "development"
 );
 
 export const MARKET_ENVIRONMENT_LABEL =
