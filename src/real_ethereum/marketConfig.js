@@ -46,7 +46,7 @@ export const MARKET_ENVIRONMENT = normalizeEnvironment(
 );
 
 export const MARKET_ENVIRONMENT_LABEL =
-  MARKET_ENVIRONMENT === "testing" ? "Testing" : "Production";
+  MARKET_ENVIRONMENT === "testing" ? "Development" : "Production";
 
 const getMarketLabel = (market) =>
   normalizeLabel(getStoredValue(market.labelStorageKey)) || market.label;
@@ -70,8 +70,8 @@ export const MARKET_DEFINITIONS = [
     label: MARKET_ENVIRONMENT_LABEL,
     description:
       MARKET_ENVIRONMENT === "testing"
-        ? "Testing branch contract"
-        : "Production contract",
+        ? "Development branch contract"
+        : "Live production contract",
     storageKey: ACTIVE_FACTORY_STORAGE_KEY,
     labelStorageKey: ACTIVE_LABEL_STORAGE_KEY,
     envAddress:

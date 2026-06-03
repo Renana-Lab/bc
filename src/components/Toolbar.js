@@ -64,6 +64,8 @@ const ToolbarComponent = (props) => {
   const [, setMarketOptions] = useState(getMarketOptions());
   const activeMarketIdRef = useRef(activeMarket.id);
   const budgetRequestIdRef = useRef(0);
+  const isProductionEnvironment = activeMarket.environment !== "testing";
+  const environmentStatusText = isProductionEnvironment ? "Live" : "Development";
 
   const fetchBudget = useCallback(async ({ force = false } = {}) => {
     const marketIdForRequest = activeMarketIdRef.current;
@@ -180,12 +182,22 @@ const ToolbarComponent = (props) => {
             }}
           >
             <div
-              className={`${componentStyles.toolbarPill} ${componentStyles.environmentPill}`}
+              className={`${componentStyles.toolbarPill} ${componentStyles.environmentPill} ${
+                isProductionEnvironment
+                  ? componentStyles.environmentPillLive
+                  : componentStyles.environmentPillDevelopment
+              }`}
               title={`${activeMarket.description}: ${activeMarket.address || "No factory address configured"}`}
-              aria-label={`${activeMarket.environmentLabel || activeMarket.label} environment`}
+              aria-label={`${environmentStatusText} environment`}
             >
+              {isProductionEnvironment && (
+                <span
+                  className={componentStyles.environmentLiveDot}
+                  aria-hidden="true"
+                />
+              )}
               <span className={componentStyles.toolbarPillValue}>
-                {activeMarket.environmentLabel || activeMarket.label}
+                {environmentStatusText}
               </span>
             </div>
 
