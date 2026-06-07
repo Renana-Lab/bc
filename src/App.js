@@ -1,6 +1,12 @@
 import React, { lazy, Suspense, useState, useEffect } from "react";
-import { Routes, Route, useNavigate } from "react-router-dom";
-import { MetaMaskProvider } from "./Context/Context.js";
+import {
+  Routes,
+  Route,
+  Navigate,
+  useLocation,
+  useNavigate,
+} from "react-router-dom";
+import { MetaMaskProvider, useMetaMask } from "./Context/Context.js";
 import { Toaster } from "react-hot-toast";
 import PageSeo from "./components/Seo.js";
 
@@ -14,7 +20,10 @@ const MetamaskGuidePage = lazy(() => import("./pages/MetamaskGuide/MetamaskGuide
 const ManageBudgetPage = lazy(() => import("./pages/ManageBudget/ManageBudgetPage.js"));
 const ShowAuctionPage = lazy(() => import("./pages/ShowAuction/ShowAuctionPage.js"));
 
-const AppLoadingFallback = () => (
+const AppLoadingFallback = ({
+  copy = "Preparing the workspace",
+  status = "Loading app modules",
+}) => (
   <>
     <style>
       {`
@@ -129,18 +138,99 @@ const AppLoadingFallback = () => (
           </div>
           <div>
             <h1 className="app-loading-title">Blockchain Data Market</h1>
-            <p className="app-loading-copy">Preparing the workspace</p>
+            <p className="app-loading-copy">{copy}</p>
           </div>
         </div>
         <div className="app-loading-bar" />
         <div className="app-loading-status">
-          <span>Loading app modules</span>
+          <span>{status}</span>
           <span>Please wait</span>
         </div>
       </div>
     </div>
   </>
 );
+
+const RequireWallet = ({ children }) => {
+  const { provider, checkIfConnected } = useMetaMask();
+  const location = useLocation();
+  const [walletStatus, setWalletStatus] = useState("checking");
+
+  useEffect(() => {
+    let cancelled = false;
+    let verificationId = 0;
+
+    const applyAccounts = (accounts) => {
+      if (cancelled) return;
+      const connected = Boolean(accounts?.length);
+      localStorage.setItem("notConnected", String(!connected));
+      setWalletStatus(connected ? "connected" : "disconnected");
+    };
+
+    const verifyConnection = async () => {
+      const currentVerificationId = verificationId + 1;
+      verificationId = currentVerificationId;
+
+      try {
+        const accounts = await checkIfConnected();
+        if (cancelled || currentVerificationId !== verificationId) return;
+        applyAccounts(accounts);
+      } catch (error) {
+        if (cancelled || currentVerificationId !== verificationId) return;
+        console.error("Wallet access check failed:", error);
+        applyAccounts([]);
+      }
+    };
+
+    const handleAccountsChanged = (accounts) => applyAccounts(accounts);
+    const handleDisconnect = () => applyAccounts([]);
+    const handleFocus = () => verifyConnection();
+    const handleVisibility = () => {
+      if (!document.hidden) {
+        verifyConnection();
+      }
+    };
+
+    setWalletStatus((current) =>
+      current === "connected" ? current : "checking"
+    );
+    verifyConnection();
+
+    provider?.on?.("accountsChanged", handleAccountsChanged);
+    provider?.on?.("disconnect", handleDisconnect);
+    window.addEventListener("focus", handleFocus);
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    return () => {
+      cancelled = true;
+      provider?.removeListener?.("accountsChanged", handleAccountsChanged);
+      provider?.removeListener?.("disconnect", handleDisconnect);
+      window.removeEventListener("focus", handleFocus);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [checkIfConnected, location.pathname, provider]);
+
+  if (walletStatus === "checking") {
+    return (
+      <AppLoadingFallback
+        copy="Verifying your MetaMask connection"
+        status="Checking wallet access"
+      />
+    );
+  }
+
+  if (walletStatus !== "connected") {
+    return (
+      <Navigate
+        to="/metamask-login"
+        replace
+        state={{ from: `${location.pathname}${location.search}` }}
+      />
+    );
+  }
+
+  return children;
+};
 
 function App() {
   const [isMobile, setIsMobile] = useState(false);
@@ -291,33 +381,41 @@ function App() {
               <Route
                 path="/open-auction"
                 element={
-                  <PageSeo page="createAuction">
-                    <NewAuctionPage />
-                  </PageSeo>
+                  <RequireWallet>
+                    <PageSeo page="createAuction">
+                      <NewAuctionPage />
+                    </PageSeo>
+                  </RequireWallet>
                 }
               />
               <Route
                 path="/auctions-list"
                 element={
-                  <PageSeo page="auctionsList">
-                    <AuctionsListPage />
-                  </PageSeo>
+                  <RequireWallet>
+                    <PageSeo page="auctionsList">
+                      <AuctionsListPage />
+                    </PageSeo>
+                  </RequireWallet>
                 }
               />
               <Route
                 path="/auction/:address"
                 element={
-                  <PageSeo page="auctionDetails">
-                    <ShowAuctionPage />
-                  </PageSeo>
+                  <RequireWallet>
+                    <PageSeo page="auctionDetails">
+                      <ShowAuctionPage />
+                    </PageSeo>
+                  </RequireWallet>
                 }
               />
               <Route
                 path="/manage-budget"
                 element={
-                  <PageSeo page="admin">
-                    <ManageBudgetPage />
-                  </PageSeo>
+                  <RequireWallet>
+                    <PageSeo page="admin">
+                      <ManageBudgetPage />
+                    </PageSeo>
+                  </RequireWallet>
                 }
               />
             </Routes>

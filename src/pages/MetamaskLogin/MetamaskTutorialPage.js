@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import Button from "@mui/material/Button";
 import { useMetaMask } from "../../Context/Context.js"; // Import useMetaMask hook
 import Layout from "../../components/Layout.js";
@@ -9,22 +9,29 @@ import { toast } from "react-hot-toast"; // Import hot-toast
 
 function MetamaskTutorialPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { isMetaMaskInstalled, checkIfConnected, requestConnection } = useMetaMask(); // Access context values
   const [, setNotConnected] = useState(true); // Default to true (assumes not connected)
   const [loading, setLoading] = useState(true);
   const [connectionError, setConnectionError] = useState("");
 
   useEffect(() => {
-    const storedNotConnected = localStorage.getItem("notConnected");
-    if (storedNotConnected !== null) {
-      setNotConnected(storedNotConnected === "true");
-      setLoading(false);
-    } else {
-      checkIfConnected().then((accounts) => {
+    let cancelled = false;
+
+    setLoading(true);
+    checkIfConnected()
+      .then((accounts) => {
+        if (cancelled) return;
         setNotConnected(!accounts?.length);
+      })
+      .finally(() => {
+        if (cancelled) return;
         setLoading(false);
       });
-    }
+
+    return () => {
+      cancelled = true;
+    };
   }, [isMetaMaskInstalled, checkIfConnected]);
 
   const handleContinue = async () => {
@@ -38,7 +45,12 @@ function MetamaskTutorialPage() {
     setLoading(false);
 
     if (connected) {
-      navigate("/auctions-list");
+      const requestedRoute =
+        typeof location.state?.from === "string" &&
+        location.state.from.startsWith("/")
+          ? location.state.from
+          : "/auctions-list";
+      navigate(requestedRoute, { replace: true });
     } else {
       const message =
         errorMessage ||
