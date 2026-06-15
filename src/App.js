@@ -170,6 +170,7 @@ const RequireWallet = ({ children }) => {
     const verifyConnection = async () => {
       const currentVerificationId = verificationId + 1;
       verificationId = currentVerificationId;
+      setWalletStatus("checking");
 
       try {
         const accounts = await checkIfConnected();
@@ -191,9 +192,6 @@ const RequireWallet = ({ children }) => {
       }
     };
 
-    setWalletStatus((current) =>
-      current === "connected" ? current : "checking"
-    );
     verifyConnection();
 
     provider?.on?.("accountsChanged", handleAccountsChanged);

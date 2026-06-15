@@ -64,11 +64,18 @@ export const getEthereumProvider = () => {
   return providers.find(isMetaMaskProvider) || providers[0] || null;
 };
 
+export const getMetaMaskProvider = () => {
+  const providers = [...getInjectedProviders(), ...announcedProviders];
+  return providers.find(isMetaMaskProvider) || null;
+};
+
 export const waitForEthereumProvider = ({
   timeoutMs = DEFAULT_WAIT_TIMEOUT_MS,
   pollIntervalMs = 150,
+  requireMetaMask = false,
 } = {}) => {
-  const existingProvider = getEthereumProvider();
+  const findProvider = requireMetaMask ? getMetaMaskProvider : getEthereumProvider;
+  const existingProvider = findProvider();
   if (existingProvider || !isBrowser()) {
     return Promise.resolve(existingProvider);
   }
@@ -78,7 +85,7 @@ export const waitForEthereumProvider = ({
     let intervalId;
     let timeoutId;
 
-    const finish = (provider = getEthereumProvider()) => {
+    const finish = (provider = findProvider()) => {
       if (settled) return;
       settled = true;
       window.removeEventListener("eip6963:announceProvider", handleAnnounce);
@@ -92,7 +99,7 @@ export const waitForEthereumProvider = ({
       const provider = event?.detail?.provider;
       if (provider) {
         rememberProvider(provider);
-        if (isMetaMaskProvider(provider)) {
+        if (!requireMetaMask || isMetaMaskProvider(provider)) {
           finish(provider);
         }
       }
@@ -108,7 +115,7 @@ export const waitForEthereumProvider = ({
     window.dispatchEvent(new Event("eip6963:requestProvider"));
 
     intervalId = window.setInterval(() => {
-      const provider = getEthereumProvider();
+      const provider = findProvider();
       if (provider) finish(provider);
     }, pollIntervalMs);
 
@@ -117,7 +124,7 @@ export const waitForEthereumProvider = ({
 };
 
 export const getEthereumAccounts = async () => {
-  const provider = await waitForEthereumProvider();
+  const provider = await waitForEthereumProvider({ requireMetaMask: true });
   if (!provider?.request) return [];
   return readAccounts(provider);
 };
@@ -126,6 +133,7 @@ export const requestEthereumAccounts = async () => {
   const provider = await waitForEthereumProvider({
     timeoutMs: CONNECT_WAIT_TIMEOUT_MS,
     pollIntervalMs: 120,
+    requireMetaMask: true,
   });
 
   if (!provider?.request) {
