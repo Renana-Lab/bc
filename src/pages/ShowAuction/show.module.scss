@@ -124,6 +124,50 @@ $border-radius: 2rem;
   @include text-style($secondary-blue, 1.1rem, 500);
 }
 
+.liveCountdown {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  min-width: 7.25rem;
+  padding: 0.28rem 0.65rem;
+  border-radius: 999px;
+  color: $primary-blue;
+  background:
+    linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.86),
+      rgba(235, 239, 255, 0.68)
+    );
+  border: 1px solid rgba(16, 48, 144, 0.14);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.72),
+    0 4px 10px rgba(16, 48, 144, 0.08);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.liveCountdownDot {
+  width: 0.42rem;
+  height: 0.42rem;
+  border-radius: 999px;
+  background: #28b461;
+  box-shadow: 0 0 0 0 rgba(40, 180, 97, 0.26);
+  animation: countdownPulse 1400ms ease-out infinite;
+}
+
+.liveCountdownEnded {
+  color: #7b3f12;
+
+  .liveCountdownDot {
+    background: #e47b32;
+    animation: none;
+    box-shadow: none;
+  }
+}
+
 .centered {
   text-align: left;
 }
@@ -166,6 +210,47 @@ $border-radius: 2rem;
   &:hover {
     background:
       linear-gradient(180deg, #168242 0%, #0e6631 48%, #084422 100%) !important;
+  }
+}
+
+.finalizedPaymentBadge {
+  width: 24rem;
+  min-height: 2.7rem;
+  margin-top: 2rem;
+  border-radius: 1.3rem;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-areas:
+    "icon title"
+    "icon note";
+  align-items: center;
+  column-gap: 0.6rem;
+  padding: 0.48rem 0rem;
+
+  color: #ffffff;
+  background:
+    linear-gradient(180deg, #167a438a 0%, #116c38c4 54%, #106e3b 100%);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    0 6px 14px rgba(7, 83, 38, 0.14);
+  text-align: center;
+ 
+
+  span {
+    grid-area: title;
+    font-size: 1.2rem;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    line-height: 1.1;
+  }
+
+  small {
+    grid-area: note;
+    margin-top: 0.12rem;
+    color: rgba(255, 255, 255, 0.74);
+    font-size: 0.78rem;
+    font-weight: 500;
   }
 }
 
@@ -225,12 +310,24 @@ $border-radius: 2rem;
   .page,
   .campaignInfo,
   .contributeForm,
-  .revealedData {
+  .revealedData,
+  .liveCountdownDot {
     animation: none !important;
   }
 
   .campaignInfo,
   .contributeForm {
     transform: none !important;
+  }
+}
+
+@keyframes countdownPulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(40, 180, 97, 0.24);
+  }
+
+  70%,
+  100% {
+    box-shadow: 0 0 0 0.38rem rgba(40, 180, 97, 0);
   }
 }

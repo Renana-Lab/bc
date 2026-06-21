@@ -12,7 +12,6 @@ import moment from "moment";
 import Layout from "../../components/Layout";
 import Campaign from "../../real_ethereum/campaign";
 import ContributeForm from "../../components/ContributeForm";
-import Countdown from "react-countdown";
 import toast from "react-hot-toast";
 import { readOnlyCall } from "../../real_ethereum/readOnly";
 import { campaignSocket } from "../../real_ethereum/socketFactory";
@@ -65,6 +64,74 @@ const buttonStyle = {
 
 const ACTIVE_AUCTION_POLL_INTERVAL_MS = 10000;
 const ENDED_AUCTION_POLL_INTERVAL_MS = 45000;
+
+function formatCountdownTime(remainingMs) {
+  const totalSeconds = Math.max(0, Math.ceil(remainingMs / 1000));
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const pad = (value) => String(value).padStart(2, "0");
+
+  if (days > 0) {
+    return `${days}d ${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
+  }
+
+  return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
+}
+
+function LiveCountdown({ endTime }) {
+  const endTimeMs = Number(endTime) * 1000;
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    if (!Number.isFinite(endTimeMs) || endTimeMs <= 0) return undefined;
+
+    let timeoutId;
+    let intervalId;
+
+    const tick = () => setNow(Date.now());
+    const startAlignedTick = () => {
+      tick();
+      const delay = 1000 - (Date.now() % 1000);
+      timeoutId = window.setTimeout(() => {
+        tick();
+        intervalId = window.setInterval(tick, 1000);
+      }, delay);
+    };
+    const handleVisibilityChange = () => {
+      if (!document.hidden) tick();
+    };
+
+    startAlignedTick();
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+      window.clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [endTimeMs]);
+
+  if (!Number.isFinite(endTimeMs) || endTimeMs <= 0) {
+    return "Unavailable";
+  }
+
+  const remainingMs = endTimeMs - now;
+  const isEnded = remainingMs <= 0;
+
+  return (
+    <span
+      className={`${showPageStyles.liveCountdown} ${
+        isEnded ? showPageStyles.liveCountdownEnded : ""
+      }`}
+      aria-live="polite"
+    >
+      <span className={showPageStyles.liveCountdownDot} aria-hidden="true" />
+      <span>{isEnded ? "Ended" : formatCountdownTime(remainingMs)}</span>
+    </span>
+  );
+}
 
 const initialState = {
   dialogOpen: false,
@@ -592,7 +659,7 @@ function ShowAuctionPage() {
           {isAuctionActive && (
             <InfoItem
               label="Time left"
-              value={<Countdown date={Number(state.endTime + "000")} />}
+              value={<LiveCountdown endTime={state.endTime} />}
             />
           )}
           <InfoItem
@@ -625,13 +692,14 @@ function ShowAuctionPage() {
           !isAuctionActive &&
           isManager &&
           state.transactions.length !== 0 && (
-            <Button
-              variant="contained"
-              disabled
-              style={{ ...buttonStyle, marginTop: "2rem", width: "24rem" }}
+            <div
+              className={showPageStyles.finalizedPaymentBadge}
+              role="status"
+              aria-label="Seller payment finalized"
             >
-              Seller payment finalized
-            </Button>
+              <span>Seller payment finalized</span>
+              <small>Funds were released to the seller</small>
+            </div>
           )}
 
         {!isAuctionActive && isManager && (

@@ -745,7 +745,7 @@ const BotnetControlPanel = () => {
               disabled={isBusy}
               sx={{ borderRadius: 999 }}
             >
-              Run Enabled Now
+              Run Manual Cycle
             </Button>
             <Button
               variant="outlined"
@@ -805,19 +805,19 @@ const BotnetControlPanel = () => {
               style={{ display: "none" }}
             />
             <Button
-              variant="contained"
+              variant="outlined"
               size="small"
               onClick={() => keyFileInputRef.current?.click()}
               disabled={isBusy}
-              sx={{ borderRadius: 999, backgroundColor: "#103090" }}
+              sx={{ borderRadius: 999 }}
             >
               Upload Keys
             </Button>
             <Button
-              variant="outlined"
+              variant="contained"
               size="small"
               onClick={() => setShowBotForm((current) => !current)}
-              sx={{ borderRadius: 999 }}
+              sx={{ borderRadius: 999, backgroundColor: "#103090" }}
             >
               {showBotForm ? "Close" : "Add Bot"}
             </Button>

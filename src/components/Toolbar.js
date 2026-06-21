@@ -2,6 +2,9 @@ import React, { memo, useCallback, useEffect, useRef, useState } from "react";
 import { AppBar, Button, Toolbar, Typography } from "@mui/material";
 import MenuIcon from "@mui/icons-material/Menu";
 import HomeIcon from "@mui/icons-material/Home";
+import SensorsOutlinedIcon from "@mui/icons-material/SensorsOutlined";
+import AccountBalanceWalletOutlinedIcon from "@mui/icons-material/AccountBalanceWalletOutlined";
+import ScheduleOutlinedIcon from "@mui/icons-material/ScheduleOutlined";
 import { useNavigate } from "react-router-dom";
 import { getDefaultBudget } from "../real_ethereum/budget";
 import { subscribeToBudgetChanges } from "../real_ethereum/budget";
@@ -40,17 +43,18 @@ const ClockDisplay = memo(() => {
   });
 
   return (
-    <Typography
-      variant="body2"
-      style={{
-        color: "#F0F0F0",
-        border: "1px solid rgba(240, 240, 240, 0.06)",
-        padding: "0.5rem",
-        borderRadius: "20px",
-      }}
+    <div
+      className={`${componentStyles.toolbarPill} ${componentStyles.clockPill}`}
+      title="Current time"
+      aria-label={`Current time ${formattedTime}`}
     >
-      {formattedTime}
-    </Typography>
+      <ScheduleOutlinedIcon
+        className={componentStyles.toolbarPillIcon}
+        fontSize="small"
+        aria-hidden="true"
+      />
+      <span className={componentStyles.toolbarPillValue}>{formattedTime}</span>
+    </div>
   );
 });
 
@@ -196,6 +200,11 @@ const ToolbarComponent = (props) => {
                   aria-hidden="true"
                 />
               )}
+              <SensorsOutlinedIcon
+                className={componentStyles.toolbarPillIcon}
+                fontSize="small"
+                aria-hidden="true"
+              />
               <span className={componentStyles.toolbarPillValue}>
                 {environmentStatusText}
               </span>
@@ -207,6 +216,11 @@ const ToolbarComponent = (props) => {
               }`}
               title={budgetRefreshing ? "Budget is refreshing" : "Current budget"}
             >
+              <AccountBalanceWalletOutlinedIcon
+                className={componentStyles.toolbarPillIcon}
+                fontSize="small"
+                aria-hidden="true"
+              />
               <span className={componentStyles.toolbarPillLabel}>Budget:</span>
               <span className={componentStyles.toolbarPillValue}>
                 {budget ?? "—"}

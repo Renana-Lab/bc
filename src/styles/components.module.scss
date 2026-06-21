@@ -552,6 +552,13 @@ $tooltip-color: #3f50b5;
   color: rgba(240, 240, 240, 0.72);
 }
 
+.toolbarPillIcon {
+  width: 0.95rem !important;
+  height: 0.95rem !important;
+  color: rgba(240, 208, 112, 0.82);
+  flex: 0 0 auto;
+}
+
 .toolbarPillValue {
   min-width: 2.1rem;
   color: #ffffff;
@@ -561,7 +568,7 @@ $tooltip-color: #3f50b5;
 }
 
 .environmentPill {
-  min-width: 4.9rem;
+  min-width: 5.9rem;
   padding-inline: 0.66rem;
   text-transform: uppercase;
   letter-spacing: 0.045em;
@@ -583,7 +590,7 @@ $tooltip-color: #3f50b5;
 }
 
 .environmentPillDevelopment {
-  min-width: 7.35rem;
+  min-width: 8.1rem;
   border-color: rgba(240, 208, 112, 0.22);
   background: rgba(255, 255, 255, 0.04);
 
@@ -599,6 +606,16 @@ $tooltip-color: #3f50b5;
   background: #8ddfa8;
   box-shadow: 0 0 0 0 rgba(119, 226, 155, 0.12);
   animation: environmentLivePulse 1.8s ease-in-out infinite;
+}
+
+.clockPill {
+  min-width: 7.4rem;
+  padding-inline: 0.62rem;
+
+  .toolbarPillValue {
+    min-width: 5.25rem;
+    text-align: left;
+  }
 }
 
 .toolbarPillDot {
