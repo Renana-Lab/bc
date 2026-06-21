@@ -123,3 +123,53 @@ test(
   },
   30000
 );
+
+test(
+  'does not redirect a connected protected route after one transient empty wallet read',
+  async () => {
+    const provider = {
+      on: jest.fn(),
+      removeListener: jest.fn(),
+    };
+
+    waitForEthereumProvider.mockResolvedValue(provider);
+    getEthereumAccounts
+      .mockResolvedValueOnce(['0x1234567890abcdef1234567890abcdef12345678'])
+      .mockResolvedValue([]);
+
+    render(
+      <MemoryRouter
+        initialEntries={['/auctions-list']}
+        future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
+      >
+        <App />
+      </MemoryRouter>
+    );
+
+    expect(
+      await screen.findByRole(
+        'heading',
+        { name: /welcome to the blockchain data market platform/i },
+        { timeout: 20000 }
+      )
+    ).toBeInTheDocument();
+
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+    });
+
+    await waitFor(() => {
+      expect(getEthereumAccounts.mock.calls.length).toBeGreaterThanOrEqual(2);
+    });
+
+    expect(
+      screen.queryByRole('heading', { name: /are you logged in to metamask/i })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole('heading', {
+        name: /welcome to the blockchain data market platform/i,
+      })
+    ).toBeInTheDocument();
+  },
+  30000
+);

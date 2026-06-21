@@ -1,4 +1,4 @@
-import React, { lazy, Suspense, useState, useEffect } from "react";
+import React, { lazy, Suspense, useState, useEffect, useRef } from "react";
 import {
   Routes,
   Route,
@@ -155,22 +155,67 @@ const RequireWallet = ({ children }) => {
   const { provider, checkIfConnected } = useMetaMask();
   const location = useLocation();
   const [walletStatus, setWalletStatus] = useState("checking");
+  const walletStatusRef = useRef("checking");
+  const disconnectConfirmTimerRef = useRef(null);
+
+  const setGuardStatus = (status) => {
+    walletStatusRef.current = status;
+    setWalletStatus(status);
+  };
 
   useEffect(() => {
     let cancelled = false;
     let verificationId = 0;
+    const DISCONNECT_CONFIRM_MS = 1800;
 
-    const applyAccounts = (accounts) => {
+    const clearDisconnectConfirm = () => {
+      if (disconnectConfirmTimerRef.current) {
+        window.clearTimeout(disconnectConfirmTimerRef.current);
+        disconnectConfirmTimerRef.current = null;
+      }
+    };
+
+    const applyAccounts = (accounts, { confirmedDisconnect = false } = {}) => {
       if (cancelled) return;
       const connected = Boolean(accounts?.length);
-      localStorage.setItem("notConnected", String(!connected));
-      setWalletStatus(connected ? "connected" : "disconnected");
+
+      if (connected) {
+        clearDisconnectConfirm();
+        localStorage.setItem("notConnected", "false");
+        setGuardStatus("connected");
+        return;
+      }
+
+      if (
+        walletStatusRef.current === "connected" &&
+        !confirmedDisconnect
+      ) {
+        clearDisconnectConfirm();
+        disconnectConfirmTimerRef.current = window.setTimeout(async () => {
+          try {
+            const latestAccounts = await checkIfConnected();
+            if (cancelled) return;
+            applyAccounts(latestAccounts, { confirmedDisconnect: true });
+          } catch (error) {
+            if (cancelled) return;
+            console.error("Wallet disconnect confirmation failed:", error);
+            applyAccounts([], { confirmedDisconnect: true });
+          }
+        }, DISCONNECT_CONFIRM_MS);
+        return;
+      }
+
+      clearDisconnectConfirm();
+      localStorage.setItem("notConnected", "true");
+      setGuardStatus("disconnected");
     };
 
     const verifyConnection = async () => {
       const currentVerificationId = verificationId + 1;
       verificationId = currentVerificationId;
-      setWalletStatus("checking");
+      if (walletStatusRef.current !== "connected") {
+        setGuardStatus("checking");
+      }
 
       try {
         const accounts = await checkIfConnected();
@@ -184,7 +229,7 @@ const RequireWallet = ({ children }) => {
     };
 
     const handleAccountsChanged = (accounts) => applyAccounts(accounts);
-    const handleDisconnect = () => applyAccounts([]);
+    const handleDisconnect = () => applyAccounts([], { confirmedDisconnect: true });
     const handleFocus = () => verifyConnection();
     const handleVisibility = () => {
       if (!document.hidden) {
@@ -201,6 +246,7 @@ const RequireWallet = ({ children }) => {
 
     return () => {
       cancelled = true;
+      clearDisconnectConfirm();
       provider?.removeListener?.("accountsChanged", handleAccountsChanged);
       provider?.removeListener?.("disconnect", handleDisconnect);
       window.removeEventListener("focus", handleFocus);

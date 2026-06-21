@@ -21,6 +21,7 @@ import { notifyBudgetChanged } from "../../real_ethereum/budget";
 import { readOnlyCall } from "../../real_ethereum/readOnly";
 import componentStyles from "../../styles/components.module.scss";
 import AutoFinalizerMonitor from "./AutoFinalizerMonitor";
+import BotnetControlPanel from "./BotnetControlPanel";
 import {
   clearMarketLabel,
   clearMarketFactoryAddress,
@@ -319,6 +320,7 @@ const ManageBudgetPage = () => {
   const [contractManagerOpen, setContractManagerOpen] = useState(false);
   const [batchStudioOpen, setBatchStudioOpen] = useState(false);
   const [autoFinalizerOpen, setAutoFinalizerOpen] = useState(false);
+  const [botCommandCenterOpen, setBotCommandCenterOpen] = useState(false);
   const [auctionReportsOpen, setAuctionReportsOpen] = useState(false);
   const [bulkLoading, setBulkLoading] = useState(false);
   const [bulkProgress, setBulkProgress] = useState({ current: 0, total: 0 });
@@ -1933,6 +1935,96 @@ const ManageBudgetPage = () => {
                   }}
                 >
                   <AutoFinalizerMonitor marketOptions={marketOptions} />
+                </Box>
+              </Collapse>
+            </Box>
+
+            <Box
+              sx={{
+                width: "100%",
+                mt: 3,
+                p: { xs: 1.5, sm: 2 },
+                border: "1px solid #d9dff2",
+                borderRadius: 3,
+                ...getAdminGlossCardSx(botCommandCenterOpen),
+              }}
+            >
+              <Box
+                sx={{
+                  display: "grid",
+                  gridTemplateColumns: "minmax(0, 1fr) auto",
+                  alignItems: "start",
+                  gap: 2,
+                }}
+              >
+                <Box sx={{ minWidth: 0 }}>
+                  <Typography variant="h6">Bot Command Center</Typography>
+                  <Typography
+                    variant="body2"
+                    color="text.secondary"
+                    sx={{ mt: 0.5, maxWidth: 680 }}
+                  >
+                    Monitor and control the absorbed auction bot fleet from the
+                    in-repo botnet service. Private keys stay on the botnet API
+                    side and are never stored in the browser.
+                  </Typography>
+                </Box>
+                <IconButton
+                  onClick={() =>
+                    setBotCommandCenterOpen((current) => !current)
+                  }
+                  aria-expanded={botCommandCenterOpen}
+                  aria-controls="bot-command-center-panel"
+                  aria-label={
+                    botCommandCenterOpen
+                      ? "Collapse Bot Command Center"
+                      : "Expand Bot Command Center"
+                  }
+                  title={
+                    botCommandCenterOpen
+                      ? "Collapse Bot Command Center"
+                      : "Expand Bot Command Center"
+                  }
+                  sx={{
+                    width: 42,
+                    height: 42,
+                    border: "1px solid #b9c7f2",
+                    color: "#103090",
+                    backgroundColor: "#ffffff",
+                    transition:
+                      "background-color 160ms ease, box-shadow 160ms ease",
+                    "&:hover": {
+                      backgroundColor: "#f1f5ff",
+                      boxShadow: "0 6px 14px rgba(16, 48, 144, 0.08)",
+                    },
+                  }}
+                >
+                  <KeyboardArrowDownIcon
+                    sx={{
+                      transform: botCommandCenterOpen
+                        ? "rotate(180deg)"
+                        : "rotate(0deg)",
+                      transition:
+                        "transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1)",
+                    }}
+                  />
+                </IconButton>
+              </Box>
+
+              <Collapse
+                id="bot-command-center-panel"
+                in={botCommandCenterOpen}
+                timeout="auto"
+                unmountOnExit
+              >
+                <Box
+                  sx={{
+                    pt: 2,
+                    opacity: botCommandCenterOpen ? 1 : 0,
+                    transition: "opacity 180ms ease 70ms",
+                  }}
+                >
+                  <BotnetControlPanel />
                 </Box>
               </Collapse>
             </Box>

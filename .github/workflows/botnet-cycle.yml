@@ -1,0 +1,40 @@
+name: Botnet Cycle
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/5 * * * *"
+
+concurrency:
+  group: botnet-cycle
+  cancel-in-progress: false
+
+jobs:
+  botnet-cycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: yarn
+
+      - name: Enable Yarn
+        run: corepack enable
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile --non-interactive
+
+      - name: Run enabled bot cycle
+        run: yarn botnet:cycle
+        env:
+          RPC_URL: ${{ secrets.RPC_URL }}
+          INFURA_KEY: ${{ secrets.INFURA_KEY }}
+          FACTORY_ADDRESS: ${{ secrets.FACTORY_ADDRESS }}
+          BOTNET_BOTS_JSON: ${{ secrets.BOTNET_BOTS_JSON }}
+          BOTNET_FACTORY_MARKET: production

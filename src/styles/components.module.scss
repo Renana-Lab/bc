@@ -574,11 +574,11 @@ $tooltip-color: #3f50b5;
 }
 
 .environmentPillLive {
-  border-color: rgba(128, 232, 164, 0.24);
-  background: rgba(23, 132, 78, 0.11);
+  border-color: rgba(128, 232, 164, 0.18);
+  background: rgba(23, 132, 78, 0.08);
 
   .toolbarPillValue {
-    color: #c6f7d5;
+    color: #d5f2de;
   }
 }
 
@@ -593,11 +593,11 @@ $tooltip-color: #3f50b5;
 }
 
 .environmentLiveDot {
-  width: 0.42rem;
-  height: 0.42rem;
+  width: 0.36rem;
+  height: 0.36rem;
   border-radius: 999px;
-  background: #77e29b;
-  box-shadow: 0 0 0 0 rgba(119, 226, 155, 0.18);
+  background: #8ddfa8;
+  box-shadow: 0 0 0 0 rgba(119, 226, 155, 0.12);
   animation: environmentLivePulse 1.8s ease-in-out infinite;
 }
 

@@ -39,6 +39,9 @@
     "auto-finalize": "node scripts/autoFinalizeAuctions.js --once",
     "auto-finalize:watch": "node scripts/autoFinalizeAuctions.js",
     "auction-indexer": "node scripts/auctionIndexer.js",
+    "botnet:api": "node scripts/botnet/server.js",
+    "botnet:cycle": "node scripts/botnet/runCycle.js",
+    "botnet:import": "node scripts/botnet/importBots.js",
     "eject": "react-scripts eject"
   },
   "eslintConfig": {
