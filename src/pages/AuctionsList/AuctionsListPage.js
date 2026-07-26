@@ -48,10 +48,8 @@ const BATCH_READ_SIZE = 10;
 const BATCH_READ_CONCURRENCY = 1;
 const POLL_INTERVAL_MS = 15000;
 const MAX_LIVE_BID_SUBSCRIPTIONS = 6;
-const STATUS_TICK_FAST_MS = 1000;
-const STATUS_TICK_BASE_MS = 5000;
+const STATUS_TICK_ACTIVE_MS = 1000;
 const STATUS_TICK_IDLE_MS = 15000;
-const FAST_STATUS_TICK_WINDOW_MS = 60000;
 const EVENT_REFRESH_DELAY_MS = 900;
 const CACHE_TTL_MS = 15000;
 const DEPLOYED_CAMPAIGNS_TTL_MS = 60000;
@@ -1067,28 +1065,16 @@ function AuctionsListPage() {
   const currentUserAddress = connectedAccount;
   const searchIsActive = Boolean(searchQuery.trim());
   const statusTickIntervalMs = useMemo(() => {
-    let hasActiveAuction = false;
-    let hasNearEndingAuction = false;
+    const referenceTime = Date.now();
+    const hasActiveAuction = auctionsList.some(
+      (auction) =>
+        !auction.isReadPlaceholder &&
+        !auction.closed &&
+        Number(auction.endTime) > referenceTime,
+    );
 
-    for (const auction of auctionsList) {
-      if (auction.isReadPlaceholder) continue;
-
-      const endsInMs = Number(auction.endTime) - now;
-      if (Number.isNaN(endsInMs) || endsInMs <= 0 || auction.closed) {
-        continue;
-      }
-
-      hasActiveAuction = true;
-      if (endsInMs <= FAST_STATUS_TICK_WINDOW_MS) {
-        hasNearEndingAuction = true;
-        break;
-      }
-    }
-
-    if (hasNearEndingAuction) return STATUS_TICK_FAST_MS;
-    if (hasActiveAuction) return STATUS_TICK_BASE_MS;
-    return STATUS_TICK_IDLE_MS;
-  }, [auctionsList, now]);
+    return hasActiveAuction ? STATUS_TICK_ACTIVE_MS : STATUS_TICK_IDLE_MS;
+  }, [auctionsList]);
 
   const loadRemainingBudget = useCallback(async (account) => {
     const factoryAddressForRequest = activeFactoryAddressRef.current;
@@ -1306,9 +1292,23 @@ function AuctionsListPage() {
   }, []);
 
   useEffect(() => {
-    const interval = window.setInterval(() => {
+    let interval;
+    let alignmentTimer;
+    const tick = () => {
       if (!document.hidden) setNow(Date.now());
-    }, statusTickIntervalMs);
+    };
+
+    if (statusTickIntervalMs === STATUS_TICK_ACTIVE_MS) {
+      const delayToNextSecond =
+        STATUS_TICK_ACTIVE_MS - (Date.now() % STATUS_TICK_ACTIVE_MS);
+      alignmentTimer = window.setTimeout(() => {
+        tick();
+        interval = window.setInterval(tick, statusTickIntervalMs);
+      }, delayToNextSecond);
+    } else {
+      interval = window.setInterval(tick, statusTickIntervalMs);
+    }
+
     const handleVisibilityChange = () => {
       if (!document.hidden) setNow(Date.now());
     };
@@ -1317,6 +1317,7 @@ function AuctionsListPage() {
 
     return () => {
       window.clearInterval(interval);
+      window.clearTimeout(alignmentTimer);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, [statusTickIntervalMs]);

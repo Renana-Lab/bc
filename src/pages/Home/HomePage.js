@@ -10,15 +10,7 @@ function HomePage() {
     <Layout>
       <div className={styles.container}>
         <div className={styles.contentContainer}>
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "center",
-              alignItems: "center",
-              flexDirection: "row",
-              gap: "3rem",
-            }}
-          >
+          <div className={styles.welcomeSection}>
             <img
               className={styles.metamaskimg}
               src={Welcomepic}
@@ -50,19 +42,7 @@ function HomePage() {
           >
             Continue
           </Button>
-          <Button
-            style={{
-              width: "17rem",
-              height: "3rem",
-              padding: "0.8rem",
-              borderRadius: "1rem",
-              backgroundColor: "white",
-              color: "#D8DCF0",
-              fontWeight: "600",
-              border: "1px solid #002884",
-            }}
-            variant="outlined"
-          >
+          <Button className={styles.secondaryButton} variant="outlined">
             <a
               style={{
                 color: "#002884",

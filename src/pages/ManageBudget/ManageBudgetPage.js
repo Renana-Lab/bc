@@ -182,35 +182,77 @@ const REPORT_EXPORT_OPTIONS = [
   },
 ];
 const ADMIN_ZONE_BACKGROUND =
-  "linear-gradient(145deg, rgba(255, 255, 255, 0.98) 0%, rgba(252, 253, 255, 0.95) 54%, rgba(243, 246, 255, 0.92) 100%)";
+  "radial-gradient(circle at 18% 0%, rgba(255, 255, 255, 0.96) 0%, rgba(255, 255, 255, 0) 34%), linear-gradient(145deg, rgba(255, 255, 255, 0.98) 0%, rgba(249, 251, 255, 0.96) 48%, rgba(238, 243, 255, 0.94) 100%)";
 const ADMIN_CARD_BACKGROUND =
-  "linear-gradient(145deg, #ffffff 0%, #ffffff 58%, #f7f9ff 100%)";
+  "linear-gradient(145deg, rgba(255, 255, 255, 0.98) 0%, rgba(255, 255, 255, 0.94) 54%, rgba(246, 249, 255, 0.96) 100%)";
 const ADMIN_CARD_OPEN_BACKGROUND =
-  "linear-gradient(145deg, #ffffff 0%, #fbfcff 52%, #f1f5ff 100%)";
+  "linear-gradient(145deg, rgba(255, 255, 255, 0.99) 0%, rgba(250, 252, 255, 0.97) 48%, rgba(238, 244, 255, 0.98) 100%)";
+const ADMIN_SECTION_BORDER = "rgba(137, 157, 226, 0.34)";
+const ADMIN_SECTION_BORDER_OPEN = "rgba(99, 123, 214, 0.46)";
 
 const getAdminGlossCardSx = (open = false) => ({
   position: "relative",
   overflow: "hidden",
   contain: "paint",
   background: open ? ADMIN_CARD_OPEN_BACKGROUND : ADMIN_CARD_BACKGROUND,
+  borderColor: open ? ADMIN_SECTION_BORDER_OPEN : ADMIN_SECTION_BORDER,
   boxShadow: open
-    ? "0 12px 28px rgba(16, 48, 144, 0.07), inset 0 1px 0 rgba(255, 255, 255, 0.9)"
-    : "0 5px 16px rgba(16, 48, 144, 0.04), inset 0 1px 0 rgba(255, 255, 255, 0.82)",
+    ? "0 16px 34px rgba(16, 48, 144, 0.105), 0 2px 8px rgba(240, 176, 48, 0.055), inset 0 1px 0 rgba(255, 255, 255, 0.92)"
+    : "0 8px 22px rgba(16, 48, 144, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.86)",
   transition:
-    "background 180ms ease, box-shadow 180ms ease, border-color 180ms ease",
+    "background 180ms ease, box-shadow 180ms ease, border-color 180ms ease, filter 180ms ease",
   "&::before": {
     content: '""',
     position: "absolute",
     inset: 0,
     pointerEvents: "none",
     background:
-      "linear-gradient(115deg, rgba(255, 255, 255, 0.46) 0%, rgba(255, 255, 255, 0.08) 34%, rgba(126, 149, 226, 0.08) 100%)",
+      "linear-gradient(115deg, rgba(255, 255, 255, 0.52) 0%, rgba(255, 255, 255, 0.12) 35%, rgba(126, 149, 226, 0.095) 100%)",
+  },
+  "&::after": {
+    content: '""',
+    position: "absolute",
+    inset: "0 0 auto 0",
+    height: "1px",
+    pointerEvents: "none",
+    background:
+      "linear-gradient(90deg, rgba(16, 48, 144, 0), rgba(16, 48, 144, 0.16), rgba(240, 176, 48, 0.2), rgba(16, 48, 144, 0))",
+  },
+  "&:hover": {
+    borderColor: open ? "rgba(90, 116, 214, 0.52)" : "rgba(112, 136, 224, 0.42)",
+    boxShadow: open
+      ? "0 18px 38px rgba(16, 48, 144, 0.12), 0 2px 10px rgba(240, 176, 48, 0.065), inset 0 1px 0 rgba(255, 255, 255, 0.94)"
+      : "0 10px 26px rgba(16, 48, 144, 0.075), inset 0 1px 0 rgba(255, 255, 255, 0.9)",
   },
   "& > *": {
     position: "relative",
     zIndex: 1,
   },
 });
+
+const ADMIN_COLLAPSE_BUTTON_SX = {
+  width: 42,
+  height: 42,
+  border: "1px solid rgba(137, 157, 226, 0.56)",
+  color: "#103090",
+  background:
+    "linear-gradient(145deg, rgba(255, 255, 255, 0.96), rgba(245, 248, 255, 0.9))",
+  boxShadow:
+    "0 7px 18px rgba(16, 48, 144, 0.07), inset 0 1px 0 rgba(255, 255, 255, 0.9)",
+  transition:
+    "background-color 160ms ease, border-color 160ms ease, box-shadow 160ms ease, color 160ms ease",
+  "&:hover": {
+    borderColor: "rgba(88, 116, 216, 0.68)",
+    background:
+      "linear-gradient(145deg, rgba(255, 255, 255, 1), rgba(239, 244, 255, 0.98))",
+    boxShadow:
+      "0 10px 22px rgba(16, 48, 144, 0.105), inset 0 1px 0 rgba(255, 255, 255, 0.94)",
+  },
+};
+const ADMIN_COLLAPSE_TIMEOUT_MS = 90;
+const ADMIN_COLLAPSE_EASE = "cubic-bezier(0.16, 1, 0.3, 1)";
+const ADMIN_COLLAPSE_INNER_TRANSITION = `opacity ${ADMIN_COLLAPSE_TIMEOUT_MS}ms ${ADMIN_COLLAPSE_EASE}`;
+const ADMIN_COLLAPSE_ARROW_TRANSITION = `transform ${ADMIN_COLLAPSE_TIMEOUT_MS}ms ${ADMIN_COLLAPSE_EASE}`;
 
 const makeDefaultReportSelection = (options) =>
   options.reduce((selection, option) => {
@@ -1450,9 +1492,9 @@ const ManageBudgetPage = () => {
           background: ADMIN_ZONE_BACKGROUND,
           padding: 4,
           borderRadius: 4,
-          border: "1px solid rgba(16, 48, 144, 0.08)",
+          border: "1px solid rgba(137, 157, 226, 0.26)",
           boxShadow:
-            "0 18px 44px rgba(16, 48, 144, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.78)",
+            "0 22px 52px rgba(16, 48, 144, 0.115), 0 4px 16px rgba(240, 176, 48, 0.055), inset 0 1px 0 rgba(255, 255, 255, 0.86)",
           width: "100%",
           maxWidth: 840,
           mx: "auto",
@@ -1462,7 +1504,7 @@ const ManageBudgetPage = () => {
             inset: 0,
             pointerEvents: "none",
             background:
-              "linear-gradient(115deg, rgba(255, 255, 255, 0.54) 0%, rgba(255, 255, 255, 0.12) 38%, rgba(126, 149, 226, 0.08) 100%)",
+              "linear-gradient(115deg, rgba(255, 255, 255, 0.58) 0%, rgba(255, 255, 255, 0.14) 38%, rgba(126, 149, 226, 0.1) 100%)",
           },
           "& > *": {
             position: "relative",
@@ -1551,27 +1593,14 @@ const ManageBudgetPage = () => {
                         ? "Collapse Contract Manager"
                         : "Expand Contract Manager"
                     }
-                    sx={{
-                      width: 42,
-                      height: 42,
-                      border: "1px solid #b9c7f2",
-                      color: "#103090",
-                      backgroundColor: "#ffffff",
-                      transition:
-                        "background-color 160ms ease, box-shadow 160ms ease",
-                      "&:hover": {
-                        backgroundColor: "#f1f5ff",
-                        boxShadow: "0 6px 14px rgba(16, 48, 144, 0.08)",
-                      },
-                    }}
+                    sx={ADMIN_COLLAPSE_BUTTON_SX}
                   >
                     <KeyboardArrowDownIcon
                       sx={{
                         transform: contractManagerOpen
                           ? "rotate(180deg)"
                           : "rotate(0deg)",
-                        transition:
-                          "transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1)",
+                        transition: ADMIN_COLLAPSE_ARROW_TRANSITION,
                       }}
                     />
                   </IconButton>
@@ -1581,7 +1610,7 @@ const ManageBudgetPage = () => {
               <Collapse
                 id="contract-manager-panel"
                 in={contractManagerOpen}
-                timeout="auto"
+                timeout={ADMIN_COLLAPSE_TIMEOUT_MS}
                 unmountOnExit={false}
               >
                 <Box
@@ -1591,7 +1620,7 @@ const ManageBudgetPage = () => {
                     gap: 1.5,
                     mt: 2,
                     opacity: contractManagerOpen ? 1 : 0,
-                    transition: "opacity 180ms ease 70ms",
+                    transition: ADMIN_COLLAPSE_INNER_TRANSITION,
                   }}
                 >
                   {marketOptions.map((market) => {
@@ -1895,27 +1924,14 @@ const ManageBudgetPage = () => {
                       ? "Collapse Auto Finalizer Monitor"
                       : "Expand Auto Finalizer Monitor"
                   }
-                  sx={{
-                    width: 42,
-                    height: 42,
-                    border: "1px solid #b9c7f2",
-                    color: "#103090",
-                    backgroundColor: "#ffffff",
-                    transition:
-                      "background-color 160ms ease, box-shadow 160ms ease",
-                    "&:hover": {
-                      backgroundColor: "#f1f5ff",
-                      boxShadow: "0 6px 14px rgba(16, 48, 144, 0.08)",
-                    },
-                  }}
+                  sx={ADMIN_COLLAPSE_BUTTON_SX}
                 >
                   <KeyboardArrowDownIcon
                     sx={{
                       transform: autoFinalizerOpen
                         ? "rotate(180deg)"
                         : "rotate(0deg)",
-                      transition:
-                        "transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1)",
+                      transition: ADMIN_COLLAPSE_ARROW_TRANSITION,
                     }}
                   />
                 </IconButton>
@@ -1924,14 +1940,14 @@ const ManageBudgetPage = () => {
               <Collapse
                 id="auto-finalizer-monitor-panel"
                 in={autoFinalizerOpen}
-                timeout="auto"
+                timeout={ADMIN_COLLAPSE_TIMEOUT_MS}
                 unmountOnExit={false}
               >
                 <Box
                   sx={{
                     pt: 2,
                     opacity: autoFinalizerOpen ? 1 : 0,
-                    transition: "opacity 180ms ease 70ms",
+                    transition: ADMIN_COLLAPSE_INNER_TRANSITION,
                   }}
                 >
                   <AutoFinalizerMonitor marketOptions={marketOptions} />
@@ -1985,27 +2001,14 @@ const ManageBudgetPage = () => {
                       ? "Collapse Bot Command Center"
                       : "Expand Bot Command Center"
                   }
-                  sx={{
-                    width: 42,
-                    height: 42,
-                    border: "1px solid #b9c7f2",
-                    color: "#103090",
-                    backgroundColor: "#ffffff",
-                    transition:
-                      "background-color 160ms ease, box-shadow 160ms ease",
-                    "&:hover": {
-                      backgroundColor: "#f1f5ff",
-                      boxShadow: "0 6px 14px rgba(16, 48, 144, 0.08)",
-                    },
-                  }}
+                  sx={ADMIN_COLLAPSE_BUTTON_SX}
                 >
                   <KeyboardArrowDownIcon
                     sx={{
                       transform: botCommandCenterOpen
                         ? "rotate(180deg)"
                         : "rotate(0deg)",
-                      transition:
-                        "transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1)",
+                      transition: ADMIN_COLLAPSE_ARROW_TRANSITION,
                     }}
                   />
                 </IconButton>
@@ -2014,17 +2017,17 @@ const ManageBudgetPage = () => {
               <Collapse
                 id="bot-command-center-panel"
                 in={botCommandCenterOpen}
-                timeout="auto"
+                timeout={ADMIN_COLLAPSE_TIMEOUT_MS}
                 unmountOnExit
               >
                 <Box
                   sx={{
                     pt: 2,
                     opacity: botCommandCenterOpen ? 1 : 0,
-                    transition: "opacity 180ms ease 70ms",
+                    transition: ADMIN_COLLAPSE_INNER_TRANSITION,
                   }}
                 >
-                  <BotnetControlPanel />
+                  <BotnetControlPanel schedulerEnabled={false} />
                 </Box>
               </Collapse>
             </Box>
@@ -2073,27 +2076,14 @@ const ManageBudgetPage = () => {
                         ? "Collapse Batch Auction Studio"
                         : "Expand Batch Auction Studio"
                     }
-                    sx={{
-                      width: 42,
-                      height: 42,
-                      border: "1px solid #b9c7f2",
-                      color: "#103090",
-                      backgroundColor: "#ffffff",
-                      transition:
-                        "background-color 160ms ease, box-shadow 160ms ease",
-                      "&:hover": {
-                        backgroundColor: "#f1f5ff",
-                        boxShadow: "0 6px 14px rgba(16, 48, 144, 0.08)",
-                      },
-                    }}
+                    sx={ADMIN_COLLAPSE_BUTTON_SX}
                   >
                     <KeyboardArrowDownIcon
                       sx={{
                         transform: batchStudioOpen
                           ? "rotate(180deg)"
                           : "rotate(0deg)",
-                        transition:
-                          "transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1)",
+                        transition: ADMIN_COLLAPSE_ARROW_TRANSITION,
                       }}
                     />
                   </IconButton>
@@ -2103,14 +2093,14 @@ const ManageBudgetPage = () => {
               <Collapse
                 id="batch-auction-studio-panel"
                 in={batchStudioOpen}
-                timeout="auto"
+                timeout={ADMIN_COLLAPSE_TIMEOUT_MS}
                 unmountOnExit={false}
               >
               <Box
                 sx={{
                   pt: 2,
                   opacity: batchStudioOpen ? 1 : 0,
-                  transition: "opacity 180ms ease 70ms",
+                  transition: ADMIN_COLLAPSE_INNER_TRANSITION,
                 }}
               >
               <Box display="flex" justifyContent="flex-end" sx={{ mb: 1.25 }}>
@@ -2706,27 +2696,14 @@ const ManageBudgetPage = () => {
                       ? "Collapse Auction Reports"
                       : "Expand Auction Reports"
                   }
-                  sx={{
-                    width: 42,
-                    height: 42,
-                    border: "1px solid #b9c7f2",
-                    color: "#103090",
-                    backgroundColor: "#ffffff",
-                    transition:
-                      "background-color 160ms ease, box-shadow 160ms ease",
-                    "&:hover": {
-                      backgroundColor: "#f1f5ff",
-                      boxShadow: "0 6px 14px rgba(16, 48, 144, 0.08)",
-                    },
-                  }}
+                  sx={ADMIN_COLLAPSE_BUTTON_SX}
                 >
                   <KeyboardArrowDownIcon
                     sx={{
                       transform: auctionReportsOpen
                         ? "rotate(180deg)"
                         : "rotate(0deg)",
-                      transition:
-                        "transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1)",
+                      transition: ADMIN_COLLAPSE_ARROW_TRANSITION,
                     }}
                   />
                 </IconButton>
@@ -2735,14 +2712,14 @@ const ManageBudgetPage = () => {
               <Collapse
                 id="auction-reports-panel"
                 in={auctionReportsOpen}
-                timeout="auto"
+                timeout={ADMIN_COLLAPSE_TIMEOUT_MS}
                 unmountOnExit={false}
               >
               <Box
                   sx={{
                     pt: 2,
                     opacity: auctionReportsOpen ? 1 : 0,
-                    transition: "opacity 180ms ease 70ms",
+                    transition: ADMIN_COLLAPSE_INNER_TRANSITION,
                   }}
                 >
               <Box
