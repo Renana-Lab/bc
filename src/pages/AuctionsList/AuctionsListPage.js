@@ -38,7 +38,9 @@ import {
   getEthereumProvider,
   waitForEthereumProvider,
 } from "../../real_ethereum/ethereumProvider";
+import { publishActiveAuctions } from "../../real_ethereum/activeAuctionRegistry";
 import Layout from "../../components/Layout";
+import { preserveAuctionUserState } from "./auctionVisualState";
 import styles from "./auctions.module.scss";
 import picSrc from "./Illustration_Start.png";
 
@@ -152,6 +154,8 @@ const normalizeAuction = (auction) => ({
   listOrder: Number(auction.listOrder ?? 0),
   addresses: auction.addresses || [],
   isRefunded: Boolean(auction.isRefunded),
+  hasUserStatus: Boolean(auction.hasUserStatus),
+  userStatusAddress: String(auction.userStatusAddress || "").toLowerCase(),
   closed: Boolean(auction.closed),
   isReadPlaceholder: Boolean(auction.isReadPlaceholder),
 });
@@ -202,7 +206,14 @@ const writeStoredAuctionListCache = (
   try {
     const persistedData = cache.data
       .filter((auction) => !auction.isReadPlaceholder)
-      .slice(0, 100);
+      .slice(0, 100)
+      .map((auction) => ({
+        ...auction,
+        addresses: [],
+        isRefunded: false,
+        hasUserStatus: false,
+        userStatusAddress: "",
+      }));
 
     if (!persistedData.length) return;
 
@@ -535,6 +546,8 @@ const readAuctionsFromApi = async (
     normalizeAuction({
       ...auction,
       listOrder: auction.listOrder ?? firstVisibleIndex + index,
+      hasUserStatus: Boolean(currentUserAddress),
+      userStatusAddress: currentUserAddress || "",
     }),
   );
 
@@ -721,7 +734,7 @@ const readLightAuctionsFromChain = async (
             campaign(address).methods.getListSummary(),
           ),
         undefined,
-        { preferInjected: false, allowInjectedFallback: false },
+        { preferInjected: true, allowInjectedFallback: true },
       );
 
       return { offset, results };
@@ -832,8 +845,8 @@ const readAuctionsFromChain = async (
                 "",
                 firstVisibleIndex + index,
                 {
-                  preferInjected: false,
-                  allowInjectedFallback: false,
+                  preferInjected: true,
+                  allowInjectedFallback: true,
                   factoryAddress,
                 },
               ),
@@ -875,8 +888,8 @@ const readAuctionsFromChain = async (
               "",
               firstVisibleIndex + index,
               {
-                preferInjected: false,
-                allowInjectedFallback: false,
+                preferInjected: true,
+                allowInjectedFallback: true,
                 factoryAddress,
               },
             );
@@ -929,6 +942,8 @@ const applyUserStatusesToAuctions = (auctions, statuses, userAddress) => {
 
     if (
       auction.isRefunded === status.isRefunded &&
+      auction.hasUserStatus &&
+      auction.userStatusAddress === normalizedUserAddress &&
       auction.addresses.length === nextAddresses.length &&
       auction.addresses[0]?.toLowerCase() === nextAddresses[0]
     ) {
@@ -940,6 +955,8 @@ const applyUserStatusesToAuctions = (auctions, statuses, userAddress) => {
       ...auction,
       addresses: nextAddresses,
       isRefunded: status.isRefunded,
+      hasUserStatus: true,
+      userStatusAddress: normalizedUserAddress,
     };
   });
 
@@ -985,7 +1002,7 @@ const readUserStatusesForAuctions = async (
         campaign(auction.address).methods.getUserAuctionStatus(userAddress),
       ),
     undefined,
-    { preferInjected: false, allowInjectedFallback: false },
+    { preferInjected: true, allowInjectedFallback: true },
   ).finally(() => {
     userAuctionStatusInFlight = null;
   });
@@ -1106,6 +1123,32 @@ function AuctionsListPage() {
     return sortByMarketOrder(nextAuctions || []).slice(0, limit);
   }, []);
 
+  const commitAuctionList = useCallback(
+    (nextAuctions, limit) => {
+      setAuctionsList((currentAuctions) =>
+        keepNormalAuctionOrder(
+          preserveAuctionUserState(
+            currentAuctions,
+            nextAuctions,
+            currentUserAddress,
+          ),
+          limit,
+        ),
+      );
+    },
+    [currentUserAddress, keepNormalAuctionOrder],
+  );
+
+  useEffect(() => {
+    if (!auctionsList.length || !activeFactoryAddress) return;
+
+    publishActiveAuctions(
+      activeFactoryAddress,
+      auctionsList.filter((auction) => !auction.isReadPlaceholder),
+      "auction-list",
+    );
+  }, [activeFactoryAddress, auctionsList]);
+
   const fetchAuctionsList = useCallback(async () => {
     const visibleCountForRequest = visibleAuctionCount;
     const factoryAddressForRequest = activeFactoryAddressRef.current;
@@ -1125,9 +1168,7 @@ function AuctionsListPage() {
         normalizeFactoryAddress(activeFactoryAddressRef.current);
 
     if (cached) {
-      setAuctionsList(
-        keepNormalAuctionOrder(cached.data, visibleCountForRequest),
-      );
+      commitAuctionList(cached.data, visibleCountForRequest);
       setTotalAuctionCount(cached.total);
       setLastUpdated(cached.updatedAt);
       setLoading(false);
@@ -1187,9 +1228,7 @@ function AuctionsListPage() {
             visibleCountForRequest,
             (snapshot) => {
               if (isCurrentRequest(requestId)) {
-                setAuctionsList(
-                  keepNormalAuctionOrder(snapshot.data, visibleCountForRequest),
-                );
+                commitAuctionList(snapshot.data, visibleCountForRequest);
                 setTotalAuctionCount(snapshot.total);
                 setLastUpdated(snapshot.updatedAt);
                 setLoading(false);
@@ -1210,7 +1249,7 @@ function AuctionsListPage() {
       const { data, total } = await auctionListInFlight.promise;
 
       if (isCurrentRequest(requestId)) {
-        setAuctionsList(keepNormalAuctionOrder(data, visibleCountForRequest));
+        commitAuctionList(data, visibleCountForRequest);
         setTotalAuctionCount(total);
         setLastUpdated(Date.now());
         setNetworkSlow(false);
@@ -1221,9 +1260,7 @@ function AuctionsListPage() {
         factoryAddressForRequest,
       );
       if (stale && isCurrentRequest(requestId)) {
-        setAuctionsList(
-          keepNormalAuctionOrder(stale.data, visibleCountForRequest),
-        );
+        commitAuctionList(stale.data, visibleCountForRequest);
         setTotalAuctionCount(stale.total);
         setLastUpdated(stale.updatedAt);
       }
@@ -1244,7 +1281,7 @@ function AuctionsListPage() {
         }
       }
     }
-  }, [keepNormalAuctionOrder, loading, loadingMore, visibleAuctionCount]);
+  }, [commitAuctionList, loading, loadingMore, visibleAuctionCount]);
 
   useEffect(() => {
     fetchAuctionsListRef.current = fetchAuctionsList;

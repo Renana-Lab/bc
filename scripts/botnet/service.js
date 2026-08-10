@@ -20,8 +20,7 @@ const LEGACY_BOTNET_BOTS_PATH =
   "C:\\Users\\Programmers\\Desktop\\bc_SUPERBOT\\files\\data\\bots.json";
 
 const DEFAULT_RPC_URLS = [
-  "https://ethereum-sepolia-rpc.publicnode.com",
-  "https://sepolia.drpc.org",
+  "https://rpc.sepolia.org",
 ];
 
 const DEFAULT_OVERRIDES = {

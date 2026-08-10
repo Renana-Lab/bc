@@ -14,37 +14,27 @@ import Web3 from "web3";
 import CampaignFactory from "../../real_ethereum/build/CampaignFactory.json";
 import Campaign from "../../real_ethereum/build/Campaign.json";
 import { getActiveFactoryAddress } from "../../real_ethereum/marketConfig";
+import { refreshActiveAuctionRegistry } from "../../real_ethereum/activeAuctionRegistry";
+import {
+  getConfiguredRpcUrls,
+  getFriendlyRpcError,
+  getRpcErrorMessage,
+  getRpcFailureKind,
+  isRpcProviderFailure,
+} from "../../real_ethereum/rpcConfig";
 
 const LOCAL_BOTS_KEY = "bc:admin-botnet:bots:v1";
 const LOCAL_LOGS_KEY = "bc:admin-botnet:logs:v1";
 const BOTNET_STATE_EVENT = "bc:admin-botnet:state-change";
-const DEFAULT_RPC_URLS = [
-  "https://ethereum-sepolia-rpc.publicnode.com",
-  "https://sepolia.drpc.org",
-];
-const RPC_URLS = (
-  process.env.REACT_APP_RPC_URLS ||
-  process.env.REACT_APP_RPC_URL ||
-  DEFAULT_RPC_URLS.join(",")
-)
-  .split(",")
-  .map((url) => url.trim())
-  .filter(Boolean);
-const BOT_MAX_AUCTIONS_PER_CYCLE = Math.max(
-  5,
-  Number(process.env.REACT_APP_BOT_MAX_AUCTIONS_PER_CYCLE || 45)
-);
+const activeBotCycles = new Set();
+const RPC_URLS = getConfiguredRpcUrls();
 const BOT_MAX_BOTS_PER_TICK = Math.max(
   1,
-  Number(process.env.REACT_APP_BOT_MAX_BOTS_PER_TICK || 3)
-);
-const BOT_RPC_DELAY_MS = Math.max(
-  0,
-  Number(process.env.REACT_APP_BOT_RPC_DELAY_MS || 220)
+  Number(process.env.REACT_APP_BOT_MAX_BOTS_PER_TICK || 6)
 );
 const BOT_START_STAGGER_MS = Math.max(
   0,
-  Number(process.env.REACT_APP_BOT_START_STAGGER_MS || 350)
+  Number(process.env.REACT_APP_BOT_START_STAGGER_MS || 120)
 );
 const BOT_RPC_RATE_LIMIT_COOLDOWN_MS = Math.max(
   5000,
@@ -57,6 +47,10 @@ const BOT_CYCLE_STALE_MS = Math.max(
 const BOT_SCHEDULER_TICK_MS = Math.max(
   2500,
   Number(process.env.REACT_APP_BOT_SCHEDULER_TICK_MS || 5000)
+);
+const BOT_CANDIDATES_PER_CYCLE = Math.max(
+  1,
+  Number(process.env.REACT_APP_BOT_CANDIDATES_PER_CYCLE || 4)
 );
 
 const DEFAULT_OVERRIDES = {
@@ -87,18 +81,7 @@ const sleep = (ms) =>
     window.setTimeout(resolve, ms);
   });
 
-const getErrorMessage = (error) =>
-  String(error?.message || error?.data?.message || error || "");
-
-const isRateLimitError = (error) => {
-  const message = getErrorMessage(error).toLowerCase();
-  return (
-    message.includes("rate limit") ||
-    message.includes("too many requests") ||
-    message.includes("usage limit") ||
-    message.includes("429")
-  );
-};
+const getErrorMessage = getRpcErrorMessage;
 
 const readJson = (key, fallback) => {
   try {
@@ -167,6 +150,11 @@ const getWalletAddress = (privateKey) => {
 const normalizeBot = (bot = {}) => {
   const privateKey = normalizePrivateKey(bot.privateKey);
   const validPrivateKey = isValidPrivateKey(privateKey);
+  const storedLastError = bot.lastError || null;
+  const normalizedLastError =
+    storedLastError && isRpcProviderFailure(storedLastError)
+      ? getFriendlyRpcError(storedLastError)
+      : storedLastError;
   const cycleStartedAt = bot.lastCycleAt ? new Date(bot.lastCycleAt).getTime() : 0;
   const staleRunningCycle =
     bot.status === "running-cycle" &&
@@ -190,7 +178,7 @@ const normalizeBot = (bot = {}) => {
     lastError: validPrivateKey
       ? staleRunningCycle
         ? "Previous cycle was interrupted and recovered by the local scheduler."
-        : bot.lastError || null
+        : normalizedLastError
       : "Private key is missing or invalid.",
     stats: {
       cycles: Number(bot.stats?.cycles || 0),
@@ -296,10 +284,7 @@ const getStrategy = (bot) => {
 };
 
 const sendContractTx = async (method, options) => {
-  let gas = 2500000;
-  try {
-    gas = await method.estimateGas(options);
-  } catch (_) {}
+  const gas = await method.estimateGas(options);
 
   return method.send({
     ...options,
@@ -334,14 +319,20 @@ const getBidDecision = (auction, budget, strategy) => {
   return { bid: true, amountWei: incrementalValue, targetBid };
 };
 
-const getNewestAuctionAddresses = (addresses, limit) =>
-  addresses.slice(-limit).reverse();
+const shuffle = (values) => {
+  const next = [...values];
+  for (let index = next.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [next[index], next[swapIndex]] = [next[swapIndex], next[index]];
+  }
+  return next;
+};
 
 const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
   const keyFileInputRef = useRef(null);
-  const cycleRunningRef = useRef(new Set());
   const rpcIndexRef = useRef(0);
   const rpcCooldownUntilRef = useRef({});
+  const registryCooldownUntilRef = useRef(0);
   const schedulerTickRunningRef = useRef(false);
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState("");
@@ -411,12 +402,27 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
   const coolDownRpcUrl = useCallback(
     (rpcUrl, error) => {
       if (!rpcUrl) return;
-      const until = Date.now() + BOT_RPC_RATE_LIMIT_COOLDOWN_MS;
+      const failureKind = getRpcFailureKind(error);
+      const cooldownMs =
+        failureKind === "unsupported-plan"
+          ? 24 * 60 * 60 * 1000
+          : failureKind === "network"
+            ? 15000
+            : BOT_RPC_RATE_LIMIT_COOLDOWN_MS;
+      const until = Date.now() + cooldownMs;
       rpcCooldownUntilRef.current[rpcUrl] = until;
-      const seconds = Math.ceil(BOT_RPC_RATE_LIMIT_COOLDOWN_MS / 1000);
-      const message = `RPC rate limit on ${rpcUrl}. Cooling it down for ${seconds}s.`;
+      const message = getFriendlyRpcError(error);
       setRpcNotice(message);
-      addLog("warn", message, { error: getErrorMessage(error) });
+      addLog("warn", message, {
+        provider: (() => {
+          try {
+            return new URL(rpcUrl).hostname;
+          } catch (_) {
+            return "configured RPC";
+          }
+        })(),
+        failureKind,
+      });
     },
     [addLog]
   );
@@ -466,9 +472,9 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
   );
 
   const runBotCycle = useCallback(
-    async (bot) => {
-      if (!bot || cycleRunningRef.current.has(bot.id)) return;
-      cycleRunningRef.current.add(bot.id);
+    async (bot, suppliedSnapshot = null, reservedAuctions = null) => {
+      if (!bot || activeBotCycles.has(bot.id)) return false;
+      activeBotCycles.add(bot.id);
       updateBot(bot.id, { status: "running-cycle", lastCycleAt: new Date().toISOString(), lastError: null });
 
       try {
@@ -479,7 +485,7 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
             status: current.running ? "running" : "stopped",
             lastError: "RPC providers are cooling down. The scheduler will retry later.",
           }));
-          return;
+          return false;
         }
         const factoryAddress = getActiveFactoryAddress();
         if (!factoryAddress) throw new Error("No active factory contract configured.");
@@ -494,81 +500,36 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
         web3.eth.defaultAccount = account.address;
 
         const factory = new web3.eth.Contract(CampaignFactory.abi, factoryAddress);
-        let addresses = [];
-        try {
-          addresses = await factory.methods.getDeployedCampaigns().call();
-        } catch (campaignsError) {
-          if (isRateLimitError(campaignsError)) {
-            coolDownRpcUrl(rpcUrl, campaignsError);
-          }
-          throw campaignsError;
-        }
+        const snapshot =
+          suppliedSnapshot ||
+          (await refreshActiveAuctionRegistry(factoryAddress));
         const now = Math.floor(Date.now() / 1000);
         const me = account.address.toLowerCase();
-        const auctions = [];
-
-        const addressesToScan = getNewestAuctionAddresses(
-          addresses,
-          BOT_MAX_AUCTIONS_PER_CYCLE
-        );
-
-        for (const address of addressesToScan) {
-          if (BOT_RPC_DELAY_MS > 0) {
-            await sleep(BOT_RPC_DELAY_MS);
-          }
-          try {
-            const campaign = new web3.eth.Contract(Campaign.abi, address);
-            const summary = await campaign.methods.getSummary().call();
-            let closed = false;
-            let myBid = "0";
-
-            try {
-              closed = await campaign.methods.getStatus().call();
-            } catch (statusError) {
-              if (isRateLimitError(statusError)) throw statusError;
-            }
-
-            try {
-              myBid = await campaign.methods.getBid(account.address).call();
-            } catch (bidReadError) {
-              if (isRateLimitError(bidReadError)) throw bidReadError;
-            }
-
-            const endTimeSec = Number(summary[9]);
-            const highestBidder = String(summary[7] || "").toLowerCase();
-            auctions.push({
-              address,
-              campaign,
-              minimumContribution: toBigIntSafe(summary[0]),
-              approversCount: Number(summary[2] || 0),
-              manager: summary[3],
-              highestBid: toBigIntSafe(summary[4]),
-              highestBidder: summary[7],
-              endTimeSec,
-              closed: Boolean(closed),
-              isActive: endTimeSec > now,
-              secondsLeft: Math.max(0, endTimeSec - now),
-              isManager: String(summary[3] || "").toLowerCase() === me,
-              isWinner: highestBidder === me,
-              myBid: toBigIntSafe(myBid),
-            });
-          } catch (readError) {
-            if (isRateLimitError(readError)) {
-              coolDownRpcUrl(rpcUrl, readError);
-              throw readError;
-            }
-            addLog("warn", `Skipped unreadable auction ${address}`, {
-              bot: bot.name,
-              error: readError.message || String(readError),
-            });
-          }
-        }
+        const toBotAuction = (auction) => {
+          const endTimeSec = Number(auction.endTimeSec || 0);
+          const highestBidder = String(auction.highestBidder || "").toLowerCase();
+          return {
+            ...auction,
+            campaign: new web3.eth.Contract(Campaign.abi, auction.address),
+            minimumContribution: toBigIntSafe(auction.minimumContribution),
+            approversCount: Number(auction.approversCount || 0),
+            highestBid: toBigIntSafe(auction.highestBid),
+            endTimeSec,
+            isActive: !auction.closed && endTimeSec > now,
+            secondsLeft: Math.max(0, endTimeSec - now),
+            isManager: String(auction.manager || "").toLowerCase() === me,
+            isWinner: highestBidder === me,
+            myBid: 0n,
+          };
+        };
+        const activeAuctions = (snapshot.activeAuctions || []).map(toBotAuction);
+        const finalizableAuctions = (snapshot.finalizableAuctions || []).map(toBotAuction);
 
         const strategy = getStrategy(bot);
 
         if (strategy.enableFinalize) {
-          for (const auction of auctions.filter(
-            (item) => !item.isActive && !item.closed && item.isManager && item.approversCount > 0
+          for (const auction of finalizableAuctions.filter(
+            (item) => item.isManager && item.approversCount > 0
           )) {
             try {
               await sendContractTx(auction.campaign.methods.finalizeAuctionIfNeeded(), {
@@ -579,7 +540,7 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
               }));
               addLog("info", `Finalized auction ${auction.address}`, { bot: bot.name });
             } catch (finalizeError) {
-              if (isRateLimitError(finalizeError)) {
+              if (isRpcProviderFailure(finalizeError)) {
                 coolDownRpcUrl(rpcUrl, finalizeError);
                 throw finalizeError;
               }
@@ -596,52 +557,78 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
           try {
             budget = toBigIntSafe(await factory.methods.getBudget(account.address).call());
           } catch (budgetError) {
-            if (isRateLimitError(budgetError)) {
+            if (isRpcProviderFailure(budgetError)) {
               coolDownRpcUrl(rpcUrl, budgetError);
-              throw budgetError;
             }
+            throw budgetError;
           }
-          if (budget <= 0n) {
+
+          const eligible = shuffle(
+            activeAuctions.filter((auction) => {
+              if (!auction.isActive || auction.isManager) return false;
+              if (strategy.skipIfWinning && auction.isWinner) return false;
+              if (auction.secondsLeft < strategy.minTimeRemainingSec) return false;
+              if (auction.minimumContribution > strategy.maxMinContributionWei) return false;
+              const targetBid =
+                auction.approversCount === 0 && auction.highestBid === 0n
+                  ? auction.minimumContribution
+                  : auction.highestBid + strategy.outbidByWei;
+              return targetBid <= strategy.maxBidWei;
+            }),
+          ).slice(0, BOT_CANDIDATES_PER_CYCLE);
+
+          let bidSent = false;
+          let lastDecision = { reason: eligible.length ? "No eligible bid" : "No eligible active auctions" };
+
+          for (const candidate of eligible) {
+            const candidateKey = candidate.address.toLowerCase();
+            if (reservedAuctions?.has(candidateKey)) continue;
+            reservedAuctions?.add(candidateKey);
+
             try {
-              budget = toBigIntSafe(await web3.eth.getBalance(account.address));
-            } catch (balanceError) {
-              if (isRateLimitError(balanceError)) {
-                coolDownRpcUrl(rpcUrl, balanceError);
+              candidate.myBid = toBigIntSafe(
+                await candidate.campaign.methods.getBid(account.address).call(),
+              );
+              const decision = getBidDecision(candidate, budget, strategy);
+              lastDecision = decision;
+              if (!decision.bid) {
+                reservedAuctions?.delete(candidateKey);
+                continue;
               }
-              throw balanceError;
-            }
-          }
 
-          const open = auctions.filter((auction) => auction.isActive);
-          const notWinning = open.filter((auction) => !auction.isWinner);
-          const pool = notWinning.length ? notWinning : open;
-          const candidate = pool[Math.floor(Math.random() * pool.length)] || null;
-          const decision = getBidDecision(candidate, budget, strategy);
-
-          if (decision.bid) {
-            try {
               await sendContractTx(candidate.campaign.methods.contribute(), {
                 from: account.address,
                 value: decision.amountWei.toString(),
               });
             } catch (bidError) {
-              if (isRateLimitError(bidError)) {
+              if (isRpcProviderFailure(bidError)) {
                 coolDownRpcUrl(rpcUrl, bidError);
+                throw bidError;
               }
-              throw bidError;
+              addLog("warn", `Bid attempt skipped for ${candidate.address}`, {
+                bot: bot.name,
+                error: getErrorMessage(bidError),
+              });
+              reservedAuctions?.delete(candidateKey);
+              continue;
             }
+
             updateBot(bot.id, (current) => ({
               stats: { ...current.stats, bids: (current.stats?.bids || 0) + 1 },
             }));
             addLog("info", `Bid sent by ${bot.name}`, {
               auction: candidate.address,
-              amountWei: decision.amountWei.toString(),
+              amountWei: lastDecision.amountWei.toString(),
             });
-          } else {
-            addLog("info", `No bid sent by ${bot.name}: ${decision.reason}`, {
-              scanned: addressesToScan.length,
-              readable: auctions.length,
-              open: open.length,
+            bidSent = true;
+            break;
+          }
+
+          if (!bidSent) {
+            addLog("info", `No bid sent by ${bot.name}: ${lastDecision.reason}`, {
+              activeAuctions: activeAuctions.length,
+              eligibleAuctions: eligible.length,
+              source: snapshot.source,
               budget: budget.toString(),
             });
           }
@@ -652,19 +639,29 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
           wallet: account.address,
           stats: { ...current.stats, cycles: (current.stats?.cycles || 0) + 1 },
         }));
+        return true;
       } catch (cycleError) {
+        const providerFailure = isRpcProviderFailure(cycleError);
         updateBot(bot.id, (current) => ({
-          status: current.running ? "running" : "error",
-          lastError: isRateLimitError(cycleError)
-            ? "RPC provider is rate-limited. The scheduler is backing off and will retry."
-            : cycleError.message || String(cycleError),
-          stats: { ...current.stats, errors: (current.stats?.errors || 0) + 1 },
+          status: current.running ? "running" : providerFailure ? "stopped" : "error",
+          lastError: providerFailure
+            ? getFriendlyRpcError(cycleError)
+            : getErrorMessage(cycleError),
+          stats: {
+            ...current.stats,
+            errors: providerFailure
+              ? current.stats?.errors || 0
+              : (current.stats?.errors || 0) + 1,
+          },
         }));
-        addLog(isRateLimitError(cycleError) ? "warn" : "error", `Bot cycle failed for ${bot.name}`, {
-          error: cycleError.message || String(cycleError),
+        addLog(providerFailure ? "warn" : "error", `Bot cycle failed for ${bot.name}`, {
+          error: providerFailure
+            ? getFriendlyRpcError(cycleError)
+            : getErrorMessage(cycleError),
         });
+        return false;
       } finally {
-        cycleRunningRef.current.delete(bot.id);
+        activeBotCycles.delete(bot.id);
       }
     },
     [addLog, coolDownRpcUrl, getNextRpcUrl, updateBot]
@@ -676,7 +673,40 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
         .filter((bot) => bot.enabled && isValidPrivateKey(bot.privateKey))
         .slice(0, limit);
       const workerCount = Math.min(BOT_MAX_BOTS_PER_TICK, runnableBots.length);
+      if (!workerCount) return false;
+
+      if (registryCooldownUntilRef.current > Date.now()) {
+        const seconds = Math.max(
+          1,
+          Math.ceil((registryCooldownUntilRef.current - Date.now()) / 1000),
+        );
+        setRpcNotice(`Active auction refresh is cooling down. Retrying in about ${seconds}s.`);
+        return false;
+      }
+
+      const factoryAddress = getActiveFactoryAddress();
+      let sharedSnapshot;
+      try {
+        sharedSnapshot = await refreshActiveAuctionRegistry(factoryAddress);
+      } catch (snapshotError) {
+        const failureKind = getRpcFailureKind(snapshotError);
+        const cooldownMs =
+          failureKind === "unsupported-plan"
+            ? 24 * 60 * 60 * 1000
+            : failureKind === "network"
+              ? 15000
+              : BOT_RPC_RATE_LIMIT_COOLDOWN_MS;
+        registryCooldownUntilRef.current = Date.now() + cooldownMs;
+        const message = isRpcProviderFailure(snapshotError)
+          ? getFriendlyRpcError(snapshotError)
+          : `Active auction refresh failed: ${getErrorMessage(snapshotError)}`;
+        setRpcNotice(message);
+        addLog(isRpcProviderFailure(snapshotError) ? "warn" : "error", message);
+        return false;
+      }
+      const reservedAuctions = new Set();
       let nextIndex = 0;
+      let completedCycles = 0;
 
       const runWorker = async (workerIndex) => {
         if (workerIndex > 0 && BOT_START_STAGGER_MS > 0) {
@@ -686,7 +716,8 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
         while (nextIndex < runnableBots.length) {
           const bot = runnableBots[nextIndex];
           nextIndex += 1;
-          await runBotCycle(bot);
+          const completed = await runBotCycle(bot, sharedSnapshot, reservedAuctions);
+          if (completed) completedCycles += 1;
 
           if (BOT_START_STAGGER_MS > 0) {
             await sleep(BOT_START_STAGGER_MS);
@@ -697,8 +728,9 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
       await Promise.all(
         Array.from({ length: workerCount }, (_, workerIndex) => runWorker(workerIndex))
       );
+      return completedCycles > 0;
     },
-    [runBotCycle]
+    [addLog, runBotCycle]
   );
 
   useEffect(() => {
@@ -751,8 +783,9 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
         toast.success("All bots stopped");
       } else if (action === "run-network") {
         const selected = loadStoredBots().filter((bot) => bot.enabled && isValidPrivateKey(bot.privateKey));
-        await runBotsInBatches(selected);
-        toast.success("Enabled bots ran once");
+        const completed = await runBotsInBatches(selected);
+        if (completed) toast.success("Enabled bots ran once");
+        else toast.error("No bot cycle completed. Check the connection notice and bot events.");
       } else if (action === "start-bot") {
         updateBot(body.id, { running: true, status: "running", lastError: null });
         toast.success("Bot started");
@@ -761,8 +794,9 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
         toast.success("Bot stopped");
       } else if (action === "run-bot") {
         const bot = loadStoredBots().find((item) => item.id === body.id);
-        await runBotCycle(bot);
-        toast.success("Bot ran once");
+        const completed = await runBotCycle(bot);
+        if (completed) toast.success("Bot ran once");
+        else toast.error("The bot cycle did not complete. Check its status and recent events.");
       } else if (action === "delete-bot") {
         commitBots((current) => current.filter((bot) => bot.id !== body.id));
         toast.success("Bot deleted");

@@ -8,8 +8,7 @@ const factoryJson = require("../src/real_ethereum/build/CampaignFactory.json");
 const { loadFactoryAddress } = require("./factoryAddressLoader");
 
 const DEFAULT_RPC_URLS = [
-  "https://ethereum-sepolia-rpc.publicnode.com",
-  "https://sepolia.drpc.org",
+  "https://rpc.sepolia.org",
 ];
 const DEFAULT_WS_URL = "wss://sepolia.infura.io/ws/v3/b27d53291ceb44bd864dbf7b0eb55581";
 const PORT = Number(process.env.AUCTION_INDEXER_PORT || 8787);

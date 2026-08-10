@@ -3,43 +3,24 @@ import CampaignFactory from "./build/CampaignFactory.json";
 import Campaign from "./build/Campaign.json";
 import { getActiveFactoryAddress } from "./marketConfig";
 import { getEthereumProvider } from "./ethereumProvider";
+import {
+  getConfiguredRpcUrls,
+  isRpcProviderFailure,
+} from "./rpcConfig";
 
-const DEFAULT_RPC_URLS = [
-  "https://ethereum-sepolia-rpc.publicnode.com",
-  "https://sepolia.drpc.org",
-];
 const HTTP_TIMEOUT_MS = Number(process.env.REACT_APP_RPC_TIMEOUT_MS || 9000);
 const DEFAULT_PREFER_INJECTED_READS =
-  String(process.env.REACT_APP_PREFER_METAMASK_READS || "").toLowerCase() ===
-  "true";
+  String(process.env.REACT_APP_PREFER_METAMASK_READS || "true").toLowerCase() !==
+  "false";
 const DEFAULT_ALLOW_INJECTED_FALLBACK =
-  String(process.env.REACT_APP_ALLOW_METAMASK_READ_FALLBACK || "").toLowerCase() ===
-  "true";
+  String(process.env.REACT_APP_ALLOW_METAMASK_READ_FALLBACK || "true").toLowerCase() !==
+  "false";
 
-const RPC_URLS = (
-  process.env.REACT_APP_RPC_URLS ||
-  process.env.REACT_APP_RPC_URL ||
-  DEFAULT_RPC_URLS.join(",")
-)
-  .split(",")
-  .map((url) => url.trim())
-  .filter(Boolean);
+const RPC_URLS = getConfiguredRpcUrls();
 
 const RETRY_DELAY_MS = 2500;
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-const isRateLimitError = (error) => {
-  const message = JSON.stringify(error?.message || error || "").toLowerCase();
-  return (
-    message.includes("429") ||
-    message.includes("too many requests") ||
-    message.includes("rate limit") ||
-    message.includes("usage limit") ||
-    message.includes("current plan") ||
-    message.includes("higher limits")
-  );
-};
 
 const readOnlyWeb3s = RPC_URLS.map(
   (url) =>
@@ -173,7 +154,7 @@ export const readOnlyCall = async (createCall, retries, options = {}) => {
       }).call();
     } catch (error) {
       lastError = error;
-      const shouldTryNextProvider = provider.injected || isRateLimitError(error);
+      const shouldTryNextProvider = provider.injected || isRpcProviderFailure(error);
 
       if (!shouldTryNextProvider || attempt === maxAttempts - 1) {
         throw error;
@@ -253,7 +234,7 @@ export const readOnlyBatchCall = async (
 
       const rateLimited = results.some(
         (result) =>
-          result?.status === "rejected" && isRateLimitError(result.reason)
+          result?.status === "rejected" && isRpcProviderFailure(result.reason)
       );
       const hasInjectedProviderFailure =
         provider.injected &&
@@ -264,7 +245,7 @@ export const readOnlyBatchCall = async (
           results.find(
             (result) =>
               result?.status === "rejected" &&
-              (isRateLimitError(result.reason) || hasInjectedProviderFailure)
+              (isRpcProviderFailure(result.reason) || hasInjectedProviderFailure)
           )?.reason || new Error("Injected provider batch read failed")
         );
       }
@@ -272,7 +253,7 @@ export const readOnlyBatchCall = async (
       return results;
     } catch (error) {
       lastError = error;
-      const shouldTryNextProvider = provider.injected || isRateLimitError(error);
+      const shouldTryNextProvider = provider.injected || isRpcProviderFailure(error);
 
       if (!shouldTryNextProvider || attempt === maxAttempts - 1) {
         throw error;

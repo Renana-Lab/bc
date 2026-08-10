@@ -246,6 +246,19 @@ The auction list has had issues with rate limits, stale reads, and mixed Real/De
 
 If the list becomes slow or unstable, first check RPC rate limits, active factory address, and stale request guards.
 
+### Bot RPC and Active-Auction Registry
+
+The browser bot runner must not scan every deployed auction for every bot. The shared registry in `src/real_ethereum/activeAuctionRegistry.js` maintains a factory-scoped list of active auctions:
+
+- The auction list publishes data it has already read.
+- The headless Admin Zone runner refreshes the registry when the list is absent or stale.
+- Common summaries are read once per scheduler round and shared by all bots.
+- Each bot performs only account-specific bid and budget reads before sending a transaction.
+- A per-round reservation prevents concurrent bots from targeting the same auction simultaneously.
+- Rate-limited or plan-incompatible RPC endpoints are cooled down instead of repeatedly failing every bot.
+
+`publicnode.com` is an anonymous RPC service operated by Allnodes; it is not part of the contracts. Anonymous RPC endpoints are acceptable as emergency fallbacks, but reliable experiments should set `REACT_APP_RPC_URLS` to one or more authenticated Sepolia endpoints. The browser runner only operates while the site is open; unattended 24/7 operation requires the repository bot service or another hosted worker.
+
 ## Admin Zone
 
 The admin page is at:

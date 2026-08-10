@@ -7,8 +7,7 @@ const factoryJson = require("../src/real_ethereum/build/CampaignFactory.json");
 const { loadFactoryAddresses } = require("./factoryAddressLoader");
 
 const DEFAULT_RPC_URLS = [
-  "https://ethereum-sepolia-rpc.publicnode.com",
-  "https://sepolia.drpc.org",
+  "https://rpc.sepolia.org",
 ];
 const RPC_URLS = [
   ...(process.env.RPC_URLS || process.env.REACT_APP_RPC_URLS || "")
