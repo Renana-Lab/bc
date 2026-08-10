@@ -42,6 +42,10 @@
     "botnet:api": "node scripts/botnet/server.js",
     "botnet:cycle": "node scripts/botnet/runCycle.js",
     "botnet:import": "node scripts/botnet/importBots.js",
+    "stress:contract": "node scripts/stress/contractStress.js",
+    "stress:utilities": "node scripts/stress/utilityStress.js",
+    "stress:automation": "node scripts/stress/automationStress.js",
+    "stress:serve": "node scripts/stress/serveBuild.js",
     "eject": "react-scripts eject"
   },
   "eslintConfig": {

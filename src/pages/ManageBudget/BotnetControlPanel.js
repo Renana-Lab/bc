@@ -96,13 +96,13 @@ const writeJson = (key, value) => {
   window.localStorage.setItem(key, JSON.stringify(value));
 };
 
-const normalizePrivateKey = (value) => {
+export const normalizePrivateKey = (value) => {
   const raw = String(value || "").trim();
   if (!raw) return "";
   return raw.startsWith("0x") ? raw : `0x${raw}`;
 };
 
-const isValidPrivateKey = (value) => /^0x[a-fA-F0-9]{64}$/.test(normalizePrivateKey(value));
+export const isValidPrivateKey = (value) => /^0x[a-fA-F0-9]{64}$/.test(normalizePrivateKey(value));
 
 const toBool = (value, fallback = false) => {
   if (value === undefined || value === null || value === "") return fallback;
@@ -147,7 +147,7 @@ const getWalletAddress = (privateKey) => {
   }
 };
 
-const normalizeBot = (bot = {}) => {
+export const normalizeBot = (bot = {}) => {
   const privateKey = normalizePrivateKey(bot.privateKey);
   const validPrivateKey = isValidPrivateKey(privateKey);
   const storedLastError = bot.lastError || null;
@@ -246,7 +246,7 @@ const getBotStatusColor = (status) => {
   return "#5f6680";
 };
 
-const extractPrivateKeysFromText = (text = "") => {
+export const extractPrivateKeysFromText = (text = "") => {
   const keys = [
     ...String(text).matchAll(
       /(?:^|[^a-fA-F0-9])((?:0x)?[a-fA-F0-9]{64})(?=$|[^a-fA-F0-9])/g
@@ -261,7 +261,7 @@ const extractPrivateKeysFromText = (text = "") => {
   });
 };
 
-const getStrategy = (bot) => {
+export const getStrategy = (bot) => {
   const overrides = bot.overrides || {};
   return {
     maxBidWei: toBigIntSafe(overrides.MAX_BID_WEI || DEFAULT_OVERRIDES.MAX_BID_WEI),
@@ -292,7 +292,7 @@ const sendContractTx = async (method, options) => {
   });
 };
 
-const getBidDecision = (auction, budget, strategy) => {
+export const getBidDecision = (auction, budget, strategy) => {
   if (!auction) return { bid: false, reason: "No auction candidate" };
   if (!auction.isActive) return { bid: false, reason: "Auction closed" };
   if (auction.isManager) return { bid: false, reason: "Bot is the seller" };
@@ -359,8 +359,12 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
   );
 
   const commitBots = useCallback((updater) => {
-    setBots((current) => {
-      const next = typeof updater === "function" ? updater(current) : updater;
+    setBots(() => {
+      const latestStoredBots = loadStoredBots();
+      const next =
+        typeof updater === "function"
+          ? updater(latestStoredBots)
+          : updater;
       const normalized = next.map(normalizeBot);
       saveStoredBots(normalized);
       return normalized;
@@ -445,8 +449,6 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
   }, [loadBotnet]);
 
   useEffect(() => {
-    if (headless) return undefined;
-
     const syncVisiblePanel = () => {
       setBots(loadStoredBots());
       setLogs(loadStoredLogs());
@@ -456,7 +458,7 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
     return () => {
       window.removeEventListener(BOTNET_STATE_EVENT, syncVisiblePanel);
     };
-  }, [headless]);
+  }, []);
 
   const updateBot = useCallback(
     (id, patcher) => {

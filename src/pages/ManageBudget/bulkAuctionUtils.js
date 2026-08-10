@@ -2,10 +2,53 @@
 export const BULK_DRAFT_KEY = "bulkAuctionDraft";
 export const BULK_MAX_AUCTIONS = 30;
 
+const getDelimiter = (line) => {
+  let quoted = false;
+  const delimiterCounts = { "|": 0, "\t": 0, ",": 0 };
+
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index];
+    if (character === '"') {
+      if (quoted && line[index + 1] === '"') {
+        index += 1;
+      } else {
+        quoted = !quoted;
+      }
+    } else if (!quoted && character in delimiterCounts) {
+      delimiterCounts[character] += 1;
+    }
+  }
+
+  return Object.entries(delimiterCounts).sort(
+    (left, right) => right[1] - left[1]
+  )[0][0];
+};
+
 const splitBulkLine = (line) => {
-  if (line.includes("|")) return line.split("|").map((part) => part.trim());
-  if (line.includes("\t")) return line.split("\t").map((part) => part.trim());
-  return line.split(",").map((part) => part.trim());
+  const delimiter = getDelimiter(line);
+  const parts = [];
+  let value = "";
+  let quoted = false;
+
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index];
+    if (character === '"') {
+      if (quoted && line[index + 1] === '"') {
+        value += '"';
+        index += 1;
+      } else {
+        quoted = !quoted;
+      }
+    } else if (!quoted && character === delimiter) {
+      parts.push(value.trim());
+      value = "";
+    } else {
+      value += character;
+    }
+  }
+
+  parts.push(value.trim());
+  return parts;
 };
 
 const isHeaderLine = (parts) => {
@@ -40,10 +83,23 @@ export const parseBulkAuctions = (text) =>
 export const serializeBulkAuctions = (auctions) =>
   auctions
     .map(
-      (auction) =>
-        `${auction.dataDescription || ""} | ${auction.dataForSell || ""} | ${
-          auction.minimumContribution || ""
-        } | ${auction.auctionDuration || ""}`
+      (auction) => {
+        const escapePart = (value) => {
+          const text = String(value || "");
+          return /[|"\r\n]/.test(text)
+            ? `"${text.replace(/"/g, '""')}"`
+            : text;
+        };
+
+        return [
+          auction.dataDescription,
+          auction.dataForSell,
+          auction.minimumContribution,
+          auction.auctionDuration,
+        ]
+          .map(escapePart)
+          .join(" | ");
+      }
     )
     .join("\n");
 
@@ -79,11 +135,11 @@ export const getAuctionValidationError = (auction, label = "Auction") => {
     return `${label}: duration must be a whole number between 1 and 30.`;
   }
 
-  if (!auction.dataForSell.trim()) {
+  if (!String(auction.dataForSell || "").trim()) {
     return `${label}: data for sale cannot be empty.`;
   }
 
-  if (!auction.dataDescription.trim()) {
+  if (!String(auction.dataDescription || "").trim()) {
     return `${label}: description cannot be empty.`;
   }
 

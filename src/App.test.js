@@ -49,6 +49,25 @@ test('renders the marketplace loading shell', () => {
   expect(screen.getByText(/preparing the workspace/i)).toBeInTheDocument();
 });
 
+test('redirects unknown routes to the marketplace entry screen', async () => {
+  render(
+    <MemoryRouter
+      initialEntries={['/definitely-missing']}
+      future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
+    >
+      <App />
+    </MemoryRouter>
+  );
+
+  expect(
+    await screen.findByRole(
+      'heading',
+      { name: /welcome to our data marketplace/i },
+      { timeout: 20000 }
+    )
+  ).toBeInTheDocument();
+});
+
 test(
   'redirects disconnected users away from protected auction routes',
   async () => {

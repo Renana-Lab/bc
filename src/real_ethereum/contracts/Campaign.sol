@@ -352,6 +352,10 @@ contract CampaignFactory {
         uint256 budgetBefore,
         uint256 budgetAfter
     );
+    event AuctionFinalizationFailed(
+        address indexed campaignAddress,
+        bytes reason
+    );
 
     uint256 defaultBudget = 2000;
     address payable[] public deployedCampaigns;
@@ -413,6 +417,7 @@ contract CampaignFactory {
     }
 
     function resetAllBudgets(uint256 newBudget) public {
+        require(newBudget > 0, "Budget must be positive");
         defaultBudget = newBudget;
         for (uint256 i = 0; i < allUsers.length; i++) {
             address user = allUsers[i];
@@ -440,6 +445,10 @@ contract CampaignFactory {
         string memory dataDesc,
         uint256 duration
     ) public {
+        require(minimum > 0, "Minimum bid must be positive");
+        require(bytes(dataSell).length > 0, "Data for sale is required");
+        require(bytes(dataDesc).length > 0, "Description is required");
+        require(duration >= 1 && duration <= 30, "Duration must be 1-30 minutes");
         uint256 end = 60 * duration + block.timestamp;
         address newCampaign = address(
             new Campaign(minimum, dataSell, dataDesc, msg.sender, end, address(this))
@@ -465,11 +474,38 @@ contract CampaignFactory {
     }
 
     function checkEndedAuctions() public {
-        for (uint256 i = 0; i < deployedCampaigns.length; i++) {
+        _checkEndedAuctions(0, deployedCampaigns.length);
+    }
+
+    function checkEndedAuctionsRange(uint256 start, uint256 maxAuctions)
+        public
+        returns (uint256 nextIndex, uint256 finalized)
+    {
+        require(maxAuctions > 0, "Batch size required");
+        require(start <= deployedCampaigns.length, "Start index out of range");
+        return _checkEndedAuctions(start, maxAuctions);
+    }
+
+    function _checkEndedAuctions(uint256 start, uint256 maxAuctions)
+        internal
+        returns (uint256 nextIndex, uint256 finalized)
+    {
+        uint256 end = start + maxAuctions;
+        if (end > deployedCampaigns.length) {
+            end = deployedCampaigns.length;
+        }
+
+        for (uint256 i = start; i < end; i++) {
             Campaign campaign = Campaign(deployedCampaigns[i]);
             if (!campaign.getStatus() && block.timestamp >= campaign.endTime()) {
-                campaign.finalizeAuctionIfNeeded();
+                try campaign.finalizeAuctionIfNeeded() {
+                    finalized++;
+                } catch (bytes memory reason) {
+                    emit AuctionFinalizationFailed(address(campaign), reason);
+                }
             }
         }
+
+        return (end, finalized);
     }
 }

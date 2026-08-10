@@ -39,9 +39,9 @@ const MetamaskGuidePage = () => {
 
         {/* Steps Section */}
         <div className={styles.metamaskVideo}>
-          <Accordion>
+          <Accordion slots={{ heading: "h2" }}>
             <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-              <Typography variant="h6">
+              <Typography variant="h6" component="span">
                 <span className={styles.stepNumber}>1</span> Download the
                 MetaMask Extension
               </Typography>
@@ -64,9 +64,9 @@ const MetamaskGuidePage = () => {
             </AccordionDetails>
           </Accordion>
 
-          <Accordion>
+          <Accordion slots={{ heading: "h2" }}>
             <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-              <Typography variant="h6">
+              <Typography variant="h6" component="span">
                 <span className={styles.stepNumber}>2</span> Set Up Your
                 MetaMask Wallet
               </Typography>
@@ -80,9 +80,9 @@ const MetamaskGuidePage = () => {
             </AccordionDetails>
           </Accordion>
 
-          <Accordion>
+          <Accordion slots={{ heading: "h2" }}>
             <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-              <Typography variant="h6">
+              <Typography variant="h6" component="span">
                 <span className={styles.stepNumber}>3</span> Add Ethereum to
                 Your Wallet
               </Typography>

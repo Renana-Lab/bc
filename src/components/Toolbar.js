@@ -157,6 +157,7 @@ const ToolbarComponent = (props) => {
               variant="text"
               className={componentStyles.toolbarIconButton}
               onClick={props.openDrawerHandler}
+              aria-label="Open navigation menu"
             >
               <MenuIcon htmlColor="#F0B030" fontSize="large" />
             </Button>
@@ -165,6 +166,7 @@ const ToolbarComponent = (props) => {
               variant="text"
               className={componentStyles.toolbarIconButton}
               onClick={() => navigate("/auctions-list")}
+              aria-label="Open auctions list"
             >
               <HomeIcon htmlColor="#F0B030" fontSize="large" />
             </Button>

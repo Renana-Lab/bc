@@ -20,6 +20,11 @@ const input = {
     },
   },
   settings: {
+    optimizer: {
+      enabled: true,
+      runs: 200,
+    },
+    evmVersion: "shanghai",
     outputSelection: {
       "*": {
         "*": ["*"],
@@ -32,8 +37,15 @@ console.log("🛠 Compiling contracts...");
 console.log("🧪 Using solc version:", solc.version());
 
 const compiled = JSON.parse(solc.compile(JSON.stringify(input)));
+const compilationErrors = (compiled.errors || []).filter(
+  (entry) => entry.severity === "error"
+);
 
-if (!compiled.contracts || !compiled.contracts["Campaign.sol"]) {
+if (
+  compilationErrors.length > 0 ||
+  !compiled.contracts ||
+  !compiled.contracts["Campaign.sol"]
+) {
   console.error("❌ Compilation failed:", compiled.errors);
   throw new Error("Compilation failed.");
 }

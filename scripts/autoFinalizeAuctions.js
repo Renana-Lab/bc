@@ -93,7 +93,8 @@ const factoryFor = (web3, factoryAddress) =>
   new web3.eth.Contract(factoryJson.abi, factoryAddress);
 const campaignFor = (web3, address) => new web3.eth.Contract(campaignJson.abi, address);
 
-const isEnded = (endTime) => Number(endTime) * 1000 <= Date.now();
+const isEnded = (endTime, chainTimestamp) =>
+  Number(endTime) <= Number(chainTimestamp);
 const isAlreadyFinalizedError = (error) => {
   const message = error?.message || String(error);
   return message.includes("Auction already finalized") || message.includes("already finalized");
@@ -178,9 +179,13 @@ async function mapWithConcurrency(items, limit, mapper) {
 }
 
 async function finalizeReadyAuctions(factoryAddress) {
-  const addresses = await withRpcRetry((web3) =>
-    factoryFor(web3, factoryAddress).methods.getDeployedCampaigns().call()
-  );
+  const [addresses, latestBlock] = await Promise.all([
+    withRpcRetry((web3) =>
+      factoryFor(web3, factoryAddress).methods.getDeployedCampaigns().call()
+    ),
+    withRpcRetry((web3) => web3.eth.getBlock("latest")),
+  ]);
+  const chainTimestamp = latestBlock.timestamp;
   const candidates = addresses.filter((address) => !knownClosed.has(address));
 
   const results = await mapWithConcurrency(
@@ -201,7 +206,7 @@ async function finalizeReadyAuctions(factoryAddress) {
           return refundHash ? { address, refundHash } : null;
         }
 
-        if (!isEnded(summary[9])) return null;
+        if (!isEnded(summary[9], chainTimestamp)) return null;
 
         inFlight.add(address);
         const gas = await withRpcRetry((web3) =>

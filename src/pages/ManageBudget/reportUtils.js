@@ -14,10 +14,11 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export const mapWithConcurrency = async (items, limit, mapper) => {
   const results = new Array(items.length);
+  const workerLimit = Math.max(1, Math.floor(Number(limit) || 1));
   let nextIndex = 0;
 
   const workers = Array.from(
-    { length: Math.min(limit, items.length) },
+    { length: Math.min(workerLimit, items.length) },
     async () => {
       while (nextIndex < items.length) {
         const currentIndex = nextIndex;
@@ -46,8 +47,9 @@ const toDateTime = (seconds) => {
 
 const toIsoDateTime = (seconds) => {
   const timestamp = Number(seconds || 0);
-  if (!timestamp) return "";
-  return new Date(timestamp * 1000).toISOString();
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return "";
+  const date = new Date(timestamp * 1000);
+  return Number.isNaN(date.getTime()) ? "" : date.toISOString();
 };
 
 export const toDateInputValue = (seconds) => {
@@ -70,7 +72,7 @@ export const isEndTimeInDateRange = (endTime, filters) => {
   const endMs = Number(endTime || 0) * 1000;
   const { fromMs, toMs } = getDateRangeMs(filters);
 
-  if (!endMs) return false;
+  if (!Number.isFinite(endMs) || endMs <= 0) return false;
   if (fromMs !== null && endMs < fromMs) return false;
   if (toMs !== null && endMs > toMs) return false;
   return true;

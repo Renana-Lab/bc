@@ -284,7 +284,7 @@ function App() {
   const [isMobile, setIsMobile] = useState(false);
 
   useEffect(() => {
-    const mediaQuery = window.matchMedia("(max-width: 767px)");
+    const mediaQuery = window.matchMedia("(max-width: 767.98px)");
     const handleChange = (event) => setIsMobile(event.matches);
 
     setIsMobile(mediaQuery.matches);
@@ -470,6 +470,7 @@ function App() {
                     </RequireWallet>
                   }
                 />
+                <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>
             </div>
           </Suspense>
