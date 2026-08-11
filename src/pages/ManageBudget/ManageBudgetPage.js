@@ -22,6 +22,13 @@ import { readOnlyCall } from "../../real_ethereum/readOnly";
 import componentStyles from "../../styles/components.module.scss";
 import AutoFinalizerMonitor from "./AutoFinalizerMonitor";
 import BotnetControlPanel from "./BotnetControlPanel";
+import LiveActivityPanel from "./LiveActivityPanel";
+import {
+  getPresenceHistory,
+  isPresenceConfigured,
+  setPresenceAdminRole,
+  toActivityReportRows,
+} from "../../telemetry/presenceClient";
 import {
   clearMarketLabel,
   clearMarketFactoryAddress,
@@ -106,6 +113,11 @@ const REPORT_SECTION_OPTIONS = [
     key: "leaderboards",
     label: "Leaderboards",
     description: "Top auctions and bidders by activity/value.",
+  },
+  {
+    key: "activity",
+    label: "Site Activity",
+    description: "Minute-by-minute online users, admins, bots, and active auctions.",
   },
 ];
 const REPORT_DIAGNOSTIC_OPTIONS = [
@@ -360,6 +372,7 @@ const ManageBudgetPage = () => {
   });
   const [showBulkImport, setShowBulkImport] = useState(false);
   const [contractManagerOpen, setContractManagerOpen] = useState(false);
+  const [liveActivityOpen, setLiveActivityOpen] = useState(true);
   const [batchStudioOpen, setBatchStudioOpen] = useState(false);
   const [autoFinalizerOpen, setAutoFinalizerOpen] = useState(false);
   const [botCommandCenterOpen, setBotCommandCenterOpen] = useState(false);
@@ -462,6 +475,11 @@ const ManageBudgetPage = () => {
       setError("Incorrect admin key");
     }
   }, [pass]);
+
+  useEffect(() => {
+    setPresenceAdminRole(isAdmin);
+    return () => setPresenceAdminRole(false);
+  }, [isAdmin]);
 
   const handleBudgetChange = (e) => {
     const value = Number(e.target.value);
@@ -1304,7 +1322,69 @@ const ManageBudgetPage = () => {
         throw new Error("No auctions could be exported for these filters");
       }
 
-      const payload = buildReportPayload(cleanReports, errors, reportOptions);
+      let activityRows = [];
+      let activityRange = null;
+      if (reportSections.activity) {
+        const activityFrom = reportFilters.from
+          ? new Date(`${reportFilters.from}T00:00:00`)
+          : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+        const activityTo = reportFilters.to
+          ? new Date(`${reportFilters.to}T23:59:59.999`)
+          : new Date();
+        activityRange = {
+          from: activityFrom.toISOString(),
+          to: activityTo.toISOString(),
+          source: reportFilters.from && reportFilters.to
+            ? "Selected report dates"
+            : "Latest 30 days",
+        };
+
+        setReportState((current) => ({
+          ...current,
+          message: "Reading live site activity history...",
+        }));
+
+        if (!isPresenceConfigured()) {
+          activityRows = [
+            {
+              Status: "Unavailable",
+              Detail: "Live activity was not configured for this deployment.",
+              "Requested From ISO": activityRange.from,
+              "Requested To ISO": activityRange.to,
+            },
+          ];
+        } else {
+          try {
+            const history = await getPresenceHistory(activityRange);
+            activityRows = history.length
+              ? toActivityReportRows(history)
+              : [
+                  {
+                    Status: "No samples",
+                    Detail: "No live activity samples were recorded in this range.",
+                    "Requested From ISO": activityRange.from,
+                    "Requested To ISO": activityRange.to,
+                  },
+                ];
+          } catch (activityError) {
+            activityRows = [
+              {
+                Status: "Read error",
+                Detail: activityError.message || "Site activity history could not be read.",
+                "Requested From ISO": activityRange.from,
+                "Requested To ISO": activityRange.to,
+              },
+            ];
+          }
+        }
+      }
+
+      const exportReportOptions = {
+        ...reportOptions,
+        activityRows,
+        activityRange,
+      };
+      const payload = buildReportPayload(cleanReports, errors, exportReportOptions);
 
       if (product === "json") {
         downloadJsonReport(payload);
@@ -1317,7 +1397,7 @@ const ManageBudgetPage = () => {
       } else if (product === "payments") {
         downloadCsvReport(payload.tables.analysis.paymentRows, "payment-review");
       } else {
-        downloadWorkbook(buildReportSheets(cleanReports, errors, reportOptions));
+        downloadWorkbook(buildReportSheets(cleanReports, errors, exportReportOptions));
       }
 
       toast.success(
@@ -1527,6 +1607,77 @@ const ManageBudgetPage = () => {
               health, batch auction creation, and exports from one operational
               control area.
             </Typography>
+
+            <Box
+              sx={{
+                width: "100%",
+                mb: 3,
+                p: { xs: 1.5, sm: 2 },
+                border: "1px solid #d9dff2",
+                borderRadius: 3,
+                ...getAdminGlossCardSx(liveActivityOpen),
+              }}
+            >
+              <Box
+                sx={{
+                  display: "grid",
+                  gridTemplateColumns: "minmax(0, 1fr) auto",
+                  alignItems: "start",
+                  gap: 2,
+                }}
+              >
+                <Box sx={{ minWidth: 0 }}>
+                  <Typography variant="h6">Live Experiment Activity</Typography>
+                  <Typography
+                    variant="body2"
+                    color="text.secondary"
+                    sx={{ mt: 0.5, maxWidth: 680 }}
+                  >
+                    See connected participants, authenticated admins, running bots,
+                    and active auctions across the website in near real time.
+                  </Typography>
+                </Box>
+                <IconButton
+                  onClick={() => setLiveActivityOpen((current) => !current)}
+                  aria-expanded={liveActivityOpen}
+                  aria-controls="live-activity-panel"
+                  aria-label={
+                    liveActivityOpen
+                      ? "Collapse Live Experiment Activity"
+                      : "Expand Live Experiment Activity"
+                  }
+                  title={
+                    liveActivityOpen
+                      ? "Collapse Live Experiment Activity"
+                      : "Expand Live Experiment Activity"
+                  }
+                  sx={ADMIN_COLLAPSE_BUTTON_SX}
+                >
+                  <KeyboardArrowDownIcon
+                    sx={{
+                      transform: liveActivityOpen ? "rotate(180deg)" : "rotate(0deg)",
+                      transition: ADMIN_COLLAPSE_ARROW_TRANSITION,
+                    }}
+                  />
+                </IconButton>
+              </Box>
+              <Collapse
+                id="live-activity-panel"
+                in={liveActivityOpen}
+                timeout={ADMIN_COLLAPSE_TIMEOUT_MS}
+                unmountOnExit={false}
+              >
+                <Box
+                  sx={{
+                    pt: 2,
+                    opacity: liveActivityOpen ? 1 : 0,
+                    transition: ADMIN_COLLAPSE_INNER_TRANSITION,
+                  }}
+                >
+                  <LiveActivityPanel />
+                </Box>
+              </Collapse>
+            </Box>
 
             <Box
               sx={{

@@ -21,7 +21,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: yarn
 
       - name: Enable Yarn
@@ -29,6 +29,31 @@ jobs:
 
       - name: Install dependencies
         run: yarn install --frozen-lockfile --non-interactive
+
+      - name: Install MetaMask Agent Wallet CLI
+        run: npm install --global @metamask/agent-wallet@6.0.0
+
+      - name: Prepare MetaMask Agent Wallet
+        continue-on-error: true
+        shell: bash
+        env:
+          MM_CLI_TOKEN: ${{ secrets.MM_CLI_TOKEN }}
+          METAMASK_AGENT_EXPECTED_ADDRESS: ${{ secrets.METAMASK_AGENT_EXPECTED_ADDRESS }}
+        run: |
+          set -euo pipefail
+          if [ -z "$MM_CLI_TOKEN" ]; then
+            echo "::warning::MM_CLI_TOKEN is not configured; private-key bots will run, but the Agent Wallet bot will report not authenticated."
+            exit 0
+          fi
+          mm login --token "$MM_CLI_TOKEN" --json
+          mm wallet list --json || true
+          mm doctor --json > /tmp/mm-doctor.json
+          cat /tmp/mm-doctor.json
+          if ! node -e 'const d=JSON.parse(require("fs").readFileSync(0,"utf8")); process.exit((d.data || d).initialized === true ? 0 : 1)' < /tmp/mm-doctor.json; then
+            mm init --wallet server-wallet --mode guard --json
+          fi
+          mm doctor --json
+          mm wallet address --chain-namespace evm --json
 
       - name: Run enabled bot cycle
         run: yarn botnet:cycle
@@ -38,3 +63,5 @@ jobs:
           FACTORY_ADDRESS: ${{ secrets.FACTORY_ADDRESS }}
           BOTNET_BOTS_JSON: ${{ secrets.BOTNET_BOTS_JSON }}
           BOTNET_FACTORY_MARKET: production
+          MM_CLI_TOKEN: ${{ secrets.MM_CLI_TOKEN }}
+          METAMASK_AGENT_EXPECTED_ADDRESS: ${{ secrets.METAMASK_AGENT_EXPECTED_ADDRESS }}

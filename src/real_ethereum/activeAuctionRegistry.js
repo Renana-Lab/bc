@@ -113,6 +113,10 @@ const getCachedSnapshot = (factoryAddress) => {
   return stored;
 };
 
+export const getActiveAuctionSnapshot = (
+  factoryAddress = getActiveFactoryAddress(),
+) => getCachedSnapshot(factoryAddress);
+
 const mergeAuctions = (...groups) => {
   const byAddress = new Map();
   groups.flat().forEach((auction) => {

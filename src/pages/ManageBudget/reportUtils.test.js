@@ -92,4 +92,27 @@ describe("report generation stress cases", () => {
     expect(shortAddress("")).toBe("");
     expect(shortAddress("0x1234567890abcdef")).toBe("0x1234...cdef");
   });
+
+  test("includes selected activity history without duplicating it in report options", () => {
+    const activityRows = [
+      {
+        "Time ISO": "2026-08-11T08:30:00.000Z",
+        "Users Online": 4,
+        "Admins Online": 1,
+        "Bots Online": 3,
+        "Active Auctions": 2,
+        "Browser Sessions": 6,
+      },
+    ];
+    const options = { activityRows, sections: { activity: true } };
+    const sheets = buildReportSheets([makeReport()], [], options);
+    const payload = buildReportPayload([makeReport()], [], options);
+
+    expect(sheets.find((sheet) => sheet.name === "Site Activity")?.rows).toEqual(
+      activityRows
+    );
+    expect(payload.tables.activityRows).toEqual(activityRows);
+    expect(payload.totals.activitySamples).toBe(1);
+    expect(payload.options.activityRows).toBeUndefined();
+  });
 });

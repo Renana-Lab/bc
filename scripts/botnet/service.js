@@ -1,3 +1,4 @@
+/* global BigInt */
 const fs = require("fs");
 const http = require("http");
 const path = require("path");
@@ -9,6 +10,10 @@ const Web3 = Web3Package.Web3 || Web3Package;
 const campaignJson = require("../../src/real_ethereum/build/Campaign.json");
 const factoryJson = require("../../src/real_ethereum/build/CampaignFactory.json");
 const { loadFactoryAddress } = require("../factoryAddressLoader");
+const { createMetaMaskAgentWallet } = require("./metamaskAgentWallet");
+
+const PRIVATE_KEY_WALLET = "private-key";
+const METAMASK_AGENT_WALLET = "metamask-agent";
 
 const ROOT_DIR = path.resolve(__dirname, "../..");
 const DATA_DIR = path.resolve(process.env.BOTNET_DATA_DIR || path.join(ROOT_DIR, "botnet-data"));
@@ -76,6 +81,18 @@ function isValidPrivateKey(value) {
   return /^0x[a-fA-F0-9]{64}$/.test(normalizePrivateKey(value));
 }
 
+function normalizeWalletType(value) {
+  return value === METAMASK_AGENT_WALLET ? METAMASK_AGENT_WALLET : PRIVATE_KEY_WALLET;
+}
+
+function isMetaMaskAgentBot(bot) {
+  return normalizeWalletType(bot?.walletType) === METAMASK_AGENT_WALLET;
+}
+
+function isBotConfigured(bot) {
+  return isMetaMaskAgentBot(bot) || isValidPrivateKey(bot?.privateKey);
+}
+
 function toBool(value, fallback = false) {
   if (value === undefined || value === null || value === "") return fallback;
   if (typeof value === "boolean") return value;
@@ -107,17 +124,37 @@ function createBotId(name = "bot") {
   return `${slug}-${crypto.randomBytes(3).toString("hex")}`;
 }
 
+function ensureSingleMetaMaskAgentBot(bots = []) {
+  const normalized = bots.map(normalizeBotRecord);
+  if (normalized.length < 4) return normalized;
+
+  const existingAgentIndex = normalized.findIndex(isMetaMaskAgentBot);
+  const agentIndex = existingAgentIndex >= 0 ? existingAgentIndex : 3;
+  return normalized.map((bot, index) => {
+    if (index === agentIndex) {
+      return normalizeBotRecord({
+        ...bot,
+        name: existingAgentIndex >= 0 ? bot.name : "MetaMask Wallet Agent",
+        walletType: METAMASK_AGENT_WALLET,
+        importWarning: "",
+      });
+    }
+    if (!isMetaMaskAgentBot(bot)) return bot;
+    return normalizeBotRecord({ ...bot, walletType: PRIVATE_KEY_WALLET, importWarning: "" });
+  });
+}
+
 function loadSeedBotsFromEnv() {
   if (!process.env.BOTNET_BOTS_JSON) return [];
   const parsed = JSON.parse(process.env.BOTNET_BOTS_JSON);
-  return Array.isArray(parsed) ? parsed.map(normalizeBotRecord) : [];
+  return Array.isArray(parsed) ? ensureSingleMetaMaskAgentBot(parsed) : [];
 }
 
 function loadBots() {
   try {
     const raw = fs.readFileSync(BOTS_PATH, "utf8");
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.map(normalizeBotRecord) : [];
+    return Array.isArray(parsed) ? ensureSingleMetaMaskAgentBot(parsed) : [];
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
   }
@@ -133,7 +170,7 @@ function loadBots() {
   try {
     const raw = fs.readFileSync(BOTS_PATH, "utf8");
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.map(normalizeBotRecord) : [];
+    return Array.isArray(parsed) ? ensureSingleMetaMaskAgentBot(parsed) : [];
   } catch (error) {
     if (error.code === "ENOENT") return [];
     throw error;
@@ -142,7 +179,11 @@ function loadBots() {
 
 function saveBots(bots) {
   ensureDataDir();
-  fs.writeFileSync(BOTS_PATH, `${JSON.stringify(bots, null, 2)}\n`, "utf8");
+  fs.writeFileSync(
+    BOTS_PATH,
+    `${JSON.stringify(ensureSingleMetaMaskAgentBot(bots), null, 2)}\n`,
+    "utf8",
+  );
 }
 
 function importLegacyBots({ force = false } = {}) {
@@ -200,12 +241,16 @@ function seedBotsFromLegacyIfNeeded() {
 
 function normalizeBotRecord(input = {}) {
   const privateKey = normalizePrivateKey(input.privateKey);
+  const walletType = normalizeWalletType(input.walletType);
   const validPrivateKey = isValidPrivateKey(privateKey);
+  const configured = walletType === METAMASK_AGENT_WALLET || validPrivateKey;
   return {
     id: String(input.id || createBotId(input.name)).trim(),
     name: String(input.name || "Bot").trim(),
+    walletType,
     privateKey,
-    enabled: validPrivateKey && toBool(input.enabled, true),
+    wallet: String(input.wallet || "").trim(),
+    enabled: configured && toBool(input.enabled, true),
     overrides: {
       ...DEFAULT_OVERRIDES,
       ...(input.overrides || {}),
@@ -214,11 +259,12 @@ function normalizeBotRecord(input = {}) {
     updatedAt: input.updatedAt || new Date().toISOString(),
     importWarning:
       input.importWarning ||
-      (validPrivateKey ? "" : "Private key is missing or invalid; bot disabled."),
+      (configured ? "" : "Private key is missing or invalid; bot disabled."),
   };
 }
 
 function getBotWalletAddress(bot) {
+  if (isMetaMaskAgentBot(bot)) return bot.wallet || null;
   if (!isValidPrivateKey(bot.privateKey)) return null;
   try {
     const web3 = new Web3();
@@ -232,12 +278,13 @@ function getBotWalletAddress(bot) {
 
 function serializeBot(bot) {
   const state = runtime.get(bot.id) || {};
-  const configurationError = isValidPrivateKey(bot.privateKey)
+  const configurationError = isBotConfigured(bot)
     ? bot.importWarning || ""
     : "Private key is missing or invalid.";
   return {
     id: bot.id,
     name: bot.name,
+    walletType: normalizeWalletType(bot.walletType),
     enabled: bot.enabled,
     overrides: bot.overrides,
     createdAt: bot.createdAt,
@@ -288,8 +335,8 @@ function saveBot(input = {}) {
     updatedAt: new Date().toISOString(),
   });
 
-  if (!isValidPrivateKey(next.privateKey)) {
-    throw new Error("Each bot needs a valid 0x private key.");
+  if (!isBotConfigured(next)) {
+    throw new Error("Each bot needs a valid private key or Agent Wallet configuration.");
   }
 
   const index = bots.findIndex((bot) => bot.id === next.id);
@@ -356,7 +403,9 @@ function smartAssignPrivateKeys(input = {}) {
       return;
     }
 
-    let target = bots.find((bot) => !isValidPrivateKey(bot.privateKey));
+    let target = bots.find(
+      (bot) => !isMetaMaskAgentBot(bot) && !isValidPrivateKey(bot.privateKey)
+    );
     if (!target) {
       createdCount += 1;
       target = normalizeBotRecord({
@@ -447,23 +496,39 @@ function getFactoryAddress() {
   );
 }
 
-function buildContext(bot) {
-  if (!isValidPrivateKey(bot.privateKey)) {
-    throw new Error(`Bot ${bot.name} has an invalid private key.`);
+async function buildContext(bot) {
+  if (!isBotConfigured(bot)) {
+    throw new Error(`Bot ${bot.name} has an invalid wallet configuration.`);
   }
 
   const rpcUrl = getRpcUrls()[0];
   if (!rpcUrl) throw new Error("Missing BOTNET_RPC_URL/RPC_URL/INFURA_KEY.");
 
   const web3 = new Web3(rpcUrl);
-  const account = web3.eth.accounts.privateKeyToAccount(normalizePrivateKey(bot.privateKey));
-  web3.eth.accounts.wallet.add(account);
-  web3.eth.defaultAccount = account.address;
+  let account;
+  let agentWallet = null;
+  if (isMetaMaskAgentBot(bot)) {
+    agentWallet = createMetaMaskAgentWallet();
+    await agentWallet.assertReady();
+    account = { address: await agentWallet.getAddress() };
+  } else {
+    account = web3.eth.accounts.privateKeyToAccount(normalizePrivateKey(bot.privateKey));
+    web3.eth.accounts.wallet.add(account);
+    web3.eth.defaultAccount = account.address;
+  }
 
   const factoryAddress = getFactoryAddress();
   const factory = new web3.eth.Contract(factoryJson.abi, factoryAddress);
 
-  return { web3, account, factory, factoryAddress, rpcUrl };
+  return {
+    web3,
+    account,
+    agentWallet,
+    signerType: isMetaMaskAgentBot(bot) ? METAMASK_AGENT_WALLET : PRIVATE_KEY_WALLET,
+    factory,
+    factoryAddress,
+    rpcUrl,
+  };
 }
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -590,14 +655,24 @@ function getBidDecision(auction, budget, strategy) {
   return { bid: true, amountWei: incrementalValue, targetBid };
 }
 
-async function sendContractTx(ctx, method, options) {
+async function sendContractTx(ctx, contractAddress, method, options, intent) {
   let gas = 2500000;
   try {
     gas = await method.estimateGas(options);
   } catch (_) {}
+  const gasWithBuffer = Math.ceil(Number(gas) * 1.2);
+  if (ctx.signerType === METAMASK_AGENT_WALLET) {
+    return ctx.agentWallet.sendTransaction({
+      to: contractAddress,
+      data: method.encodeABI(),
+      value: options.value || "0",
+      gas: gasWithBuffer,
+      intent,
+    });
+  }
   return method.send({
     ...options,
-    gas: Math.ceil(Number(gas) * 1.2),
+    gas: gasWithBuffer,
   });
 }
 
@@ -620,7 +695,7 @@ async function runBotCycle(idOrBot) {
   state.stats.cycles += 1;
 
   try {
-    const ctx = buildContext(bot);
+    const ctx = await buildContext(bot);
     state.wallet = ctx.account.address;
     const strategy = getStrategy(bot);
     const auctions = await fetchAuctions(ctx, bot);
@@ -630,9 +705,13 @@ async function runBotCycle(idOrBot) {
         (item) => !item.isActive && !item.closed && item.isManager && item.approversCount > 0
       )) {
         try {
-          await sendContractTx(ctx, auction.campaign.methods.finalizeAuctionIfNeeded(), {
-            from: ctx.account.address,
-          });
+          await sendContractTx(
+            ctx,
+            auction.address,
+            auction.campaign.methods.finalizeAuctionIfNeeded(),
+            { from: ctx.account.address },
+            `Finalize ended auction ${auction.address}`,
+          );
           state.stats.finalized += 1;
           log("info", `Finalized auction ${auction.address}`, { bot: bot.name });
           await wait(1000);
@@ -652,10 +731,13 @@ async function runBotCycle(idOrBot) {
       const decision = getBidDecision(candidate, budget, strategy);
 
       if (decision.bid) {
-        await sendContractTx(ctx, candidate.campaign.methods.contribute(), {
-          from: ctx.account.address,
-          value: decision.amountWei.toString(),
-        });
+        await sendContractTx(
+          ctx,
+          candidate.address,
+          candidate.campaign.methods.contribute(),
+          { from: ctx.account.address, value: decision.amountWei.toString() },
+          `Place a ${decision.amountWei.toString()} wei bid on auction ${candidate.address}`,
+        );
         state.stats.bids += 1;
         log("info", `Bid sent by ${bot.name}`, {
           auction: candidate.address,
@@ -697,8 +779,8 @@ function getRuntimeState(id) {
 async function startBot(id) {
   const bot = loadBots().find((item) => item.id === id);
   if (!bot) throw new Error("Bot not found.");
-  if (!isValidPrivateKey(bot.privateKey)) {
-    throw new Error(`Bot ${bot.name} has an invalid private key.`);
+  if (!isBotConfigured(bot)) {
+    throw new Error(`Bot ${bot.name} is not configured with a usable wallet.`);
   }
 
   const state = getRuntimeState(id);
@@ -734,7 +816,7 @@ async function stopBot(id) {
 }
 
 async function startEnabledBots() {
-  const bots = loadBots().filter((bot) => bot.enabled && isValidPrivateKey(bot.privateKey));
+  const bots = loadBots().filter((bot) => bot.enabled && isBotConfigured(bot));
   for (const bot of bots) {
     await startBot(bot.id);
   }
@@ -751,19 +833,33 @@ async function stopAllBots() {
 
 function selectBots(scope = "running") {
   const bots = loadBots();
-  if (scope === "all") return bots.filter((bot) => isValidPrivateKey(bot.privateKey));
+  if (scope === "all") return bots.filter(isBotConfigured);
   if (scope === "enabled") {
-    return bots.filter((bot) => bot.enabled && isValidPrivateKey(bot.privateKey));
+    return bots.filter((bot) => bot.enabled && isBotConfigured(bot));
   }
   return bots.filter((bot) => runtime.get(bot.id)?.timer);
 }
 
+async function runWithConcurrency(items, worker, maxConcurrent = 4) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(1, Number(maxConcurrent) || 1), items.length);
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < items.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        results[index] = await worker(items[index], index);
+      }
+    }),
+  );
+  return results;
+}
+
 async function runSelectedBotsOnce(scope = "running") {
   const bots = selectBots(scope);
-  const results = [];
-  for (const bot of bots) {
-    results.push(await runBotCycle(bot));
-  }
+  const maxConcurrent = Math.max(1, Number(process.env.BOTNET_MAX_CONCURRENT_BOTS || 4));
+  const results = await runWithConcurrency(bots, runBotCycle, maxConcurrent);
   return { ok: true, triggered: results.length, bots: results };
 }
 
@@ -916,7 +1012,12 @@ module.exports = {
   getBotNetworkStatus,
   getLogs,
   loadBots,
+  isBotConfigured,
+  isMetaMaskAgentBot,
+  ensureSingleMetaMaskAgentBot,
+  normalizeBotRecord,
   runBotCycle,
+  runWithConcurrency,
   runSelectedBotsOnce,
   saveBot,
   smartAssignPrivateKeys,

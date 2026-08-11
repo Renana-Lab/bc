@@ -1540,6 +1540,37 @@ export const buildReportSheets = (reports, errors, options = {}) => {
       "Why It Matters": "Auctions with zero bids still appear explicitly so they are not silently hidden.",
       Example: "",
     },
+    {
+      Order: 15,
+      Section: "Report Info",
+      Term: "Site Activity",
+      Definition:
+        "Minute-by-minute anonymous presence samples showing online users, authenticated admins, running bots, active auctions, and browser sessions during the requested experiment range.",
+      "Where It Appears": "README, Site Activity",
+      "Why It Matters":
+        "Connects auction outcomes to the number of people and automated bidders present during the experiment.",
+      Example: "Users Online = 4, Admins Online = 1, Bots Online = 3.",
+    },
+    {
+      Order: 16,
+      Section: "Definitions",
+      Term: "Online",
+      Definition:
+        "A connected wallet or running bot with a shared heartbeat received within the presence expiry window. Multiple tabs are deduplicated by anonymous wallet hash.",
+      "Where It Appears": "README, Site Activity",
+      "Why It Matters": "Prevents stale tabs and duplicate windows from inflating experiment counts.",
+      Example: "A wallet open in three tabs counts once.",
+    },
+    {
+      Order: 17,
+      Section: "Definitions",
+      Term: "Browser Sessions",
+      Definition:
+        "The number of fresh connected browser tabs before wallet-level deduplication. Use Users Online and Admins Online for participant counts.",
+      "Where It Appears": "README, Site Activity",
+      "Why It Matters": "Helps diagnose duplicated tabs without treating them as extra participants.",
+      Example: "5 sessions can represent 3 unique connected wallets.",
+    },
     ...analysis.dictionaryRows,
   ];
 
@@ -1557,6 +1588,11 @@ export const buildReportSheets = (reports, errors, options = {}) => {
       },
       { key: "flags", name: "Review Flags", rows: analysis.flagRows },
       { key: "leaderboards", name: "Leaderboards", rows: analysis.leaderboardRows },
+      {
+        key: "activity",
+        name: "Site Activity",
+        rows: options.activityRows || [],
+      },
     ],
     options
   ).map(({ name, rows }) => ({ name, rows }));
@@ -1571,6 +1607,9 @@ export const buildReportPayload = (reports, errors, options = {}) => {
     ...(includeSection("summary") ? { summaryRows: tables.summaryRows } : {}),
     ...(includeSection("bids") ? { allBidRows: tables.allBidRows } : {}),
     ...(includeSection("timeline") ? { timelineRows: tables.timelineRows } : {}),
+    ...(includeSection("activity")
+      ? { activityRows: options.activityRows || [] }
+      : {}),
     analysis: {
       ...(includeSection("readme")
         ? { dictionaryRows: tables.analysis.dictionaryRows }
@@ -1591,6 +1630,8 @@ export const buildReportPayload = (reports, errors, options = {}) => {
   let totalBidValue = 0n;
   let totalHighestBid = 0n;
   let bidRows = 0;
+  const payloadOptions = { ...options };
+  delete payloadOptions.activityRows;
 
   reports.forEach(({ auction, transactions }) => {
     totalHighestBid += toBigIntSafe(auction.highestBid);
@@ -1604,7 +1645,7 @@ export const buildReportPayload = (reports, errors, options = {}) => {
   return {
     generatedAt,
     generatedAtIso: generatedDate.toISOString(),
-    options,
+    options: payloadOptions,
     totals: {
       auctions: reports.length,
       auctionsWithErrors: errors.length,
@@ -1617,6 +1658,9 @@ export const buildReportPayload = (reports, errors, options = {}) => {
       pendingSellerPayments: tables.analysis.flagRows.filter(
         (row) => row.Flag === "Seller payment pending"
       ).length,
+      activitySamples: includeSection("activity")
+        ? (options.activityRows || []).filter((row) => row["Time ISO"]).length
+        : 0,
     },
     tables: selectedTables,
     auctions: reports.map(({ auction, ended, transactions, bidderStatuses }) => ({
@@ -1702,6 +1746,7 @@ export const downloadHtmlReport = (payload) => {
       totals.auctionsWithErrors
     )}</div></div>
   </div>
+  ${showSection("activity") ? renderHtmlTable("Site Activity", tables.activityRows, 2000) : ""}
   ${showSection("flags") ? renderHtmlTable("Review Flags", tables.analysis.flagRows, 30) : ""}
   ${showSection("leaderboards") ? renderHtmlTable("Leaderboards", tables.analysis.leaderboardRows, 40) : ""}
   ${showSection("participants") ? renderHtmlTable("Participant Analysis", tables.analysis.participantRows, 40) : ""}

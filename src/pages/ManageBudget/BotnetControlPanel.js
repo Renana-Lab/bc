@@ -22,11 +22,15 @@ import {
   getRpcFailureKind,
   isRpcProviderFailure,
 } from "../../real_ethereum/rpcConfig";
+import {
+  BOTNET_STATE_EVENT,
+  LOCAL_BOTS_KEY,
+  LOCAL_LOGS_KEY,
+} from "../../telemetry/botPresence";
 
-const LOCAL_BOTS_KEY = "bc:admin-botnet:bots:v1";
-const LOCAL_LOGS_KEY = "bc:admin-botnet:logs:v1";
-const BOTNET_STATE_EVENT = "bc:admin-botnet:state-change";
 const activeBotCycles = new Set();
+export const PRIVATE_KEY_WALLET = "private-key";
+export const METAMASK_AGENT_WALLET = "metamask-agent";
 const RPC_URLS = getConfiguredRpcUrls();
 const BOT_MAX_BOTS_PER_TICK = Math.max(
   1,
@@ -104,6 +108,11 @@ export const normalizePrivateKey = (value) => {
 
 export const isValidPrivateKey = (value) => /^0x[a-fA-F0-9]{64}$/.test(normalizePrivateKey(value));
 
+export const isMetaMaskAgentBot = (bot) => bot?.walletType === METAMASK_AGENT_WALLET;
+
+export const isBrowserRunnableBot = (bot) =>
+  !isMetaMaskAgentBot(bot) && isValidPrivateKey(bot?.privateKey);
+
 const toBool = (value, fallback = false) => {
   if (value === undefined || value === null || value === "") return fallback;
   if (typeof value === "boolean") return value;
@@ -149,7 +158,10 @@ const getWalletAddress = (privateKey) => {
 
 export const normalizeBot = (bot = {}) => {
   const privateKey = normalizePrivateKey(bot.privateKey);
+  const walletType = isMetaMaskAgentBot(bot) ? METAMASK_AGENT_WALLET : PRIVATE_KEY_WALLET;
+  const agentWallet = walletType === METAMASK_AGENT_WALLET;
   const validPrivateKey = isValidPrivateKey(privateKey);
+  const configured = agentWallet || validPrivateKey;
   const storedLastError = bot.lastError || null;
   const normalizedLastError =
     storedLastError && isRpcProviderFailure(storedLastError)
@@ -163,11 +175,14 @@ export const normalizeBot = (bot = {}) => {
   return {
     id: bot.id || createBotId(bot.name),
     name: String(bot.name || "Bot").trim(),
+    walletType,
     privateKey,
-    wallet: getWalletAddress(privateKey),
-    enabled: validPrivateKey && toBool(bot.enabled, true),
-    running: Boolean(bot.running),
-    status: validPrivateKey
+    wallet: agentWallet ? String(bot.wallet || "") : getWalletAddress(privateKey),
+    enabled: configured && toBool(bot.enabled, true),
+    running: agentWallet ? false : Boolean(bot.running),
+    status: agentWallet
+      ? "runner-managed"
+      : validPrivateKey
       ? staleRunningCycle
         ? bot.running
           ? "running"
@@ -175,7 +190,9 @@ export const normalizeBot = (bot = {}) => {
         : bot.status || "stopped"
       : "invalid-config",
     lastCycleAt: bot.lastCycleAt || null,
-    lastError: validPrivateKey
+    lastError: agentWallet
+      ? null
+      : validPrivateKey
       ? staleRunningCycle
         ? "Previous cycle was interrupted and recovered by the local scheduler."
         : normalizedLastError
@@ -195,15 +212,37 @@ export const normalizeBot = (bot = {}) => {
   };
 };
 
+export const ensureSingleMetaMaskAgentBot = (bots = []) => {
+  const normalized = bots.map(normalizeBot);
+  if (normalized.length < 4) return normalized;
+
+  const existingAgentIndex = normalized.findIndex(isMetaMaskAgentBot);
+  const agentIndex = existingAgentIndex >= 0 ? existingAgentIndex : 3;
+  return normalized.map((bot, index) => {
+    if (index === agentIndex) {
+      return normalizeBot({
+        ...bot,
+        name: existingAgentIndex >= 0 ? bot.name : "MetaMask Wallet Agent",
+        walletType: METAMASK_AGENT_WALLET,
+        running: false,
+        status: "runner-managed",
+        lastError: null,
+      });
+    }
+    if (!isMetaMaskAgentBot(bot)) return bot;
+    return normalizeBot({ ...bot, walletType: PRIVATE_KEY_WALLET });
+  });
+};
+
 const notifyBotnetStateChanged = () => {
   window.setTimeout(() => {
     window.dispatchEvent(new Event(BOTNET_STATE_EVENT));
   }, 0);
 };
 
-const loadStoredBots = () => readJson(LOCAL_BOTS_KEY, []).map(normalizeBot);
+const loadStoredBots = () => ensureSingleMetaMaskAgentBot(readJson(LOCAL_BOTS_KEY, []));
 const saveStoredBots = (bots) => {
-  writeJson(LOCAL_BOTS_KEY, bots.map(normalizeBot));
+  writeJson(LOCAL_BOTS_KEY, ensureSingleMetaMaskAgentBot(bots));
   notifyBotnetStateChanged();
 };
 const loadStoredLogs = () => readJson(LOCAL_LOGS_KEY, []);
@@ -243,6 +282,7 @@ const getBotStatusColor = (status) => {
   if (status === "crashed" || status === "error") return "#b3261e";
   if (status === "running-cycle") return "#7c5c00";
   if (status === "invalid-config") return "#9a3412";
+  if (status === "runner-managed") return "#3155a6";
   return "#5f6680";
 };
 
@@ -365,7 +405,7 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
         typeof updater === "function"
           ? updater(latestStoredBots)
           : updater;
-      const normalized = next.map(normalizeBot);
+      const normalized = ensureSingleMetaMaskAgentBot(next);
       saveStoredBots(normalized);
       return normalized;
     });
@@ -480,6 +520,11 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
       updateBot(bot.id, { status: "running-cycle", lastCycleAt: new Date().toISOString(), lastError: null });
 
       try {
+        if (isMetaMaskAgentBot(bot)) {
+          throw new Error(
+            "This bot is signed by MetaMask Agent Wallet on the Node automation runner, not in the browser.",
+          );
+        }
         if (!isValidPrivateKey(bot.privateKey)) throw new Error("Invalid bot private key.");
         const rpcUrl = getNextRpcUrl();
         if (!rpcUrl) {
@@ -672,7 +717,7 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
   const runBotsInBatches = useCallback(
     async (selectedBots, limit = selectedBots.length) => {
       const runnableBots = selectedBots
-        .filter((bot) => bot.enabled && isValidPrivateKey(bot.privateKey))
+        .filter((bot) => bot.enabled && isBrowserRunnableBot(bot))
         .slice(0, limit);
       const workerCount = Math.min(BOT_MAX_BOTS_PER_TICK, runnableBots.length);
       if (!workerCount) return false;
@@ -745,7 +790,7 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
       try {
         const currentBots = loadStoredBots();
         const dueBots = currentBots.filter((bot) => {
-          if (!bot.running || !bot.enabled || !isValidPrivateKey(bot.privateKey)) {
+          if (!bot.running || !bot.enabled || !isBrowserRunnableBot(bot)) {
             return false;
           }
           const strategy = getStrategy(bot);
@@ -772,7 +817,7 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
       if (action === "start-network") {
         commitBots((current) =>
           current.map((bot) =>
-            bot.enabled && isValidPrivateKey(bot.privateKey)
+            bot.enabled && isBrowserRunnableBot(bot)
               ? { ...bot, running: true, status: "running", lastError: null }
               : bot
           )
@@ -784,11 +829,18 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
         );
         toast.success("All bots stopped");
       } else if (action === "run-network") {
-        const selected = loadStoredBots().filter((bot) => bot.enabled && isValidPrivateKey(bot.privateKey));
+        const selected = loadStoredBots().filter(
+          (bot) => bot.enabled && isBrowserRunnableBot(bot),
+        );
         const completed = await runBotsInBatches(selected);
         if (completed) toast.success("Enabled bots ran once");
         else toast.error("No bot cycle completed. Check the connection notice and bot events.");
       } else if (action === "start-bot") {
+        const bot = loadStoredBots().find((item) => item.id === body.id);
+        if (isMetaMaskAgentBot(bot)) {
+          toast.error("The Agent Wallet bot is controlled by the Node automation runner.");
+          return;
+        }
         updateBot(body.id, { running: true, status: "running", lastError: null });
         toast.success("Bot started");
       } else if (action === "stop-bot") {
@@ -796,6 +848,10 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
         toast.success("Bot stopped");
       } else if (action === "run-bot") {
         const bot = loadStoredBots().find((item) => item.id === body.id);
+        if (isMetaMaskAgentBot(bot)) {
+          toast.error("Run this bot through the MetaMask Agent Wallet automation runner.");
+          return;
+        }
         const completed = await runBotCycle(bot);
         if (completed) toast.success("Bot ran once");
         else toast.error("The bot cycle did not complete. Check its status and recent events.");
@@ -890,7 +946,9 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
             return;
           }
 
-          const targetIndex = next.findIndex((bot) => !isValidPrivateKey(bot.privateKey));
+          const targetIndex = next.findIndex(
+            (bot) => !isMetaMaskAgentBot(bot) && !isValidPrivateKey(bot.privateKey),
+          );
           const target = normalizeBot({
             ...(targetIndex >= 0 ? next[targetIndex] : {}),
             name:
@@ -997,8 +1055,9 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
               Admin Zone bot engine
             </Typography>
             <Typography variant="caption" color="text.secondary">
-              Browser-local bots. No external botnet API. Factory: {shortAddress(getActiveFactoryAddress())}
-              . Runs up to {BOT_MAX_BOTS_PER_TICK} bots at the same time with RPC backoff.
+              Three bots run locally in the browser; one uses MetaMask Agent Wallet on the
+              automation runner. Factory: {shortAddress(getActiveFactoryAddress())}. Runs up
+              to {BOT_MAX_BOTS_PER_TICK} bots at the same time with RPC backoff.
             </Typography>
           </Box>
           <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
@@ -1254,10 +1313,26 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
                     >
                       {bot.enabled ? "enabled" : "disabled"}
                     </Typography>
+                    {isMetaMaskAgentBot(bot) && (
+                      <Typography
+                        variant="caption"
+                        sx={{
+                          px: 1,
+                          py: 0.25,
+                          borderRadius: 999,
+                          backgroundColor: "#e9efff",
+                          color: "#173b91",
+                          fontWeight: 800,
+                        }}
+                      >
+                        MetaMask Agent Wallet
+                      </Typography>
+                    )}
                   </Box>
                   <Typography variant="caption" color="text.secondary">
-                    {shortAddress(bot.wallet)} | key {shortKey(bot.privateKey)} | last
-                    cycle {formatDate(bot.lastCycleAt)}
+                    {shortAddress(bot.wallet)} | {isMetaMaskAgentBot(bot)
+                      ? "runner-managed wallet session"
+                      : `key ${shortKey(bot.privateKey)}`} | last cycle {formatDate(bot.lastCycleAt)}
                   </Typography>
                   {bot.stats && (
                     <Typography variant="caption" color="text.secondary" display="block">
@@ -1272,12 +1347,17 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
                     </Typography>
                   )}
                 </Box>
-                <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
+                <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap", alignItems: "center" }}>
+                  {isMetaMaskAgentBot(bot) && (
+                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700 }}>
+                      Node runner
+                    </Typography>
+                  )}
                   <Button
                     size="small"
                     variant="contained"
                     onClick={() => runAction(`start-${bot.id}`, "start-bot", { id: bot.id })}
-                    disabled={isBusy}
+                    disabled={isBusy || isMetaMaskAgentBot(bot)}
                     sx={{ borderRadius: 999, backgroundColor: "#103090" }}
                   >
                     Start
@@ -1286,7 +1366,7 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
                     size="small"
                     variant="outlined"
                     onClick={() => runAction(`run-${bot.id}`, "run-bot", { id: bot.id })}
-                    disabled={isBusy}
+                    disabled={isBusy || isMetaMaskAgentBot(bot)}
                     sx={{ borderRadius: 999 }}
                   >
                     Run
@@ -1296,7 +1376,7 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
                     variant="outlined"
                     color="error"
                     onClick={() => runAction(`stop-${bot.id}`, "stop-bot", { id: bot.id })}
-                    disabled={isBusy}
+                    disabled={isBusy || isMetaMaskAgentBot(bot)}
                     sx={{ borderRadius: 999 }}
                   >
                     Stop

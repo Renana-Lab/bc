@@ -9,6 +9,8 @@ import {
 import { MetaMaskProvider, useMetaMask } from "./Context/Context.js";
 import { Toaster } from "react-hot-toast";
 import PageSeo from "./components/Seo.js";
+import SitePresence from "./telemetry/SitePresence.js";
+import GlobalBotPresence from "./telemetry/GlobalBotPresence.js";
 
 const HomePage = lazy(() => import("./pages/Home/HomePage.js"));
 const NewAuctionPage = lazy(() => import("./pages/NewAuction/NewAuctionPage.js"));
@@ -158,6 +160,7 @@ const RequireWallet = ({ children }) => {
   const { provider, checkIfConnected } = useMetaMask();
   const location = useLocation();
   const [walletStatus, setWalletStatus] = useState("checking");
+  const [connectedAccount, setConnectedAccount] = useState("");
   const walletStatusRef = useRef("checking");
   const disconnectConfirmTimerRef = useRef(null);
 
@@ -185,6 +188,7 @@ const RequireWallet = ({ children }) => {
       if (connected) {
         clearDisconnectConfirm();
         localStorage.setItem("notConnected", "false");
+        setConnectedAccount(accounts[0]);
         setGuardStatus("connected");
         return;
       }
@@ -210,6 +214,7 @@ const RequireWallet = ({ children }) => {
 
       clearDisconnectConfirm();
       localStorage.setItem("notConnected", "true");
+      setConnectedAccount("");
       setGuardStatus("disconnected");
     };
 
@@ -276,7 +281,7 @@ const RequireWallet = ({ children }) => {
     );
   }
 
-  return children;
+  return <SitePresence account={connectedAccount}>{children}</SitePresence>;
 };
 
 function App() {
@@ -302,6 +307,7 @@ function App() {
       <Suspense fallback={null}>
         <BotnetRuntime headless />
       </Suspense>
+      <GlobalBotPresence route={`${location.pathname}${location.search}`} />
       {isMobile ? (
         <>
           <style>

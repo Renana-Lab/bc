@@ -1,10 +1,12 @@
 import {
   extractPrivateKeysFromText,
+  ensureSingleMetaMaskAgentBot,
   getBidDecision,
   getStrategy,
   isValidPrivateKey,
   normalizeBot,
   normalizePrivateKey,
+  METAMASK_AGENT_WALLET,
 } from "./BotnetControlPanel";
 
 const KEY_A = "1".repeat(64);
@@ -56,6 +58,38 @@ describe("bot command center stress cases", () => {
 
     expect(bot.status).toBe("running");
     expect(bot.lastError).toMatch(/interrupted/i);
+  });
+
+  test("reserves exactly one of four command-center bots for MetaMask Agent Wallet", () => {
+    const bots = ensureSingleMetaMaskAgentBot(
+      [KEY_A, KEY_B, "3".repeat(64), "4".repeat(64)].map((privateKey, index) => ({
+        id: `bot-${index}`,
+        name: `Bot ${index + 1}`,
+        privateKey,
+        enabled: true,
+      })),
+    );
+
+    expect(bots).toHaveLength(4);
+    expect(bots.filter((bot) => bot.walletType === METAMASK_AGENT_WALLET)).toHaveLength(1);
+    expect(bots[3]).toMatchObject({
+      name: "MetaMask Wallet Agent",
+      walletType: METAMASK_AGENT_WALLET,
+      status: "runner-managed",
+      running: false,
+    });
+  });
+
+  test("never promotes more than one Agent Wallet bot", () => {
+    const bots = ensureSingleMetaMaskAgentBot(
+      Array.from({ length: 4 }, (_, index) => ({
+        id: `agent-${index}`,
+        name: `Agent ${index}`,
+        walletType: METAMASK_AGENT_WALLET,
+        privateKey: `${index + 1}`.repeat(64),
+      })),
+    );
+    expect(bots.filter((bot) => bot.walletType === METAMASK_AGENT_WALLET)).toHaveLength(1);
   });
 
   test("computes initial, outbid, and incremental rebid values", () => {

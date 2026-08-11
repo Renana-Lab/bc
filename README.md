@@ -81,6 +81,7 @@ REACT_APP_DEV_FACTORY_ADDRESS=0x...
 REACT_APP_RPC_URLS=https://your-sepolia-rpc-1,https://your-sepolia-rpc-2
 REACT_APP_WS_RPC_URL=wss://your-sepolia-websocket
 REACT_APP_AUCTION_API_URL=http://localhost:8787
+REACT_APP_PRESENCE_API_URL=https://your-function-url
 
 DEPLOY_MARKET=dev
 DEPLOY_PRIVATE_KEY=...
@@ -99,6 +100,7 @@ Useful variables:
 | `REACT_APP_RPC_TIMEOUT_MS` | frontend | Optional timeout for read-only RPC calls. |
 | `REACT_APP_WS_RPC_URL` | frontend/indexer | Websocket RPC for contract events. |
 | `REACT_APP_AUCTION_API_URL` | frontend | Optional local indexer URL. If absent, the auction list reads directly from chain. |
+| `REACT_APP_PRESENCE_API_URL` | frontend | Serverless live-activity endpoint. Enables online user, admin, bot, auction, and session counts plus report history. |
 | `DEPLOY_MARKET` | deploy script | `dev` or `real`. Defaults to `dev`. |
 | `DEPLOY_PRIVATE_KEY` | deploy script | Preferred deploy key. Never expose as `REACT_APP_*`. |
 | `PRIVATE_KEY` | deploy/keeper scripts | Supported fallback. Keep private. |
@@ -120,6 +122,7 @@ Important: Create React App bakes `REACT_APP_*` values at build time. If a facto
 | `npm run auto-finalize` | Run one auto-finalizer cycle. |
 | `npm run auto-finalize:watch` | Run the auto-finalizer continuously. |
 | `npm run auction-indexer` | Start the optional local auction indexer API. |
+| `npm run presence:deploy` | Deploy or update the serverless live-activity stack in AWS. |
 | `node src/real_ethereum/compile.js` | Compile Solidity contracts into `src/real_ethereum/build/`. |
 | `node src/real_ethereum/deploy.js` | Deploy a new factory contract. |
 
@@ -258,6 +261,46 @@ The browser bot runner must not scan every deployed auction for every bot. The s
 - Rate-limited or plan-incompatible RPC endpoints are cooled down instead of repeatedly failing every bot.
 
 `publicnode.com` is an anonymous RPC service operated by Allnodes; it is not part of the contracts. Anonymous RPC endpoints are acceptable as emergency fallbacks, but reliable experiments should set `REACT_APP_RPC_URLS` to one or more authenticated Sepolia endpoints. The browser runner only operates while the site is open; unattended 24/7 operation requires the repository bot service or another hosted worker.
+
+### MetaMask Agent Wallet Bot
+
+When four bots are configured, the command center reserves exactly one bot as `MetaMask Wallet Agent`; the other three remain private-key bots. The Agent Wallet bot never falls back to its old private key. It signs contract calls through the official `mm` CLI in `scripts/botnet/metamaskAgentWallet.js`, so it runs on the Node automation worker rather than inside the browser sandbox.
+
+Local runner setup requires Node 22.18 or newer and the official CLI:
+
+```powershell
+npm install --global @metamask/agent-wallet@6.0.0
+mm login
+mm init --wallet server-wallet --mode guard
+mm doctor --json
+npm run botnet:agent:test
+npm run botnet:cycle
+```
+
+`mm doctor --json` must report both `authenticated: true` and `initialized: true`. GitHub Actions also needs an `MM_CLI_TOKEN` secret in the `cliToken:cliRefreshToken` format. Add `METAMASK_AGENT_EXPECTED_ADDRESS` as a second GitHub secret to pin the funded Agent Wallet address. The workflow logs in, asks MetaMask to sync the account's existing remote wallets, and initializes a server wallet only when the runner is not already initialized. A mismatched address stops that bot before it can sign anything. If Agent Wallet preparation fails, the three private-key bots still run and the Agent Wallet bot records a clear readiness error.
+
+The Agent Wallet bot uses Sepolia chain ID `11155111`. `METAMASK_AGENT_WALLET_CLI`, `METAMASK_AGENT_CHAIN_ID`, `METAMASK_AGENT_TIMEOUT_MS`, and `METAMASK_AGENT_EXPECTED_ADDRESS` can override the executable, chain, wallet-job timeout, and pinned signer address. On Windows, the adapter discovers a normal global npm `mm.cmd` installation automatically. Never put `MM_CLI_TOKEN` in Git or expose it through a `REACT_APP_*` variable.
+
+## Live Experiment Activity
+
+The Admin Zone includes a shared activity monitor for experiments. It reports unique online users, authenticated admin sessions, running browser bots, active auctions, and raw browser-session count. Auction reports can include the same minute-by-minute data in the optional `Site Activity` tab.
+
+This feature does not use a conventional application server. It deploys a small AWS Lambda Function URL and two encrypted, on-demand DynamoDB tables from `infrastructure/live-presence/`:
+
+- Browser heartbeats are sent every 15 seconds.
+- Presence expires after 60 seconds, so closed or sleeping tabs disappear automatically.
+- Human and bot counts are deduplicated by one-way wallet hashes; wallet addresses and private keys are never stored.
+- Admin takes precedence when the same wallet has both user and admin tabs open.
+- One-minute aggregate samples are retained for 400 days for experiment reports.
+- Telemetry failures are isolated from wallet access, auctions, bidding, and bot execution.
+
+Deploy the stack after authenticating the AWS CLI:
+
+```powershell
+npm run presence:deploy -- --region us-east-1
+```
+
+Copy the printed Function URL into `REACT_APP_PRESENCE_API_URL` in the AWS Amplify environment for each branch, then rebuild and redeploy the frontend. See `infrastructure/live-presence/README.md` for deployment, privacy, and metric definitions.
 
 ## Admin Zone
 
