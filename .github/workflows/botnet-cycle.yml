@@ -33,6 +33,14 @@ jobs:
       - name: Install MetaMask Agent Wallet CLI
         run: npm install --global @metamask/agent-wallet@6.0.0
 
+      - name: Restore active-auction cursor
+        uses: actions/cache/restore@v4
+        with:
+          path: botnet-data/active-auctions.json
+          key: botnet-auction-index-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            botnet-auction-index-${{ github.ref_name }}-
+
       - name: Prepare MetaMask Agent Wallet
         continue-on-error: true
         shell: bash
@@ -65,3 +73,10 @@ jobs:
           BOTNET_FACTORY_MARKET: production
           MM_CLI_TOKEN: ${{ secrets.MM_CLI_TOKEN }}
           METAMASK_AGENT_EXPECTED_ADDRESS: ${{ secrets.METAMASK_AGENT_EXPECTED_ADDRESS }}
+
+      - name: Save active-auction cursor
+        if: always() && hashFiles('botnet-data/active-auctions.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: botnet-data/active-auctions.json
+          key: botnet-auction-index-${{ github.ref_name }}-${{ github.run_id }}

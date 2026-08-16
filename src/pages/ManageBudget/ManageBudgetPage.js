@@ -19,6 +19,10 @@ import toast from "react-hot-toast";
 import factory from "../../real_ethereum/factory";
 import { notifyBudgetChanged } from "../../real_ethereum/budget";
 import { readOnlyCall } from "../../real_ethereum/readOnly";
+import {
+  getActiveAuctionStateHistory,
+  registerCreatedAuctionReceipt,
+} from "../../real_ethereum/activeAuctionRegistry";
 import componentStyles from "../../styles/components.module.scss";
 import AutoFinalizerMonitor from "./AutoFinalizerMonitor";
 import BotnetControlPanel from "./BotnetControlPanel";
@@ -60,11 +64,13 @@ import {
   downloadJsonReport,
   downloadWorkbook,
   filterReportsByDate,
+  getReportDateRangeMs,
   isEndTimeInDateRange,
   mapWithConcurrency,
   readAuctionOption,
   readAuctionReport,
   shortAddress,
+  toAuctionListStateRows,
   toDateInputValue,
 } from "./reportUtils";
 
@@ -118,6 +124,11 @@ const REPORT_SECTION_OPTIONS = [
     key: "activity",
     label: "Site Activity",
     description: "Minute-by-minute online users, admins, bots, and active auctions.",
+  },
+  {
+    key: "listState",
+    label: "Auction List History",
+    description: "Observed active and finalizable list changes during the report period.",
   },
 ];
 const REPORT_DIAGNOSTIC_OPTIONS = [
@@ -778,6 +789,19 @@ const ManageBudgetPage = () => {
             )
             .send({ from });
 
+          registerCreatedAuctionReceipt(
+            activeMarket.address,
+            receipt,
+            {
+              minimumContribution: auction.minimumContribution,
+              manager: from,
+              endTimeSec:
+                Math.floor(Date.now() / 1000) +
+                Number(auction.auctionDuration) * 60,
+            },
+            "batch-auction-created",
+          );
+
           results[index] = {
             ...results[index],
             status: "Created",
@@ -1263,10 +1287,6 @@ const ManageBudgetPage = () => {
         );
       }
 
-      if (!targets.length) {
-        throw new Error("No auctions match the selected report filters");
-      }
-
       setReportState({
         loading: true,
         current: 0,
@@ -1318,10 +1338,6 @@ const ManageBudgetPage = () => {
       const cleanReports = shouldFilterByDate
         ? filterReportsByDate(reports.filter(Boolean), reportFilters)
         : reports.filter(Boolean);
-      if (!cleanReports.length) {
-        throw new Error("No auctions could be exported for these filters");
-      }
-
       let activityRows = [];
       let activityRange = null;
       if (reportSections.activity) {
@@ -1379,10 +1395,40 @@ const ManageBudgetPage = () => {
         }
       }
 
+      let listStateRows = [];
+      let listStateRange = null;
+      if (reportSections.listState) {
+        const selectedRange = getReportDateRangeMs(reportFilters);
+        const fromMs = selectedRange.fromMs ?? Date.now() - 30 * 24 * 60 * 60 * 1000;
+        const toMs = selectedRange.toMs ?? Date.now();
+        listStateRange = {
+          from: new Date(fromMs).toISOString(),
+          to: new Date(toMs).toISOString(),
+          source:
+            reportFilters.from && reportFilters.to
+              ? "Selected report dates"
+              : "Latest 30 days",
+        };
+        const listHistory = markets.flatMap((market) =>
+          getActiveAuctionStateHistory(market.address, {
+            fromMs,
+            toMs,
+            includeBaseline: true,
+          }).map((state) => ({
+            ...state,
+            marketId: market.id,
+            marketLabel: market.label,
+          })),
+        );
+        listStateRows = toAuctionListStateRows(listHistory, listStateRange);
+      }
+
       const exportReportOptions = {
         ...reportOptions,
         activityRows,
         activityRange,
+        listStateRows,
+        listStateRange,
       };
       const payload = buildReportPayload(cleanReports, errors, exportReportOptions);
 

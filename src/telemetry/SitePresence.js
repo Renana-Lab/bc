@@ -3,8 +3,12 @@ import { useLocation } from "react-router-dom";
 import {
   getActiveAuctionSnapshot,
   refreshActiveAuctionRegistry,
+  startActiveAuctionRegistrySync,
 } from "../real_ethereum/activeAuctionRegistry";
-import { getActiveFactoryAddress } from "../real_ethereum/marketConfig";
+import {
+  getActiveFactoryAddress,
+  subscribeToMarketChanges,
+} from "../real_ethereum/marketConfig";
 import {
   getPresenceAdminRole,
   isPresenceConfigured,
@@ -17,8 +21,22 @@ import {
 const SitePresence = ({ account, children }) => {
   const location = useLocation();
   const [isAdmin, setIsAdmin] = useState(getPresenceAdminRole());
+  const [factoryAddress, setFactoryAddress] = useState(getActiveFactoryAddress());
   const sendingRef = useRef(false);
   const queuedRef = useRef(false);
+
+  useEffect(
+    () =>
+      subscribeToMarketChanges((market) => {
+        setFactoryAddress(market?.address || getActiveFactoryAddress());
+      }),
+    [],
+  );
+
+  useEffect(() => {
+    if (!account || !factoryAddress) return undefined;
+    return startActiveAuctionRegistrySync(factoryAddress);
+  }, [account, factoryAddress]);
 
   const sendHeartbeat = useCallback(async () => {
     if (!account || !isPresenceConfigured()) return;
@@ -29,10 +47,10 @@ const SitePresence = ({ account, children }) => {
 
     sendingRef.current = true;
     try {
-      let snapshot = getActiveAuctionSnapshot(getActiveFactoryAddress());
+      let snapshot = getActiveAuctionSnapshot(factoryAddress);
       if (isAdmin && !document.hidden) {
         try {
-          snapshot = await refreshActiveAuctionRegistry(getActiveFactoryAddress());
+          snapshot = await refreshActiveAuctionRegistry(factoryAddress);
         } catch (_) {
           // Presence must never add a failure to the auction experience.
         }
@@ -57,7 +75,7 @@ const SitePresence = ({ account, children }) => {
         window.setTimeout(sendHeartbeat, 100);
       }
     }
-  }, [account, isAdmin, location.pathname, location.search]);
+  }, [account, factoryAddress, isAdmin, location.pathname, location.search]);
 
   useEffect(() => {
     sendHeartbeat();

@@ -1,5 +1,6 @@
 export const LOCAL_BOTS_KEY = "bc:admin-botnet:bots:v1";
 export const LOCAL_LOGS_KEY = "bc:admin-botnet:logs:v1";
+export const LOCAL_OBSERVATORY_KEY = "bc:admin-botnet:observatory:v1";
 export const BOTNET_STATE_EVENT = "bc:admin-botnet:state-change";
 
 export const getRunningBotDescriptors = () => {

@@ -3,6 +3,7 @@ const assert = require("assert/strict");
 const fs = require("fs");
 const Module = require("module");
 const path = require("path");
+const { pathToFileURL } = require("url");
 const babel = require("@babel/core");
 const transformModules = require("@babel/plugin-transform-modules-commonjs");
 const presetReact = require("@babel/preset-react");
@@ -44,6 +45,7 @@ global.window = {
   localStorage: memoryStorage(),
   setTimeout,
   dispatchEvent: () => {},
+  addEventListener: () => {},
 };
 global.Event = class Event {};
 
@@ -76,6 +78,20 @@ const bulk = loadSourceModule(
 const reports = loadSourceModule("src/pages/ManageBudget/reportUtils.js", {
   "../../real_ethereum/readOnly": { readOnlyCall: async () => null },
 });
+const activeAuctions = loadSourceModule(
+  "src/real_ethereum/activeAuctionRegistry.js",
+  {
+    "./readOnly": {
+      readOnlyCall: async () => [],
+      readOnlyBatchCall: async () => [],
+      readOnlyExecute: async () => ({ auctions: [], latestBlock: 1, scannedToBlock: 1 }),
+    },
+    "./marketConfig": {
+      getActiveFactoryAddress: () =>
+        "0x0000000000000000000000000000000000000001",
+    },
+  },
+);
 const bots = loadSourceModule(
   "src/pages/ManageBudget/BotnetControlPanel.js",
   {
@@ -89,7 +105,11 @@ const bots = loadSourceModule(
       getActiveFactoryAddress: () => "0x0000000000000000000000000000000000000001",
     },
     "../../real_ethereum/activeAuctionRegistry": {
+      acquireActiveAuctionCoordinatorLease: () => true,
+      markAuctionClosed: () => {},
+      publishActiveAuctions: () => {},
       refreshActiveAuctionRegistry: async () => [],
+      releaseActiveAuctionCoordinatorLease: () => {},
     },
     "../../real_ethereum/rpcConfig": {
       getConfiguredRpcUrls: () => [],
@@ -153,6 +173,9 @@ const makeReport = (index, withBid = false) => ({
 
 const run = async () => {
   const results = [];
+  const planner = await import(
+    pathToFileURL(path.join(projectRoot, "src", "botnet", "cyclePlanner.mjs")).href
+  );
 
   results.push(
     await timed("bulk parsing and validation", async () => {
@@ -242,6 +265,32 @@ const run = async () => {
   );
 
   results.push(
+    await timed("shared active-auction registry", async () => {
+      const factoryAddress = "0x0000000000000000000000000000000000000001";
+      activeAuctions.__resetActiveAuctionRegistryForTests();
+      for (let index = 0; index < 5000; index += 1) {
+        const auctionIndex = index % 250;
+        activeAuctions.publishActiveAuctions(factoryAddress, [
+          {
+            address: `0x${(auctionIndex + 1).toString(16).padStart(40, "0")}`,
+            minimumContribution: "100",
+            approversCount: 1,
+            highestBid: String(index),
+            endTimeSec: Math.floor(Date.now() / 1000) + 1800,
+            closed: false,
+          },
+        ]);
+      }
+      const snapshot = activeAuctions.getActiveAuctionSnapshot(factoryAddress);
+      assert.equal(snapshot.activeAuctions.length, 250);
+      assert.equal(
+        new Set(snapshot.activeAuctions.map((auction) => auction.address)).size,
+        250,
+      );
+    }),
+  );
+
+  results.push(
     await timed("bot key ingestion and bid decisions", async () => {
       const privateKeys = Array.from({ length: 1000 }, (_, index) =>
         BigInt(index + 1).toString(16).padStart(64, "0")
@@ -307,12 +356,64 @@ const run = async () => {
     })
   );
 
+  results.push(
+    await timed("coordinated bot planner at scale", async () => {
+      const makeAddress = (index) =>
+        `0x${index.toString(16).padStart(40, "0")}`;
+      const historical = Array.from({ length: 1000 }, (_, index) => ({
+        address: makeAddress(index + 1),
+        closed: true,
+        endTimeSec: 1900000000,
+      }));
+      const active = Array.from({ length: 50 }, (_, index) => ({
+        address: makeAddress(index + 2000),
+        minimumContribution: "100",
+        approversCount: 0,
+        manager: makeAddress(index + 5000),
+        highestBid: "0",
+        highestBidder: makeAddress(0),
+        endTimeSec: 2000001000 + index,
+        closed: false,
+      }));
+      const plannerBots = Array.from({ length: 100 }, (_, index) => ({
+        id: `bot-${index}`,
+        wallet: makeAddress(index + 100),
+        strategy: {
+          maxBidsPerCycle: (index % 5) + 1,
+          maxBidWei: 2000n,
+          outbidByWei: 10n,
+          maxMinContributionWei: 2000n,
+          minTimeRemainingSec: 20,
+          skipIfWinning: true,
+        },
+      }));
+
+      let cursor = 0;
+      for (let round = 0; round < 1000; round += 1) {
+        const plan = planner.allocateCycleCandidates({
+          bots: plannerBots,
+          auctions: active,
+          cursor,
+          nowSec: 2000000000,
+        });
+        cursor = plan.nextCursor;
+        const assigned = Object.values(plan.assignments).flatMap((assignment) => [
+          ...assignment.primary,
+          ...assignment.reserve,
+        ]);
+        assert.ok(assigned.length <= active.length);
+        assert.equal(new Set(assigned.map((auction) => auction.address)).size, assigned.length);
+        assert.ok(plan.candidatesEvaluated < plannerBots.length * (historical.length + active.length));
+      }
+    })
+  );
+
   const totalMs = results.reduce((total, result) => total + result.durationMs, 0);
   results.forEach(({ label, durationMs }) => {
     console.log(`[stress] PASS ${label} (${durationMs}ms)`);
   });
   console.log(
-    `[stress] PASS: 3 utility groups, 10,000 imports, 5,000 concurrent report jobs, 500 report auctions, 1,000 keys, 20,000 bot decisions (${totalMs}ms)`
+    `[stress] PASS: 5 utility groups, 10,000 imports, 5,000 report jobs, 500 report auctions, 5,000 registry updates, 1,000 keys, 20,000 bot decisions, 100,000 bot-round plans (${totalMs}ms)`
   );
 };
 

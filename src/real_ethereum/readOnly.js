@@ -171,6 +171,37 @@ export const readOnlyCall = async (createCall, retries, options = {}) => {
   throw lastError;
 };
 
+export const readOnlyExecute = async (operation, retries, options = {}) => {
+  let lastError;
+  const providers = getProviderSequence(
+    options.preferInjected ?? DEFAULT_PREFER_INJECTED_READS,
+    options.allowInjectedFallback ?? DEFAULT_ALLOW_INJECTED_FALLBACK
+  );
+  const maxAttempts = retries ?? providers.length;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const provider = providers[attempt % providers.length];
+    const web3Instance = provider.web3;
+    try {
+      return await operation({
+        web3: web3Instance,
+        factory: createFactory(web3Instance, options.factoryAddress),
+        campaign: (address) => createCampaign(web3Instance, address),
+      });
+    } catch (error) {
+      lastError = error;
+      const shouldTryNextProvider = provider.injected || isRpcProviderFailure(error);
+      if (!shouldTryNextProvider || attempt === maxAttempts - 1) throw error;
+      if (!provider.injected) {
+        nextProviderIndex = (nextProviderIndex + 1) % readOnlyWeb3s.length;
+      }
+      await wait(RETRY_DELAY_MS * (attempt + 1));
+    }
+  }
+
+  throw lastError;
+};
+
 export const readOnlyBatchCall = async (
   createCalls,
   retries,

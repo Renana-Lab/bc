@@ -26,4 +26,14 @@ describe("RPC failure classification", () => {
     expect(getRpcFailureKind(error)).toBe("unsupported-plan");
     expect(getFriendlyRpcError(error)).toMatch(/disabled for this session/i);
   });
+
+  test("fails over when Web3 cannot connect to a configured node", () => {
+    const error = new Error(
+      "CONNECTION ERROR: Couldn't connect to node https://rpc.sepolia.org.",
+    );
+
+    expect(getRpcFailureKind(error)).toBe("network");
+    expect(isRpcProviderFailure(error)).toBe(true);
+    expect(getFriendlyRpcError(error)).toMatch(/temporarily unreachable/i);
+  });
 });

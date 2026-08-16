@@ -5,16 +5,40 @@ import {
   Button,
   Checkbox,
   CircularProgress,
+  Collapse,
   Divider,
+  IconButton,
   TextField,
+  ToggleButton,
+  ToggleButtonGroup,
+  Tooltip,
   Typography,
 } from "@mui/material";
+import AddRoundedIcon from "@mui/icons-material/AddRounded";
+import DeleteOutlineRoundedIcon from "@mui/icons-material/DeleteOutlineRounded";
+import DeleteSweepRoundedIcon from "@mui/icons-material/DeleteSweepRounded";
+import ErrorOutlineRoundedIcon from "@mui/icons-material/ErrorOutlineRounded";
+import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
+import KeyboardArrowDownRoundedIcon from "@mui/icons-material/KeyboardArrowDownRounded";
+import PlayArrowRoundedIcon from "@mui/icons-material/PlayArrowRounded";
+import ReplayRoundedIcon from "@mui/icons-material/ReplayRounded";
+import StopRoundedIcon from "@mui/icons-material/StopRounded";
+import UploadFileRoundedIcon from "@mui/icons-material/UploadFileRounded";
+import WarningAmberRoundedIcon from "@mui/icons-material/WarningAmberRounded";
 import toast from "react-hot-toast";
 import Web3 from "web3";
 import CampaignFactory from "../../real_ethereum/build/CampaignFactory.json";
 import Campaign from "../../real_ethereum/build/Campaign.json";
 import { getActiveFactoryAddress } from "../../real_ethereum/marketConfig";
-import { refreshActiveAuctionRegistry } from "../../real_ethereum/activeAuctionRegistry";
+import {
+  acquireActiveAuctionCoordinatorLease,
+  getActiveAuctionSnapshot,
+  markAuctionClosed,
+  publishActiveAuctions,
+  refreshActiveAuctionRegistry,
+  releaseActiveAuctionCoordinatorLease,
+  subscribeActiveAuctionRegistry,
+} from "../../real_ethereum/activeAuctionRegistry";
 import {
   getConfiguredRpcUrls,
   getFriendlyRpcError,
@@ -26,7 +50,16 @@ import {
   BOTNET_STATE_EVENT,
   LOCAL_BOTS_KEY,
   LOCAL_LOGS_KEY,
+  LOCAL_OBSERVATORY_KEY,
 } from "../../telemetry/botPresence";
+import {
+  allocateCycleCandidates,
+  clampBidsPerCycle,
+  createEmptyCycleMetrics,
+  finishCycleMetrics,
+  getActivityUsage,
+  getBidDecision as getSharedBidDecision,
+} from "../../botnet/cyclePlanner.mjs";
 
 const activeBotCycles = new Set();
 export const PRIVATE_KEY_WALLET = "private-key";
@@ -52,10 +85,19 @@ const BOT_SCHEDULER_TICK_MS = Math.max(
   2500,
   Number(process.env.REACT_APP_BOT_SCHEDULER_TICK_MS || 5000)
 );
-const BOT_CANDIDATES_PER_CYCLE = Math.max(
+const BOT_MAX_CONCURRENT_WRITES = Math.max(
   1,
-  Number(process.env.REACT_APP_BOT_CANDIDATES_PER_CYCLE || 4)
+  Number(process.env.REACT_APP_BOT_MAX_CONCURRENT_WRITES || 3)
 );
+const BOT_FINALIZE_INTERVAL_MS = Math.max(
+  15000,
+  Number(process.env.REACT_APP_BOT_FINALIZE_INTERVAL_MS || 30000),
+);
+const BOT_STALE_SNAPSHOT_MAX_MS = Math.max(
+  30000,
+  Number(process.env.REACT_APP_BOT_STALE_SNAPSHOT_MAX_MS || 120000),
+);
+const OBSERVATORY_ROUND_LIMIT = 30;
 
 const DEFAULT_OVERRIDES = {
   MAX_BID_WEI: "2000",
@@ -63,6 +105,7 @@ const DEFAULT_OVERRIDES = {
   MAX_MIN_CONTRIBUTION_WEI: "2000",
   MIN_TIME_REMAINING_SEC: "20",
   AUTO_TRADE_INTERVAL_SEC: "60",
+  MAX_BIDS_PER_CYCLE: "1",
   ENABLE_BIDDING: "true",
   ENABLE_FINALIZE: "true",
   SKIP_IF_WINNING: "true",
@@ -74,11 +117,105 @@ const emptyBotForm = {
   enabled: true,
   maxBidWei: "",
   intervalSec: "60",
+  maxBidsPerCycle: "1",
   enableBidding: true,
   enableFinalize: true,
 };
 
 const web3ForKeys = new Web3();
+const browserWeb3Cache = new Map();
+const browserFactoryCache = new Map();
+const browserCampaignCache = new Map();
+const browserAccountCache = new Map();
+
+const getCachedWeb3 = (rpcUrl) => {
+  if (!browserWeb3Cache.has(rpcUrl)) {
+    browserWeb3Cache.set(
+      rpcUrl,
+      new Web3(
+        new Web3.providers.HttpProvider(rpcUrl, {
+          timeout: Number(process.env.REACT_APP_RPC_TIMEOUT_MS || 9000),
+        }),
+      ),
+    );
+  }
+  return browserWeb3Cache.get(rpcUrl);
+};
+
+const getCachedFactory = (web3, rpcUrl, factoryAddress) => {
+  const key = `${rpcUrl}:${String(factoryAddress).toLowerCase()}`;
+  if (!browserFactoryCache.has(key)) {
+    browserFactoryCache.set(key, new web3.eth.Contract(CampaignFactory.abi, factoryAddress));
+  }
+  return browserFactoryCache.get(key);
+};
+
+const getCachedCampaign = (web3, rpcUrl, address) => {
+  const key = `${rpcUrl}:${String(address).toLowerCase()}`;
+  if (!browserCampaignCache.has(key)) {
+    browserCampaignCache.set(key, new web3.eth.Contract(Campaign.abi, address));
+  }
+  return browserCampaignCache.get(key);
+};
+
+const getCachedAccount = (web3, privateKey) => {
+  const normalizedKey = normalizePrivateKey(privateKey);
+  const cacheKey = normalizedKey.toLowerCase();
+  if (!browserAccountCache.has(cacheKey)) {
+    browserAccountCache.set(cacheKey, web3.eth.accounts.privateKeyToAccount(normalizedKey));
+  }
+  const account = browserAccountCache.get(cacheKey);
+  if (!web3.eth.accounts.wallet[account.address]) web3.eth.accounts.wallet.add(account);
+  return account;
+};
+
+const executeBatchCalls = (web3, calls, blockNumber = "latest") => {
+  if (!calls.length) return Promise.resolve([]);
+  return new Promise((resolve, reject) => {
+    const batch = new web3.BatchRequest();
+    const results = new Array(calls.length);
+    let remaining = calls.length;
+    calls.forEach((method, index) => {
+      const callback = (error, value) => {
+        results[index] = error
+          ? { status: "rejected", reason: error }
+          : { status: "fulfilled", value };
+        remaining -= 1;
+        if (!remaining) resolve(results);
+      };
+      batch.add(method.call.request({}, blockNumber, callback));
+    });
+    try {
+      batch.execute();
+    } catch (error) {
+      reject(error);
+    }
+  });
+};
+
+const createSemaphore = (limit) => {
+  let active = 0;
+  const queue = [];
+  const runNext = () => {
+    if (active >= limit || !queue.length) return;
+    active += 1;
+    const { task, resolve, reject } = queue.shift();
+    Promise.resolve()
+      .then(task)
+      .then(resolve, reject)
+      .finally(() => {
+        active -= 1;
+        runNext();
+      });
+  };
+  return (task) =>
+    new Promise((resolve, reject) => {
+      queue.push({ task, resolve, reject });
+      runNext();
+    });
+};
+
+const withBrowserWriteSlot = createSemaphore(BOT_MAX_CONCURRENT_WRITES);
 
 const sleep = (ms) =>
   new Promise((resolve) => {
@@ -203,6 +340,7 @@ export const normalizeBot = (bot = {}) => {
       finalized: Number(bot.stats?.finalized || 0),
       errors: Number(bot.stats?.errors || 0),
     },
+    lastCycleMetrics: bot.lastCycleMetrics || null,
     overrides: {
       ...DEFAULT_OVERRIDES,
       ...(bot.overrides || {}),
@@ -251,6 +389,35 @@ const saveStoredLogs = (logs) => {
   notifyBotnetStateChanged();
 };
 
+export const normalizeObservatoryRounds = (rounds = []) => {
+  const seen = new Set();
+  return (Array.isArray(rounds) ? rounds : [])
+    .filter((round) => round && typeof round === "object" && round.id)
+    .filter((round) => {
+      if (seen.has(round.id)) return false;
+      seen.add(round.id);
+      return true;
+    })
+    .sort((left, right) => Number(right.startedAt || 0) - Number(left.startedAt || 0))
+    .slice(0, OBSERVATORY_ROUND_LIMIT);
+};
+
+const loadStoredObservatoryRounds = () =>
+  normalizeObservatoryRounds(readJson(LOCAL_OBSERVATORY_KEY, []));
+
+const saveStoredObservatoryRounds = (rounds) => {
+  const normalized = normalizeObservatoryRounds(rounds);
+  writeJson(LOCAL_OBSERVATORY_KEY, normalized);
+  notifyBotnetStateChanged();
+  return normalized;
+};
+
+const appendStoredObservatoryRound = (round) =>
+  saveStoredObservatoryRounds([
+    round,
+    ...loadStoredObservatoryRounds().filter((item) => item.id !== round.id),
+  ]);
+
 const createLog = (level, message, meta = {}) => ({
   time: new Date().toISOString(),
   level,
@@ -275,6 +442,32 @@ const formatDate = (value) => {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "Unknown";
   return date.toLocaleString();
+};
+
+export const formatAuctionCountdown = (endTimeSec, nowMs = Date.now()) => {
+  const remaining = Math.max(0, Number(endTimeSec || 0) - Math.floor(nowMs / 1000));
+  const hours = Math.floor(remaining / 3600);
+  const minutes = Math.floor((remaining % 3600) / 60);
+  const seconds = remaining % 60;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+};
+
+export const getRegistryDisplayRows = (snapshot = {}) => [
+  ...(snapshot.activeAuctions || []).map((auction) => ({ ...auction, registryState: "active" })),
+  ...(snapshot.finalizableAuctions || []).map((auction) => ({
+    ...auction,
+    registryState: "awaiting-finalization",
+  })),
+];
+
+export const getUsableCachedAuctionSnapshot = (
+  snapshot,
+  nowMs = Date.now(),
+  maxAgeMs = BOT_STALE_SNAPSHOT_MAX_MS,
+) => {
+  if (!snapshot?.updatedAt) return null;
+  const ageMs = Math.max(0, Number(nowMs) - Number(snapshot.updatedAt));
+  return ageMs <= Number(maxAgeMs) ? { snapshot, ageMs } : null;
 };
 
 const getBotStatusColor = (status) => {
@@ -317,10 +510,597 @@ export const getStrategy = (bot) => {
       overrides.AUTO_TRADE_INTERVAL_SEC,
       Number(DEFAULT_OVERRIDES.AUTO_TRADE_INTERVAL_SEC)
     ),
+    maxBidsPerCycle: clampBidsPerCycle(
+      overrides.MAX_BIDS_PER_CYCLE || DEFAULT_OVERRIDES.MAX_BIDS_PER_CYCLE,
+    ),
     enableBidding: toBool(overrides.ENABLE_BIDDING, true),
     enableFinalize: toBool(overrides.ENABLE_FINALIZE, true),
     skipIfWinning: toBool(overrides.SKIP_IF_WINNING, true),
   };
+};
+
+const BotMetric = ({ label, value, tone = "#173b91" }) => (
+  <Box sx={{ minWidth: 0 }}>
+    <Typography
+      variant="caption"
+      color="text.secondary"
+      sx={{ display: "block", lineHeight: 1.15 }}
+    >
+      {label}
+    </Typography>
+    <Typography
+      variant="body2"
+      sx={{ mt: 0.3, color: tone, fontWeight: 800, lineHeight: 1.2, overflowWrap: "anywhere" }}
+    >
+      {value}
+    </Typography>
+  </Box>
+);
+
+const BotCard = ({
+  bot,
+  isBusy,
+  onBidLimitChange,
+  onStart,
+  onRun,
+  onStop,
+  onDelete,
+  onClearError,
+}) => {
+  const [roundOpen, setRoundOpen] = useState(false);
+  const [errorOpen, setErrorOpen] = useState(false);
+  const strategy = getStrategy(bot);
+  const activity = getActivityUsage(strategy.intervalSec, strategy.maxBidsPerCycle);
+  const metrics = bot.lastCycleMetrics;
+  const stats = bot.stats || {};
+  const agentManaged = isMetaMaskAgentBot(bot);
+  const activityTone =
+    activity.level === "high"
+      ? { color: "#9a3412", backgroundColor: "#fff2e8" }
+      : activity.level === "moderate"
+        ? { color: "#7c5c00", backgroundColor: "#fff8dd" }
+        : { color: "#0f6d45", backgroundColor: "#eaf8f1" };
+
+  return (
+    <Box
+      sx={{
+        borderRadius: 2,
+        border: "1px solid #dce4f7",
+        background: "linear-gradient(145deg, rgba(255,255,255,0.98), rgba(247,249,255,0.92))",
+        boxShadow: "0 5px 16px rgba(24, 52, 121, 0.045)",
+        overflow: "hidden",
+        transition: "border-color 120ms ease, box-shadow 120ms ease",
+        "&:hover": {
+          borderColor: "#c9d5f2",
+          boxShadow: "0 7px 18px rgba(24, 52, 121, 0.07)",
+        },
+      }}
+    >
+      <Box sx={{ p: { xs: 1.5, sm: 1.75 } }}>
+        <Box
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 1.25,
+            flexWrap: "wrap",
+          }}
+        >
+          <Box sx={{ display: "flex", alignItems: "center", gap: 0.7, flexWrap: "wrap", minWidth: 0 }}>
+            <Typography variant="body1" sx={{ mr: 0.15, fontWeight: 800 }}>
+              {bot.name}
+            </Typography>
+            <Typography
+              variant="caption"
+              sx={{
+                px: 1,
+                py: 0.25,
+                borderRadius: 999,
+                color: "#ffffff",
+                backgroundColor: getBotStatusColor(bot.status),
+                fontWeight: 800,
+                lineHeight: 1.4,
+              }}
+            >
+              {bot.status || "stopped"}
+            </Typography>
+            <Typography
+              variant="caption"
+              sx={{
+                px: 1,
+                py: 0.25,
+                borderRadius: 999,
+                backgroundColor: bot.enabled ? "#e9f8ef" : "#f1f3f9",
+                color: bot.enabled ? "#0f7a46" : "#5f6680",
+                fontWeight: 800,
+                lineHeight: 1.4,
+              }}
+            >
+              {bot.enabled ? "enabled" : "disabled"}
+            </Typography>
+            {agentManaged && (
+              <Typography
+                variant="caption"
+                sx={{
+                  px: 1,
+                  py: 0.25,
+                  borderRadius: 999,
+                  backgroundColor: "#e9efff",
+                  color: "#173b91",
+                  fontWeight: 800,
+                  lineHeight: 1.4,
+                }}
+              >
+                MetaMask Agent Wallet
+              </Typography>
+            )}
+          </Box>
+
+          <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, flexWrap: "wrap" }}>
+            <Button size="small" variant="contained" startIcon={<PlayArrowRoundedIcon />} onClick={() => onStart(bot.id)} disabled={isBusy || agentManaged} sx={{ borderRadius: 999, backgroundColor: "#103090" }}>
+              Start
+            </Button>
+            <Button size="small" variant="outlined" onClick={() => onRun(bot.id)} disabled={isBusy || agentManaged} sx={{ borderRadius: 999 }}>
+              Run
+            </Button>
+            <Button size="small" variant="outlined" color="error" startIcon={<StopRoundedIcon />} onClick={() => onStop(bot.id)} disabled={isBusy || agentManaged} sx={{ borderRadius: 999 }}>
+              Stop
+            </Button>
+            <Tooltip title="Delete bot">
+              <span>
+                <IconButton size="small" color="error" onClick={() => onDelete(bot.id)} disabled={isBusy} aria-label={`Delete ${bot.name}`}>
+                  <DeleteOutlineRoundedIcon fontSize="small" />
+                </IconButton>
+              </span>
+            </Tooltip>
+          </Box>
+        </Box>
+
+        <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1, overflowWrap: "anywhere" }}>
+          {shortAddress(bot.wallet)} &nbsp;|&nbsp; {agentManaged ? "Runner-managed session" : shortKey(bot.privateKey)} &nbsp;|&nbsp; Last cycle {formatDate(bot.lastCycleAt)}
+        </Typography>
+
+        <Box
+          sx={{
+            mt: 1.25,
+            p: 1.25,
+            display: "grid",
+            gridTemplateColumns: {
+              xs: "repeat(2, minmax(0, 1fr))",
+              sm: "repeat(4, minmax(0, 1fr)) minmax(145px, 1.25fr)",
+            },
+            gap: 1.25,
+            alignItems: "center",
+            borderRadius: 1.5,
+            backgroundColor: "rgba(239, 243, 253, 0.56)",
+          }}
+        >
+            <BotMetric label="Cycles" value={stats.cycles || 0} />
+            <BotMetric label="Bids" value={stats.bids || 0} tone="#5c6fc7" />
+            <BotMetric label="Finalized" value={stats.finalized || 0} tone="#168052" />
+            <BotMetric
+              label="Errors"
+              value={stats.errors || 0}
+              tone={stats.errors ? "#c2413a" : "#9aa3bd"}
+            />
+          <Box sx={{ gridColumn: { xs: "1 / -1", sm: "auto" }, minWidth: 0 }}>
+            <TextField
+              label="Bids / cycle"
+              size="small"
+              type="number"
+              value={strategy.maxBidsPerCycle}
+              inputProps={{ min: 1, max: 5, step: 1 }}
+              onChange={(event) => onBidLimitChange(bot.id, event.target.value)}
+              fullWidth
+            />
+            <Typography variant="caption" sx={{ display: "block", mt: 0.45, ...activityTone, backgroundColor: "transparent" }}>
+              {activity.level} / {activity.writesPerHour}/hour max
+            </Typography>
+          </Box>
+        </Box>
+
+        {agentManaged && (
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.9 }}>
+            Lifecycle controls are managed by the Node runner.
+          </Typography>
+        )}
+
+        {bot.lastError && (
+          <Box sx={{ mt: 1.15, border: "1px solid #f0c8c5", borderRadius: 1.5, backgroundColor: "#fffafa", overflow: "hidden" }}>
+            <Box sx={{ px: 1.15, py: 0.75, display: "flex", alignItems: "center", gap: 0.8 }}>
+              <ErrorOutlineRoundedIcon sx={{ color: "#b42318", fontSize: 18, flex: "0 0 auto" }} />
+              <Typography variant="caption" sx={{ color: "#8f1d16", fontWeight: 700, flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                {bot.lastError}
+              </Typography>
+              <Button size="small" onClick={() => setErrorOpen((current) => !current)} sx={{ minWidth: 0, px: 0.8 }}>
+                {errorOpen ? "Less" : "Inspect"}
+              </Button>
+              {!agentManaged && (
+                <Tooltip title="Run this bot once again">
+                  <span>
+                    <IconButton size="small" onClick={() => onRun(bot.id)} disabled={isBusy} aria-label={`Retry ${bot.name}`}>
+                      <ReplayRoundedIcon fontSize="small" />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+              )}
+              <Tooltip title="Dismiss stored error">
+                <IconButton size="small" onClick={() => onClearError(bot.id)} aria-label={`Dismiss ${bot.name} error`}>
+                  <DeleteSweepRoundedIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            </Box>
+            <Collapse in={errorOpen} timeout={90} unmountOnExit>
+              <Typography variant="caption" component="pre" sx={{ m: 0, px: 1.25, pb: 1.1, color: "#6f2420", fontFamily: "monospace", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+                {bot.lastError}
+              </Typography>
+            </Collapse>
+          </Box>
+        )}
+      </Box>
+
+      {metrics && (
+        <Box sx={{ borderTop: "1px solid #e4e9f6" }}>
+          <Button
+            fullWidth
+            onClick={() => setRoundOpen((current) => !current)}
+            endIcon={<KeyboardArrowDownRoundedIcon sx={{ transform: roundOpen ? "rotate(180deg)" : "none", transition: "transform 90ms ease" }} />}
+            aria-expanded={roundOpen}
+            sx={{ px: 1.75, py: 0.85, borderRadius: 0, justifyContent: "space-between", color: "#31416e", textTransform: "none" }}
+          >
+            <Box sx={{ display: "flex", alignItems: "baseline", gap: 1, minWidth: 0, textAlign: "left" }}>
+              <Typography variant="caption" sx={{ fontWeight: 800 }}>Latest coordinated round</Typography>
+              {!roundOpen && (
+                <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {metrics.durationMs || 0} ms / {metrics.activeAuctions || 0} active / {metrics.bidsSent || 0} sent
+                </Typography>
+              )}
+            </Box>
+          </Button>
+          <Collapse in={roundOpen} timeout={90} unmountOnExit>
+            <Box sx={{ px: 1.75, pb: 1.5, display: "grid", gridTemplateColumns: { xs: "repeat(2, minmax(0, 1fr))", sm: "repeat(4, minmax(0, 1fr))" }, gap: 1.25 }}>
+              <BotMetric label="Duration" value={`${metrics.durationMs || 0} ms`} tone="#64739f" />
+              <BotMetric label="Snapshot age" value={`${metrics.snapshotAgeMs || 0} ms`} tone="#64739f" />
+              <BotMetric label="Active auctions" value={metrics.activeAuctions || 0} tone="#64739f" />
+              <BotMetric label="Reads / batches" value={`${metrics.logicalReads || 0} / ${metrics.rpcBatches || 0}`} tone="#64739f" />
+              <BotMetric label="Candidates" value={metrics.candidatesEvaluated || 0} tone="#64739f" />
+              <BotMetric label="Attempted" value={metrics.bidsAttempted || 0} tone="#64739f" />
+              <BotMetric label="Sent" value={metrics.bidsSent || 0} tone="#64739f" />
+              <BotMetric label="Cache hits" value={metrics.cacheHits || 0} tone="#64739f" />
+              {metrics.skippedReason && (
+                <Typography variant="caption" sx={{ gridColumn: "1 / -1", color: "#59647f", overflowWrap: "anywhere" }}>
+                  {metrics.skippedReason}
+                </Typography>
+              )}
+            </Box>
+          </Collapse>
+        </Box>
+      )}
+    </Box>
+  );
+};
+
+const BotLogEntry = ({ entry, onRetryProviders }) => {
+  const [open, setOpen] = useState(false);
+  const level = String(entry.level || "info").toLowerCase();
+  const tone =
+    level === "error"
+      ? { color: "#a52820", background: "#fff8f7", border: "#f0cfcc", icon: <ErrorOutlineRoundedIcon /> }
+      : level === "warn"
+        ? { color: "#8a5b00", background: "#fffbf2", border: "#eedfb7", icon: <WarningAmberRoundedIcon /> }
+        : { color: "#34528e", background: "#f8faff", border: "#dfe6f7", icon: <InfoOutlinedIcon /> };
+  const meta = entry.meta && typeof entry.meta === "object" ? entry.meta : {};
+  const hasMeta = Object.keys(meta).length > 0;
+  const canRetryProvider = Boolean(meta.provider || meta.failureKind);
+
+  return (
+    <Box sx={{ border: `1px solid ${tone.border}`, borderRadius: 1.5, backgroundColor: tone.background, overflow: "hidden" }}>
+      <Box sx={{ px: 1.1, py: 0.8, display: "grid", gridTemplateColumns: "20px minmax(0, 1fr) auto", gap: 0.8, alignItems: "center" }}>
+        <Box sx={{ color: tone.color, display: "flex", "& svg": { fontSize: 17 } }}>{tone.icon}</Box>
+        <Box sx={{ minWidth: 0 }}>
+          <Typography variant="caption" sx={{ display: "block", color: tone.color, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+            {entry.message}
+          </Typography>
+          <Typography variant="caption" color="text.secondary">{formatDate(entry.time)}</Typography>
+        </Box>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 0.2 }}>
+          {canRetryProvider && (
+            <Tooltip title="Clear provider cooldowns and retry on the next cycle">
+              <IconButton size="small" onClick={onRetryProviders} aria-label="Retry RPC providers">
+                <ReplayRoundedIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          )}
+          {hasMeta && (
+            <IconButton size="small" onClick={() => setOpen((current) => !current)} aria-label={open ? "Collapse log details" : "Inspect log details"}>
+              <KeyboardArrowDownRoundedIcon fontSize="small" sx={{ transform: open ? "rotate(180deg)" : "none", transition: "transform 90ms ease" }} />
+            </IconButton>
+          )}
+        </Box>
+      </Box>
+      <Collapse in={open} timeout={90} unmountOnExit>
+        <Box component="dl" sx={{ m: 0, px: 1.1, pb: 1, display: "grid", gridTemplateColumns: "max-content minmax(0, 1fr)", gap: "4px 10px" }}>
+          {Object.entries(meta).map(([key, value]) => (
+            <Box component="div" key={key} sx={{ display: "contents" }}>
+              <Typography component="dt" variant="caption" color="text.secondary">{key}</Typography>
+              <Typography component="dd" variant="caption" sx={{ m: 0, fontFamily: "monospace", overflowWrap: "anywhere" }}>
+                {typeof value === "string" ? value : JSON.stringify(value)}
+              </Typography>
+            </Box>
+          ))}
+        </Box>
+      </Collapse>
+    </Box>
+  );
+};
+
+const RegistryMetric = ({ label, value, tone = "#173b91" }) => (
+  <Box sx={{ minWidth: 0 }}>
+    <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
+      {label}
+    </Typography>
+    <Typography variant="body2" sx={{ color: tone, fontWeight: 800, overflowWrap: "anywhere" }}>
+      {value}
+    </Typography>
+  </Box>
+);
+
+const DynamicAuctionIndex = ({
+  snapshot,
+  nowMs,
+  open,
+  onToggle,
+  onRefresh,
+  refreshing,
+}) => {
+  const rows = getRegistryDisplayRows(snapshot);
+  const activeCount = snapshot?.activeAuctions?.length || 0;
+  const finalizableCount = snapshot?.finalizableAuctions?.length || 0;
+  const snapshotAgeMs = snapshot?.updatedAt
+    ? Math.max(0, nowMs - Number(snapshot.updatedAt))
+    : null;
+  const stale = snapshotAgeMs === null || snapshotAgeMs > 30000;
+
+  return (
+    <Box
+      sx={{
+        border: "1px solid #dfe6f7",
+        borderRadius: 2,
+        background: "linear-gradient(145deg, #ffffff, #f8faff)",
+        boxShadow: "0 5px 16px rgba(24, 52, 121, 0.04)",
+        overflow: "hidden",
+      }}
+    >
+      <Box sx={{ px: 1.5, py: 1.25, display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 1, alignItems: "center" }}>
+        <Box sx={{ minWidth: 0 }}>
+          <Box sx={{ display: "flex", alignItems: "center", gap: 0.75, flexWrap: "wrap" }}>
+            <Typography variant="body2" sx={{ fontWeight: 800 }}>Dynamic auction list</Typography>
+            <Typography
+              variant="caption"
+              sx={{
+                px: 0.85,
+                py: 0.2,
+                borderRadius: 999,
+                color: stale ? "#8a5b00" : "#0f6d45",
+                backgroundColor: stale ? "#fff7df" : "#eaf8f1",
+                fontWeight: 800,
+              }}
+            >
+              {stale ? "stale" : "up to date"}
+            </Typography>
+          </Box>
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.35 }}>
+            The exact shared index used by coordinated browser bot cycles. It updates on creation, closure, finalization, and registry refresh.
+          </Typography>
+        </Box>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 0.4 }}>
+          <Tooltip title="Force one registry refresh">
+            <span>
+              <IconButton size="small" onClick={onRefresh} disabled={refreshing} aria-label="Refresh dynamic auction list">
+                {refreshing ? <CircularProgress size={17} /> : <ReplayRoundedIcon fontSize="small" />}
+              </IconButton>
+            </span>
+          </Tooltip>
+          <IconButton size="small" onClick={onToggle} aria-label={open ? "Collapse dynamic auction list" : "Expand dynamic auction list"}>
+            <KeyboardArrowDownRoundedIcon fontSize="small" sx={{ transform: open ? "rotate(180deg)" : "none", transition: "transform 90ms ease" }} />
+          </IconButton>
+        </Box>
+      </Box>
+
+      <Box sx={{ px: 1.5, pb: 1.25, display: "grid", gridTemplateColumns: { xs: "repeat(2, minmax(0, 1fr))", sm: "repeat(5, minmax(0, 1fr))" }, gap: 1 }}>
+        <RegistryMetric label="Active" value={activeCount} tone="#168052" />
+        <RegistryMetric label="Awaiting finalization" value={finalizableCount} tone="#9a6411" />
+        <RegistryMetric label="Known contracts" value={snapshot?.knownAddressCount || rows.length} />
+        <RegistryMetric label="Unreadable" value={snapshot?.unreadableCount || 0} tone={snapshot?.unreadableCount ? "#b42318" : "#8a94af"} />
+        <RegistryMetric label="Snapshot age" value={snapshotAgeMs === null ? "Not loaded" : `${Math.round(snapshotAgeMs / 1000)}s`} tone={stale ? "#8a5b00" : "#64739f"} />
+      </Box>
+
+      <Collapse in={open} timeout={90} unmountOnExit>
+        <Divider sx={{ borderColor: "#e6ebf7" }} />
+        <Box sx={{ px: 1.5, py: 1.15 }}>
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1, overflowWrap: "anywhere" }}>
+            Source {snapshot?.source || "not loaded"} / mode {snapshot?.discoveryMode || "unknown"} / event cursor {snapshot?.eventCursor || 0} / updated {formatDate(snapshot?.updatedAt)}
+          </Typography>
+          {rows.length ? (
+            <Box sx={{ display: "grid", gap: 0.65, maxHeight: 360, overflowY: "auto", overflowX: "hidden", pr: 0.35 }}>
+              {rows.map((auction) => {
+                const active = auction.registryState === "active";
+                return (
+                  <Box
+                    key={`${auction.registryState}-${auction.address}`}
+                    sx={{
+                      px: 1.1,
+                      py: 0.9,
+                      display: "grid",
+                      gridTemplateColumns: { xs: "1fr auto", md: "minmax(170px, 1.5fr) repeat(5, minmax(80px, 0.7fr))" },
+                      gap: 1,
+                      alignItems: "center",
+                      border: "1px solid #e5eaf7",
+                      borderRadius: 1.5,
+                      backgroundColor: "rgba(255,255,255,0.72)",
+                    }}
+                  >
+                    <Box sx={{ minWidth: 0 }}>
+                      <Tooltip title={auction.address || "Unknown auction"}>
+                        <Typography
+                          component="a"
+                          href={auction.address ? `https://sepolia.etherscan.io/address/${auction.address}` : undefined}
+                          target="_blank"
+                          rel="noreferrer"
+                          variant="caption"
+                          sx={{ color: "#173b91", fontWeight: 800, textDecoration: "none", overflowWrap: "anywhere" }}
+                        >
+                          {shortAddress(auction.address)}
+                        </Typography>
+                      </Tooltip>
+                      <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
+                        Seller {shortAddress(auction.manager)}
+                      </Typography>
+                    </Box>
+                    <Typography variant="caption" sx={{ justifySelf: "end", px: 0.85, py: 0.2, borderRadius: 999, color: active ? "#0f6d45" : "#8a5b00", backgroundColor: active ? "#eaf8f1" : "#fff7df", fontWeight: 800 }}>
+                      {active ? "Active" : "Finalize"}
+                    </Typography>
+                    <BotMetric label={active ? "Time remaining" : "Ended"} value={active ? formatAuctionCountdown(auction.endTimeSec, nowMs) : formatDate(Number(auction.endTimeSec || 0) * 1000)} tone={active ? "#d97724" : "#64739f"} />
+                    <BotMetric label="Minimum" value={`${auction.minimumContribution || 0} wei`} tone="#64739f" />
+                    <BotMetric label="Highest bid" value={`${auction.highestBid || 0} wei`} tone="#64739f" />
+                    <BotMetric label="Bidders" value={auction.approversCount || 0} tone="#64739f" />
+                  </Box>
+                );
+              })}
+            </Box>
+          ) : (
+            <Box sx={{ py: 2.5, textAlign: "center" }}>
+              <Typography variant="body2" color="text.secondary">No active or awaiting-finalization auctions are in the shared index.</Typography>
+            </Box>
+          )}
+        </Box>
+      </Collapse>
+    </Box>
+  );
+};
+
+const ObservatoryRound = ({ round }) => {
+  const [open, setOpen] = useState(false);
+  const bots = Array.isArray(round.bots) ? round.bots : [];
+  const bidsSent = bots.reduce((total, bot) => total + Number(bot.metrics?.bidsSent || 0), 0);
+  const failures = (round.error ? 1 : 0) + bots.reduce(
+    (total, bot) => total + (bot.steps || []).filter((step) => step.outcome === "error").length,
+    0,
+  );
+
+  return (
+    <Box sx={{ border: "1px solid #e2e8f6", borderRadius: 1.5, backgroundColor: "rgba(255,255,255,0.76)", overflow: "hidden" }}>
+      <Button
+        fullWidth
+        onClick={() => setOpen((current) => !current)}
+        endIcon={<KeyboardArrowDownRoundedIcon sx={{ transform: open ? "rotate(180deg)" : "none", transition: "transform 90ms ease" }} />}
+        sx={{ px: 1.2, py: 0.85, borderRadius: 0, justifyContent: "space-between", color: "#263762", textTransform: "none", textAlign: "left" }}
+      >
+        <Box sx={{ minWidth: 0 }}>
+          <Typography variant="caption" sx={{ display: "block", fontWeight: 800 }}>
+            {formatDate(round.startedAt)} / {round.status || "completed"}
+          </Typography>
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
+            {bots.length} bots / {round.snapshot?.activeAuctions || 0} active / {bidsSent} sent / {failures} failures / {Math.max(0, Number(round.finishedAt || round.startedAt) - Number(round.startedAt || 0))} ms
+          </Typography>
+        </Box>
+      </Button>
+      <Collapse in={open} timeout={90} unmountOnExit>
+        <Divider sx={{ borderColor: "#e7ebf6" }} />
+        <Box sx={{ p: 1.15, display: "grid", gap: 0.9 }}>
+          <Typography variant="caption" color="text.secondary" sx={{ overflowWrap: "anywhere" }}>
+            Block {round.blockNumber || "unavailable"} / snapshot {round.snapshot?.source || "unknown"} / cursor {round.snapshot?.eventCursor || 0} / provider {round.provider || "not selected"}
+          </Typography>
+          {(round.error || round.warning) && (
+            <Alert severity={round.error ? "error" : "warning"} sx={{ py: 0, "& .MuiAlert-message": { fontSize: "0.75rem", overflowWrap: "anywhere" } }}>
+              {round.error || round.warning}
+            </Alert>
+          )}
+          {bots.map((bot) => (
+            <Box key={bot.id} sx={{ p: 1, borderRadius: 1.25, backgroundColor: "#f8faff", border: "1px solid #e7ebf7" }}>
+              <Box sx={{ display: "flex", justifyContent: "space-between", gap: 1, flexWrap: "wrap" }}>
+                <Typography variant="caption" sx={{ fontWeight: 800 }}>{bot.name}</Typography>
+                <Typography variant="caption" color="text.secondary">{bot.outcome || "completed"} / budget {bot.budgetWei ?? "unreadable"} wei</Typography>
+              </Box>
+              <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.35, overflowWrap: "anywhere" }}>
+                Primary {(bot.primary || []).map(shortAddress).join(", ") || "none"} / reserve {(bot.reserve || []).map(shortAddress).join(", ") || "none"}
+              </Typography>
+              <Box sx={{ mt: 0.7, display: "grid", gap: 0.45 }}>
+                {(bot.steps || []).length ? bot.steps.map((step, index) => (
+                  <Box key={`${step.at || 0}-${index}`} sx={{ display: "grid", gridTemplateColumns: { xs: "76px minmax(0, 1fr)", sm: "86px minmax(120px, 0.7fr) minmax(0, 1.6fr)" }, gap: 0.75, alignItems: "baseline" }}>
+                    <Typography variant="caption" sx={{ color: step.outcome === "error" ? "#b42318" : step.outcome === "sent" ? "#168052" : "#53648f", fontWeight: 800 }}>
+                      {step.stage || step.outcome || "event"}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">{step.auction ? shortAddress(step.auction) : "round"}</Typography>
+                    <Typography variant="caption" sx={{ overflowWrap: "anywhere" }}>
+                      {step.reason || step.detail || step.outcome || "completed"}
+                      {step.transactionHash && (
+                        <Box component="a" href={`https://sepolia.etherscan.io/tx/${step.transactionHash}`} target="_blank" rel="noreferrer" sx={{ ml: 0.7, color: "#173b91", fontWeight: 700, textDecoration: "none" }}>
+                          transaction
+                        </Box>
+                      )}
+                    </Typography>
+                  </Box>
+                )) : (
+                  <Typography variant="caption" color="text.secondary">
+                    {bot.outcome === "not-started" ? "Round stopped before bot assignment." : "No candidate work was assigned."}
+                  </Typography>
+                )}
+              </Box>
+            </Box>
+          ))}
+          {(round.finalization || []).map((entry, index) => (
+            <Typography key={`${entry.auction}-${index}`} variant="caption" sx={{ color: entry.outcome === "error" ? "#b42318" : "#168052", overflowWrap: "anywhere" }}>
+              Finalization {shortAddress(entry.auction)}: {entry.reason || entry.outcome}
+            </Typography>
+          ))}
+        </Box>
+      </Collapse>
+    </Box>
+  );
+};
+
+const BotObservatory = ({ rounds, open, onToggle, onClear }) => {
+  const latest = rounds[0];
+  return (
+    <Box sx={{ border: "1px solid #dfe6f7", borderRadius: 2, background: "linear-gradient(145deg, #ffffff, #f8faff)", boxShadow: "0 5px 16px rgba(24, 52, 121, 0.04)", overflow: "hidden" }}>
+      <Box sx={{ px: 1.5, py: 1.25, display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 1, alignItems: "center" }}>
+        <Box sx={{ minWidth: 0 }}>
+          <Typography variant="body2" sx={{ fontWeight: 800 }}>Bot observatory</Typography>
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.35 }}>
+            Inspect coordinated assignments, candidate decisions, queued writes, receipts, skips, and failures round by round.
+          </Typography>
+          {!open && latest && (
+            <Typography variant="caption" sx={{ display: "block", mt: 0.45, color: "#53648f" }}>
+              Latest {formatDate(latest.startedAt)} / {latest.bots?.length || 0} bots / {latest.snapshot?.activeAuctions || 0} active
+            </Typography>
+          )}
+        </Box>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 0.35 }}>
+          {open && (
+            <Tooltip title="Clear observatory history">
+              <span>
+                <IconButton size="small" onClick={onClear} disabled={!rounds.length} aria-label="Clear bot observatory history">
+                  <DeleteSweepRoundedIcon fontSize="small" />
+                </IconButton>
+              </span>
+            </Tooltip>
+          )}
+          <IconButton size="small" onClick={onToggle} aria-label={open ? "Collapse bot observatory" : "Expand bot observatory"}>
+            <KeyboardArrowDownRoundedIcon fontSize="small" sx={{ transform: open ? "rotate(180deg)" : "none", transition: "transform 90ms ease" }} />
+          </IconButton>
+        </Box>
+      </Box>
+      <Collapse in={open} timeout={90} unmountOnExit>
+        <Divider sx={{ borderColor: "#e6ebf7" }} />
+        <Box sx={{ p: 1.25, display: "grid", gap: 0.75, maxHeight: 520, overflowY: "auto", overflowX: "hidden" }}>
+          {rounds.length ? rounds.map((round) => <ObservatoryRound key={round.id} round={round} />) : (
+            <Box sx={{ py: 2.5, textAlign: "center" }}><Typography variant="body2" color="text.secondary">No coordinated rounds have been observed in this browser yet.</Typography></Box>
+          )}
+        </Box>
+      </Collapse>
+    </Box>
+  );
 };
 
 const sendContractTx = async (method, options) => {
@@ -332,56 +1112,38 @@ const sendContractTx = async (method, options) => {
   });
 };
 
-export const getBidDecision = (auction, budget, strategy) => {
-  if (!auction) return { bid: false, reason: "No auction candidate" };
-  if (!auction.isActive) return { bid: false, reason: "Auction closed" };
-  if (auction.isManager) return { bid: false, reason: "Bot is the seller" };
-  if (auction.secondsLeft < strategy.minTimeRemainingSec) {
-    return { bid: false, reason: "Too little time remaining" };
-  }
-  if (strategy.skipIfWinning && auction.isWinner) {
-    return { bid: false, reason: "Bot already winning" };
-  }
-  if (auction.minimumContribution > strategy.maxMinContributionWei) {
-    return { bid: false, reason: "Minimum contribution too high" };
-  }
-
-  const emptyAuction = auction.approversCount === 0 && auction.highestBid === 0n;
-  const targetBid = emptyAuction
-    ? auction.minimumContribution
-    : auction.highestBid + strategy.outbidByWei;
-  const incrementalValue = auction.myBid > 0n ? targetBid - auction.myBid : targetBid;
-
-  if (targetBid > strategy.maxBidWei) return { bid: false, reason: "Target bid exceeds max bid" };
-  if (incrementalValue <= 0n) return { bid: false, reason: "Existing bid already covers target" };
-  if (incrementalValue > budget) return { bid: false, reason: "Insufficient budget" };
-
-  return { bid: true, amountWei: incrementalValue, targetBid };
-};
-
-const shuffle = (values) => {
-  const next = [...values];
-  for (let index = next.length - 1; index > 0; index -= 1) {
-    const swapIndex = Math.floor(Math.random() * (index + 1));
-    [next[index], next[swapIndex]] = [next[swapIndex], next[index]];
-  }
-  return next;
-};
+export const getBidDecision = getSharedBidDecision;
 
 const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
+  const activeFactoryAddress = getActiveFactoryAddress();
   const keyFileInputRef = useRef(null);
   const rpcIndexRef = useRef(0);
   const rpcCooldownUntilRef = useRef({});
   const registryCooldownUntilRef = useRef(0);
   const schedulerTickRunningRef = useRef(false);
+  const coordinatorFactoryRef = useRef("");
+  const cycleCursorRef = useRef(0);
+  const cancelledBotsRef = useRef(new Set());
+  const finalizationLastRunRef = useRef(0);
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState("");
   const [bots, setBots] = useState([]);
   const [logs, setLogs] = useState([]);
+  const [logFilter, setLogFilter] = useState("all");
   const [error, setError] = useState("");
   const [rpcNotice, setRpcNotice] = useState("");
   const [showBotForm, setShowBotForm] = useState(false);
   const [botForm, setBotForm] = useState(emptyBotForm);
+  const [registrySnapshot, setRegistrySnapshot] = useState(() =>
+    getActiveAuctionSnapshot(activeFactoryAddress),
+  );
+  const [registryOpen, setRegistryOpen] = useState(false);
+  const [registryRefreshing, setRegistryRefreshing] = useState(false);
+  const [registryClock, setRegistryClock] = useState(Date.now());
+  const [observatoryRounds, setObservatoryRounds] = useState(() =>
+    loadStoredObservatoryRounds(),
+  );
+  const [observatoryOpen, setObservatoryOpen] = useState(false);
 
   const summary = useMemo(
     () =>
@@ -396,6 +1158,34 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
         { registered: 0, running: 0, cycles: 0, errors: 0 }
       ),
     [bots]
+  );
+
+  const logCounts = useMemo(
+    () =>
+      logs.reduce(
+        (counts, entry) => {
+          const level = String(entry.level || "info").toLowerCase();
+          counts.all += 1;
+          if (Object.prototype.hasOwnProperty.call(counts, level)) {
+            counts[level] += 1;
+          }
+          return counts;
+        },
+        { all: 0, error: 0, warn: 0, info: 0 }
+      ),
+    [logs]
+  );
+
+  const visibleLogs = useMemo(
+    () =>
+      logs
+        .filter(
+          (entry) =>
+            logFilter === "all" ||
+            String(entry.level || "info").toLowerCase() === logFilter
+        )
+        .slice(0, 40),
+    [logFilter, logs]
   );
 
   const commitBots = useCallback((updater) => {
@@ -417,6 +1207,18 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
       saveStoredLogs(next);
       return next;
     });
+  }, []);
+
+  const recordObservatoryRound = useCallback((round) => {
+    const immutableRound = JSON.parse(JSON.stringify(round));
+    const next = appendStoredObservatoryRound(immutableRound);
+    setObservatoryRounds(next);
+  }, []);
+
+  const clearObservatory = useCallback(() => {
+    saveStoredObservatoryRounds([]);
+    setObservatoryRounds([]);
+    toast.success("Bot observatory history cleared");
   }, []);
 
   const getNextRpcUrl = useCallback(() => {
@@ -477,6 +1279,7 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
     try {
       setBots(loadStoredBots());
       setLogs(loadStoredLogs());
+      setObservatoryRounds(loadStoredObservatoryRounds());
     } catch (loadError) {
       setError(loadError.message);
     } finally {
@@ -492,6 +1295,7 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
     const syncVisiblePanel = () => {
       setBots(loadStoredBots());
       setLogs(loadStoredLogs());
+      setObservatoryRounds(loadStoredObservatoryRounds());
     };
 
     window.addEventListener(BOTNET_STATE_EVENT, syncVisiblePanel);
@@ -499,6 +1303,43 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
       window.removeEventListener(BOTNET_STATE_EVENT, syncVisiblePanel);
     };
   }, []);
+
+  useEffect(() => {
+    const factoryKey = String(activeFactoryAddress || "").toLowerCase();
+    setRegistrySnapshot(getActiveAuctionSnapshot(activeFactoryAddress));
+    setRegistryClock(Date.now());
+    return subscribeActiveAuctionRegistry((snapshot) => {
+      if (String(snapshot?.factoryAddress || "").toLowerCase() !== factoryKey) return;
+      setRegistrySnapshot(snapshot);
+      setRegistryClock(Date.now());
+    });
+  }, [activeFactoryAddress]);
+
+  useEffect(() => {
+    if (!registryOpen) return undefined;
+    const timer = window.setInterval(() => setRegistryClock(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [registryOpen]);
+
+  const refreshRegistryView = useCallback(async () => {
+    setRegistryRefreshing(true);
+    try {
+      const snapshot = await refreshActiveAuctionRegistry(activeFactoryAddress, { force: true });
+      setRegistrySnapshot(snapshot);
+      setRegistryClock(Date.now());
+      toast.success("Dynamic auction list refreshed");
+    } catch (refreshError) {
+      const message = isRpcProviderFailure(refreshError)
+        ? getFriendlyRpcError(refreshError)
+        : getErrorMessage(refreshError);
+      setRpcNotice(message);
+      addLog(isRpcProviderFailure(refreshError) ? "warn" : "error", "Dynamic auction list refresh failed", {
+        error: message,
+      });
+    } finally {
+      setRegistryRefreshing(false);
+    }
+  }, [activeFactoryAddress, addLog]);
 
   const updateBot = useCallback(
     (id, patcher) => {
@@ -513,214 +1354,38 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
     [commitBots]
   );
 
-  const runBotCycle = useCallback(
-    async (bot, suppliedSnapshot = null, reservedAuctions = null) => {
-      if (!bot || activeBotCycles.has(bot.id)) return false;
-      activeBotCycles.add(bot.id);
-      updateBot(bot.id, { status: "running-cycle", lastCycleAt: new Date().toISOString(), lastError: null });
-
-      try {
-        if (isMetaMaskAgentBot(bot)) {
-          throw new Error(
-            "This bot is signed by MetaMask Agent Wallet on the Node automation runner, not in the browser.",
-          );
-        }
-        if (!isValidPrivateKey(bot.privateKey)) throw new Error("Invalid bot private key.");
-        const rpcUrl = getNextRpcUrl();
-        if (!rpcUrl) {
-          updateBot(bot.id, (current) => ({
-            status: current.running ? "running" : "stopped",
-            lastError: "RPC providers are cooling down. The scheduler will retry later.",
-          }));
-          return false;
-        }
-        const factoryAddress = getActiveFactoryAddress();
-        if (!factoryAddress) throw new Error("No active factory contract configured.");
-
-        const web3 = new Web3(
-          new Web3.providers.HttpProvider(rpcUrl, {
-            timeout: Number(process.env.REACT_APP_RPC_TIMEOUT_MS || 9000),
-          })
-        );
-        const account = web3.eth.accounts.privateKeyToAccount(normalizePrivateKey(bot.privateKey));
-        web3.eth.accounts.wallet.add(account);
-        web3.eth.defaultAccount = account.address;
-
-        const factory = new web3.eth.Contract(CampaignFactory.abi, factoryAddress);
-        const snapshot =
-          suppliedSnapshot ||
-          (await refreshActiveAuctionRegistry(factoryAddress));
-        const now = Math.floor(Date.now() / 1000);
-        const me = account.address.toLowerCase();
-        const toBotAuction = (auction) => {
-          const endTimeSec = Number(auction.endTimeSec || 0);
-          const highestBidder = String(auction.highestBidder || "").toLowerCase();
-          return {
-            ...auction,
-            campaign: new web3.eth.Contract(Campaign.abi, auction.address),
-            minimumContribution: toBigIntSafe(auction.minimumContribution),
-            approversCount: Number(auction.approversCount || 0),
-            highestBid: toBigIntSafe(auction.highestBid),
-            endTimeSec,
-            isActive: !auction.closed && endTimeSec > now,
-            secondsLeft: Math.max(0, endTimeSec - now),
-            isManager: String(auction.manager || "").toLowerCase() === me,
-            isWinner: highestBidder === me,
-            myBid: 0n,
-          };
-        };
-        const activeAuctions = (snapshot.activeAuctions || []).map(toBotAuction);
-        const finalizableAuctions = (snapshot.finalizableAuctions || []).map(toBotAuction);
-
-        const strategy = getStrategy(bot);
-
-        if (strategy.enableFinalize) {
-          for (const auction of finalizableAuctions.filter(
-            (item) => item.isManager && item.approversCount > 0
-          )) {
-            try {
-              await sendContractTx(auction.campaign.methods.finalizeAuctionIfNeeded(), {
-                from: account.address,
-              });
-              updateBot(bot.id, (current) => ({
-                stats: { ...current.stats, finalized: (current.stats?.finalized || 0) + 1 },
-              }));
-              addLog("info", `Finalized auction ${auction.address}`, { bot: bot.name });
-            } catch (finalizeError) {
-              if (isRpcProviderFailure(finalizeError)) {
-                coolDownRpcUrl(rpcUrl, finalizeError);
-                throw finalizeError;
-              }
-              addLog("warn", `Finalize failed for ${auction.address}`, {
-                bot: bot.name,
-                error: finalizeError.message || String(finalizeError),
-              });
-            }
-          }
-        }
-
-        if (strategy.enableBidding) {
-          let budget = 0n;
-          try {
-            budget = toBigIntSafe(await factory.methods.getBudget(account.address).call());
-          } catch (budgetError) {
-            if (isRpcProviderFailure(budgetError)) {
-              coolDownRpcUrl(rpcUrl, budgetError);
-            }
-            throw budgetError;
-          }
-
-          const eligible = shuffle(
-            activeAuctions.filter((auction) => {
-              if (!auction.isActive || auction.isManager) return false;
-              if (strategy.skipIfWinning && auction.isWinner) return false;
-              if (auction.secondsLeft < strategy.minTimeRemainingSec) return false;
-              if (auction.minimumContribution > strategy.maxMinContributionWei) return false;
-              const targetBid =
-                auction.approversCount === 0 && auction.highestBid === 0n
-                  ? auction.minimumContribution
-                  : auction.highestBid + strategy.outbidByWei;
-              return targetBid <= strategy.maxBidWei;
-            }),
-          ).slice(0, BOT_CANDIDATES_PER_CYCLE);
-
-          let bidSent = false;
-          let lastDecision = { reason: eligible.length ? "No eligible bid" : "No eligible active auctions" };
-
-          for (const candidate of eligible) {
-            const candidateKey = candidate.address.toLowerCase();
-            if (reservedAuctions?.has(candidateKey)) continue;
-            reservedAuctions?.add(candidateKey);
-
-            try {
-              candidate.myBid = toBigIntSafe(
-                await candidate.campaign.methods.getBid(account.address).call(),
-              );
-              const decision = getBidDecision(candidate, budget, strategy);
-              lastDecision = decision;
-              if (!decision.bid) {
-                reservedAuctions?.delete(candidateKey);
-                continue;
-              }
-
-              await sendContractTx(candidate.campaign.methods.contribute(), {
-                from: account.address,
-                value: decision.amountWei.toString(),
-              });
-            } catch (bidError) {
-              if (isRpcProviderFailure(bidError)) {
-                coolDownRpcUrl(rpcUrl, bidError);
-                throw bidError;
-              }
-              addLog("warn", `Bid attempt skipped for ${candidate.address}`, {
-                bot: bot.name,
-                error: getErrorMessage(bidError),
-              });
-              reservedAuctions?.delete(candidateKey);
-              continue;
-            }
-
-            updateBot(bot.id, (current) => ({
-              stats: { ...current.stats, bids: (current.stats?.bids || 0) + 1 },
-            }));
-            addLog("info", `Bid sent by ${bot.name}`, {
-              auction: candidate.address,
-              amountWei: lastDecision.amountWei.toString(),
-            });
-            bidSent = true;
-            break;
-          }
-
-          if (!bidSent) {
-            addLog("info", `No bid sent by ${bot.name}: ${lastDecision.reason}`, {
-              activeAuctions: activeAuctions.length,
-              eligibleAuctions: eligible.length,
-              source: snapshot.source,
-              budget: budget.toString(),
-            });
-          }
-        }
-
-        updateBot(bot.id, (current) => ({
-          status: current.running ? "running" : "stopped",
-          wallet: account.address,
-          stats: { ...current.stats, cycles: (current.stats?.cycles || 0) + 1 },
-        }));
-        return true;
-      } catch (cycleError) {
-        const providerFailure = isRpcProviderFailure(cycleError);
-        updateBot(bot.id, (current) => ({
-          status: current.running ? "running" : providerFailure ? "stopped" : "error",
-          lastError: providerFailure
-            ? getFriendlyRpcError(cycleError)
-            : getErrorMessage(cycleError),
-          stats: {
-            ...current.stats,
-            errors: providerFailure
-              ? current.stats?.errors || 0
-              : (current.stats?.errors || 0) + 1,
-          },
-        }));
-        addLog(providerFailure ? "warn" : "error", `Bot cycle failed for ${bot.name}`, {
-          error: providerFailure
-            ? getFriendlyRpcError(cycleError)
-            : getErrorMessage(cycleError),
-        });
-        return false;
-      } finally {
-        activeBotCycles.delete(bot.id);
-      }
+  const clearBotError = useCallback(
+    (id) => {
+      updateBot(id, (bot) => ({
+        lastError: null,
+        status: bot.running ? "running" : "stopped",
+      }));
+      addLog("info", "Dismissed stored bot error", { botId: id });
     },
-    [addLog, coolDownRpcUrl, getNextRpcUrl, updateBot]
+    [addLog, updateBot]
   );
+
+  const retryRpcProviders = useCallback(() => {
+    rpcCooldownUntilRef.current = {};
+    registryCooldownUntilRef.current = 0;
+    setRpcNotice("");
+    setError("");
+    addLog("info", "Cleared RPC cooldowns; providers will retry on the next cycle");
+    toast.success("RPC providers are ready to retry");
+  }, [addLog]);
+
+  const clearLogs = useCallback(() => {
+    setLogs([]);
+    saveStoredLogs([]);
+    toast.success("Bot event history cleared");
+  }, []);
 
   const runBotsInBatches = useCallback(
     async (selectedBots, limit = selectedBots.length) => {
       const runnableBots = selectedBots
         .filter((bot) => bot.enabled && isBrowserRunnableBot(bot))
         .slice(0, limit);
-      const workerCount = Math.min(BOT_MAX_BOTS_PER_TICK, runnableBots.length);
-      if (!workerCount) return false;
+      if (!runnableBots.length) return false;
 
       if (registryCooldownUntilRef.current > Date.now()) {
         const seconds = Math.max(
@@ -731,7 +1396,31 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
         return false;
       }
 
+      const rpcUrl = getNextRpcUrl();
+      if (!rpcUrl) return false;
       const factoryAddress = getActiveFactoryAddress();
+      if (!factoryAddress) throw new Error("No active factory contract configured.");
+      const web3 = getCachedWeb3(rpcUrl);
+      const factory = getCachedFactory(web3, rpcUrl, factoryAddress);
+      const startedAt = Date.now();
+      const roundTrace = {
+        id: `browser-${startedAt.toString(36)}-${Math.random().toString(16).slice(2, 8)}`,
+        startedAt,
+        finishedAt: null,
+        status: "running",
+        factoryAddress,
+        provider: (() => {
+          try {
+            return new URL(rpcUrl).hostname;
+          } catch (_) {
+            return "configured RPC";
+          }
+        })(),
+        blockNumber: null,
+        snapshot: null,
+        bots: [],
+        finalization: [],
+      };
       let sharedSnapshot;
       try {
         sharedSnapshot = await refreshActiveAuctionRegistry(factoryAddress);
@@ -747,37 +1436,412 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
         const message = isRpcProviderFailure(snapshotError)
           ? getFriendlyRpcError(snapshotError)
           : `Active auction refresh failed: ${getErrorMessage(snapshotError)}`;
-        setRpcNotice(message);
-        addLog(isRpcProviderFailure(snapshotError) ? "warn" : "error", message);
+        const cached = getUsableCachedAuctionSnapshot(
+          getActiveAuctionSnapshot(factoryAddress),
+        );
+        if (cached) {
+          sharedSnapshot = cached.snapshot;
+          roundTrace.degraded = true;
+          roundTrace.warning = `${message} Using the recent shared auction index for this round.`;
+          setRpcNotice(roundTrace.warning);
+          addLog("warn", "Active auction refresh failed; using the recent shared index", {
+            snapshotAgeMs: cached.ageMs,
+            failureKind,
+          });
+        } else {
+          setRpcNotice(message);
+          addLog(isRpcProviderFailure(snapshotError) ? "warn" : "error", message);
+          recordObservatoryRound({
+            ...roundTrace,
+            finishedAt: Date.now(),
+            status: "snapshot-failed",
+            error: message,
+            bots: runnableBots.map((bot) => ({
+              id: bot.id,
+              name: bot.name,
+              wallet: bot.wallet,
+              outcome: "not-started",
+              primary: [],
+              reserve: [],
+              steps: [],
+            })),
+          });
+          return false;
+        }
+      }
+      const nowSec = Math.floor(Date.now() / 1000);
+      const contexts = runnableBots.map((bot) => {
+        const account = getCachedAccount(web3, bot.privateKey);
+        return { bot, account, strategy: getStrategy(bot) };
+      });
+      const activeAuctions = sharedSnapshot.activeAuctions || [];
+      const allocation = allocateCycleCandidates({
+        bots: contexts
+          .filter(({ strategy }) => strategy.enableBidding)
+          .map(({ bot, account, strategy }) => ({ id: bot.id, wallet: account.address, strategy })),
+        auctions: activeAuctions,
+        cursor: cycleCursorRef.current,
+        nowSec,
+      });
+      cycleCursorRef.current = allocation.nextCursor;
+
+      roundTrace.snapshot = {
+        updatedAt: Number(sharedSnapshot.updatedAt || 0),
+        source: sharedSnapshot.source || "unknown",
+        discoveryMode: sharedSnapshot.discoveryMode || "unknown",
+        eventCursor: Number(sharedSnapshot.eventCursor || 0),
+        activeAuctions: activeAuctions.length,
+        finalizableAuctions: sharedSnapshot.finalizableAuctions?.length || 0,
+        knownAddressCount: Number(sharedSnapshot.knownAddressCount || 0),
+        unreadableCount: Number(sharedSnapshot.unreadableCount || 0),
+      };
+      roundTrace.bots = contexts.map(({ bot, account, strategy }) => {
+        const assigned = allocation.assignments[bot.id] || { primary: [], reserve: [] };
+        return {
+          id: bot.id,
+          name: bot.name,
+          wallet: account.address,
+          outcome: "planned",
+          budgetWei: null,
+          maxBidsPerCycle: strategy.maxBidsPerCycle,
+          primary: assigned.primary.map((auction) => auction.address),
+          reserve: assigned.reserve.map((auction) => auction.address),
+          steps: !assigned.primary.length && !assigned.reserve.length
+            ? [{ at: Date.now(), stage: "planner", outcome: "skipped", reason: "No eligible active auctions were assigned" }]
+            : [],
+          metrics: null,
+        };
+      });
+      const traceByBot = new Map(roundTrace.bots.map((bot) => [bot.id, bot]));
+      recordObservatoryRound({ ...roundTrace, status: "planned" });
+
+      let blockNumber;
+      try {
+        blockNumber = await web3.eth.getBlockNumber();
+        roundTrace.blockNumber = Number(blockNumber);
+      } catch (blockError) {
+        const message = getFriendlyRpcError(blockError);
+        roundTrace.bots.forEach((bot) => {
+          bot.outcome = "read-failed";
+          bot.steps.push({ at: Date.now(), stage: "block", outcome: "error", reason: message });
+        });
+        recordObservatoryRound({ ...roundTrace, finishedAt: Date.now(), status: "read-failed", error: message });
+        if (isRpcProviderFailure(blockError)) coolDownRpcUrl(rpcUrl, blockError);
         return false;
       }
-      const reservedAuctions = new Set();
-      let nextIndex = 0;
-      let completedCycles = 0;
+      const readSpecs = [];
+      contexts.forEach(({ bot, account, strategy }) => {
+        if (!strategy.enableBidding) return;
+        const assigned = allocation.assignments[bot.id] || { primary: [], reserve: [] };
+        if (!assigned.primary.length && !assigned.reserve.length) return;
+        readSpecs.push({ type: "budget", botId: bot.id, method: factory.methods.getBudget(account.address) });
+        [...assigned.primary, ...assigned.reserve].forEach((auction) => {
+          readSpecs.push({
+            type: "bid",
+            botId: bot.id,
+            auctionAddress: auction.address,
+            method: getCachedCampaign(web3, rpcUrl, auction.address).methods.getBid(account.address),
+          });
+        });
+      });
 
-      const runWorker = async (workerIndex) => {
-        if (workerIndex > 0 && BOT_START_STAGGER_MS > 0) {
-          await sleep(workerIndex * BOT_START_STAGGER_MS);
+      const readResults = [];
+      const batchSize = 25;
+      try {
+        for (let offset = 0; offset < readSpecs.length; offset += batchSize) {
+          const chunk = readSpecs.slice(offset, offset + batchSize);
+          readResults.push(...(await executeBatchCalls(web3, chunk.map((item) => item.method), blockNumber)));
         }
+      } catch (batchError) {
+        const message = getFriendlyRpcError(batchError);
+        roundTrace.bots.forEach((bot) => {
+          bot.outcome = "read-failed";
+          bot.steps.push({ at: Date.now(), stage: "batch-read", outcome: "error", reason: message });
+        });
+        recordObservatoryRound({ ...roundTrace, finishedAt: Date.now(), status: "read-failed", error: message });
+        if (isRpcProviderFailure(batchError)) coolDownRpcUrl(rpcUrl, batchError);
+        throw batchError;
+      }
 
-        while (nextIndex < runnableBots.length) {
-          const bot = runnableBots[nextIndex];
-          nextIndex += 1;
-          const completed = await runBotCycle(bot, sharedSnapshot, reservedAuctions);
-          if (completed) completedCycles += 1;
+      const budgets = new Map();
+      const bids = new Map();
+      readSpecs.forEach((spec, index) => {
+        const result = readResults[index];
+        if (result?.status !== "fulfilled") {
+          const trace = traceByBot.get(spec.botId);
+          trace?.steps.push({
+            at: Date.now(),
+            stage: spec.type === "budget" ? "budget-read" : "bid-read",
+            auction: spec.auctionAddress || "",
+            outcome: "error",
+            reason: getErrorMessage(result?.reason || "RPC batch item failed"),
+          });
+          return;
+        }
+        if (spec.type === "budget") budgets.set(spec.botId, toBigIntSafe(result.value));
+        else bids.set(`${spec.botId}:${String(spec.auctionAddress).toLowerCase()}`, toBigIntSafe(result.value));
+      });
+      roundTrace.bots.forEach((trace) => {
+        if (budgets.has(trace.id)) trace.budgetWei = budgets.get(trace.id).toString();
+      });
 
-          if (BOT_START_STAGGER_MS > 0) {
-            await sleep(BOT_START_STAGGER_MS);
+      const runPreparedBot = async ({ bot, account, strategy }, workerIndex) => {
+        const botTrace = traceByBot.get(bot.id);
+        if (activeBotCycles.has(bot.id)) {
+          if (botTrace) {
+            botTrace.outcome = "already-running";
+            botTrace.steps.push({ at: Date.now(), stage: "scheduler", outcome: "skipped", reason: "A previous cycle is still running" });
           }
+          return false;
+        }
+        activeBotCycles.add(bot.id);
+        const baseMetrics = createEmptyCycleMetrics(startedAt);
+        const assigned = allocation.assignments[bot.id] || { primary: [], reserve: [] };
+        let budget = budgets.get(bot.id) ?? 0n;
+        let sent = 0;
+        let attempted = 0;
+        let lastDecision = { reason: assigned.primary.length ? "No eligible bid" : "No eligible active auctions" };
+        updateBot(bot.id, { status: "running-cycle", lastCycleAt: new Date().toISOString(), lastError: null });
+
+        try {
+          if (workerIndex > 0 && BOT_START_STAGGER_MS > 0) await sleep(workerIndex * BOT_START_STAGGER_MS);
+          for (const auction of [...assigned.primary, ...assigned.reserve]) {
+            if (sent >= strategy.maxBidsPerCycle || cancelledBotsRef.current.has(bot.id)) break;
+            const bidKey = `${bot.id}:${String(auction.address).toLowerCase()}`;
+            if (!bids.has(bidKey)) {
+              botTrace?.steps.push({ at: Date.now(), stage: "bid-read", auction: auction.address, outcome: "skipped", reason: "Bid state was unavailable" });
+              continue;
+            }
+            const endTimeSec = Number(auction.endTimeSec || 0);
+            const candidate = {
+              ...auction,
+              campaign: getCachedCampaign(web3, rpcUrl, auction.address),
+              minimumContribution: toBigIntSafe(auction.minimumContribution),
+              highestBid: toBigIntSafe(auction.highestBid),
+              myBid: bids.get(bidKey),
+              isActive: !auction.closed && endTimeSec > nowSec,
+              secondsLeft: Math.max(0, endTimeSec - nowSec),
+              isManager: String(auction.manager || "").toLowerCase() === account.address.toLowerCase(),
+              isWinner: String(auction.highestBidder || "").toLowerCase() === account.address.toLowerCase(),
+            };
+            const decision = getBidDecision(candidate, budget, strategy);
+            lastDecision = decision;
+            botTrace?.steps.push({
+              at: Date.now(),
+              stage: "decision",
+              auction: candidate.address,
+              outcome: decision.bid ? "eligible" : "skipped",
+              reason: decision.reason || (decision.bid ? `Bid ${decision.amountWei.toString()} wei` : "Not eligible"),
+              amountWei: decision.bid ? decision.amountWei.toString() : "0",
+            });
+            if (!decision.bid) continue;
+            attempted += 1;
+            botTrace?.steps.push({ at: Date.now(), stage: "write", auction: candidate.address, outcome: "attempted", reason: `Submitting ${decision.amountWei.toString()} wei` });
+
+            try {
+              const receipt = await withBrowserWriteSlot(() => {
+                if (cancelledBotsRef.current.has(bot.id)) return Promise.resolve(null);
+                return sendContractTx(candidate.campaign.methods.contribute(), {
+                  from: account.address,
+                  value: decision.amountWei.toString(),
+                });
+              });
+              if (!receipt || cancelledBotsRef.current.has(bot.id)) {
+                botTrace?.steps.push({ at: Date.now(), stage: "write", auction: candidate.address, outcome: "cancelled", reason: "Stopped before the queued write was submitted" });
+                break;
+              }
+              budget -= decision.amountWei;
+              sent += 1;
+              if (botTrace) botTrace.budgetWei = budget.toString();
+              botTrace?.steps.push({
+                at: Date.now(),
+                stage: "receipt",
+                auction: candidate.address,
+                outcome: "sent",
+                reason: `Confirmed ${decision.amountWei.toString()} wei bid`,
+                transactionHash: receipt.transactionHash || "",
+              });
+              publishActiveAuctions(factoryAddress, [{
+                ...candidate,
+                highestBid: decision.targetBid.toString(),
+                highestBidder: account.address,
+                approversCount: Number(candidate.approversCount || 0) + (candidate.myBid === 0n ? 1 : 0),
+              }], "bot-bid");
+              addLog("info", `Bid sent by ${bot.name}`, {
+                auction: candidate.address,
+                amountWei: decision.amountWei.toString(),
+              });
+            } catch (bidError) {
+              botTrace?.steps.push({
+                at: Date.now(),
+                stage: "write",
+                auction: candidate.address,
+                outcome: "error",
+                reason: isRpcProviderFailure(bidError) ? getFriendlyRpcError(bidError) : getErrorMessage(bidError),
+              });
+              if (isRpcProviderFailure(bidError)) {
+                coolDownRpcUrl(rpcUrl, bidError);
+                throw bidError;
+              }
+              addLog("warn", `Bid attempt skipped for ${candidate.address}`, {
+                bot: bot.name,
+                error: getErrorMessage(bidError),
+              });
+            }
+          }
+
+          const metrics = finishCycleMetrics(baseMetrics, {
+            snapshotAgeMs: Math.max(0, startedAt - Number(sharedSnapshot.updatedAt || startedAt)),
+            activeAuctions: activeAuctions.length,
+            logicalReads: assigned.primary.length + assigned.reserve.length + (assigned.primary.length ? 1 : 0),
+            rpcBatches: readSpecs.length ? Math.ceil(readSpecs.length / batchSize) : 0,
+            candidatesEvaluated: allocation.candidatesEvaluated,
+            bidsAttempted: attempted,
+            bidsSent: sent,
+            cacheHits: activeAuctions.length,
+            skippedReason: sent ? "" : lastDecision.reason,
+          });
+          if (botTrace) {
+            botTrace.outcome = cancelledBotsRef.current.has(bot.id)
+              ? "cancelled"
+              : sent
+                ? "bid-sent"
+                : "no-bid";
+            botTrace.metrics = metrics;
+            if (cancelledBotsRef.current.has(bot.id)) {
+              botTrace.steps.push({ at: Date.now(), stage: "scheduler", outcome: "cancelled", reason: "Bot was stopped during the round" });
+            }
+          }
+          updateBot(bot.id, (current) => ({
+            status: current.running ? "running" : "stopped",
+            wallet: account.address,
+            lastCycleMetrics: metrics,
+            stats: {
+              ...current.stats,
+              cycles: (current.stats?.cycles || 0) + 1,
+              bids: (current.stats?.bids || 0) + sent,
+            },
+          }));
+          if (!sent) addLog("info", `No bid sent by ${bot.name}: ${lastDecision.reason}`);
+          return true;
+        } catch (cycleError) {
+          const providerFailure = isRpcProviderFailure(cycleError);
+          if (botTrace) {
+            botTrace.outcome = providerFailure ? "provider-failed" : "cycle-failed";
+            botTrace.steps.push({
+              at: Date.now(),
+              stage: "cycle",
+              outcome: "error",
+              reason: providerFailure ? getFriendlyRpcError(cycleError) : getErrorMessage(cycleError),
+            });
+          }
+          updateBot(bot.id, (current) => ({
+            status: current.running ? "running" : providerFailure ? "stopped" : "error",
+            lastError: providerFailure ? getFriendlyRpcError(cycleError) : getErrorMessage(cycleError),
+            lastCycleMetrics: finishCycleMetrics(baseMetrics, {
+              activeAuctions: activeAuctions.length,
+              bidsAttempted: attempted,
+              bidsSent: sent,
+              skippedReason: providerFailure ? "RPC provider unavailable" : "Cycle failed",
+            }),
+            stats: {
+              ...current.stats,
+              errors: providerFailure ? current.stats?.errors || 0 : (current.stats?.errors || 0) + 1,
+            },
+          }));
+          return false;
+        } finally {
+          activeBotCycles.delete(bot.id);
+          recordObservatoryRound({ ...roundTrace, status: "running" });
         }
       };
 
-      await Promise.all(
-        Array.from({ length: workerCount }, (_, workerIndex) => runWorker(workerIndex))
-      );
+      const workerCount = Math.min(BOT_MAX_BOTS_PER_TICK, contexts.length);
+      let nextIndex = 0;
+      let completedCycles = 0;
+      await Promise.all(Array.from({ length: workerCount }, async (_, workerIndex) => {
+        while (nextIndex < contexts.length) {
+          const context = contexts[nextIndex];
+          nextIndex += 1;
+          if (await runPreparedBot(context, workerIndex)) completedCycles += 1;
+        }
+      }));
+
+      if (Date.now() - finalizationLastRunRef.current >= BOT_FINALIZE_INTERVAL_MS) {
+        finalizationLastRunRef.current = Date.now();
+        for (const auction of (sharedSnapshot.finalizableAuctions || []).slice(0, 2)) {
+          const owner = contexts.find(({ account, strategy }) =>
+            strategy.enableFinalize &&
+            account.address.toLowerCase() === String(auction.manager || "").toLowerCase(),
+          );
+          if (!owner || cancelledBotsRef.current.has(owner.bot.id)) {
+            roundTrace.finalization.push({
+              at: Date.now(),
+              auction: auction.address,
+              outcome: "skipped",
+              reason: owner ? "Owner bot was stopped" : "No enabled seller bot controls this auction",
+            });
+            continue;
+          }
+          try {
+            const campaign = getCachedCampaign(web3, rpcUrl, auction.address);
+            const receipt = await withBrowserWriteSlot(() => {
+              if (cancelledBotsRef.current.has(owner.bot.id)) return Promise.resolve(null);
+              return sendContractTx(campaign.methods.finalizeAuctionIfNeeded(), {
+                from: owner.account.address,
+              });
+            });
+            if (!receipt) {
+              roundTrace.finalization.push({ at: Date.now(), auction: auction.address, outcome: "cancelled", reason: "Finalization was cancelled before submission" });
+              continue;
+            }
+            markAuctionClosed(factoryAddress, auction.address, "bot-finalized");
+            roundTrace.finalization.push({
+              at: Date.now(),
+              auction: auction.address,
+              outcome: "sent",
+              reason: "Seller payment finalized",
+              transactionHash: receipt.transactionHash || "",
+            });
+            updateBot(owner.bot.id, (current) => ({
+              stats: {
+                ...current.stats,
+                finalized: (current.stats?.finalized || 0) + 1,
+              },
+            }));
+            addLog("info", `Finalized auction ${auction.address}`, { bot: owner.bot.name });
+          } catch (finalizeError) {
+            roundTrace.finalization.push({
+              at: Date.now(),
+              auction: auction.address,
+              outcome: "error",
+              reason: isRpcProviderFailure(finalizeError) ? getFriendlyRpcError(finalizeError) : getErrorMessage(finalizeError),
+            });
+            if (isRpcProviderFailure(finalizeError)) coolDownRpcUrl(rpcUrl, finalizeError);
+            addLog("warn", `Finalize failed for ${auction.address}`, {
+              bot: owner.bot.name,
+              error: getErrorMessage(finalizeError),
+            });
+          }
+        }
+      }
+
+      recordObservatoryRound({
+        ...roundTrace,
+        finishedAt: Date.now(),
+        status: roundTrace.degraded
+          ? completedCycles
+            ? "completed-with-cached-index"
+            : "cached-index-no-cycle"
+          : completedCycles === contexts.length
+            ? "completed"
+            : completedCycles
+              ? "partial"
+              : "no-cycle-completed",
+      });
       return completedCycles > 0;
     },
-    [addLog, runBotCycle]
+    [addLog, coolDownRpcUrl, getNextRpcUrl, recordObservatoryRound, updateBot]
   );
 
   useEffect(() => {
@@ -785,6 +1849,16 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
 
     const runSchedulerTick = async () => {
       if (schedulerTickRunningRef.current) return;
+      const factoryAddress = getActiveFactoryAddress();
+      if (
+        coordinatorFactoryRef.current &&
+        coordinatorFactoryRef.current.toLowerCase() !== factoryAddress.toLowerCase()
+      ) {
+        releaseActiveAuctionCoordinatorLease(coordinatorFactoryRef.current);
+        coordinatorFactoryRef.current = "";
+      }
+      if (!acquireActiveAuctionCoordinatorLease(factoryAddress)) return;
+      coordinatorFactoryRef.current = factoryAddress;
       schedulerTickRunningRef.current = true;
 
       try {
@@ -807,7 +1881,13 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
     const timer = window.setInterval(runSchedulerTick, BOT_SCHEDULER_TICK_MS);
     runSchedulerTick();
 
-    return () => window.clearInterval(timer);
+    return () => {
+      window.clearInterval(timer);
+      if (coordinatorFactoryRef.current) {
+        releaseActiveAuctionCoordinatorLease(coordinatorFactoryRef.current);
+        coordinatorFactoryRef.current = "";
+      }
+    };
   }, [runBotsInBatches, schedulerEnabled]);
 
   const runAction = async (key, action, body = {}) => {
@@ -815,6 +1895,7 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
     setError("");
     try {
       if (action === "start-network") {
+        cancelledBotsRef.current.clear();
         commitBots((current) =>
           current.map((bot) =>
             bot.enabled && isBrowserRunnableBot(bot)
@@ -824,6 +1905,7 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
         );
         toast.success("Enabled bots started in the Admin Zone");
       } else if (action === "stop-network") {
+        loadStoredBots().forEach((bot) => cancelledBotsRef.current.add(bot.id));
         commitBots((current) =>
           current.map((bot) => ({ ...bot, running: false, status: "stopped" }))
         );
@@ -841,9 +1923,11 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
           toast.error("The Agent Wallet bot is controlled by the Node automation runner.");
           return;
         }
+        cancelledBotsRef.current.delete(body.id);
         updateBot(body.id, { running: true, status: "running", lastError: null });
         toast.success("Bot started");
       } else if (action === "stop-bot") {
+        cancelledBotsRef.current.add(body.id);
         updateBot(body.id, { running: false, status: "stopped" });
         toast.success("Bot stopped");
       } else if (action === "run-bot") {
@@ -852,7 +1936,8 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
           toast.error("Run this bot through the MetaMask Agent Wallet automation runner.");
           return;
         }
-        const completed = await runBotCycle(bot);
+        cancelledBotsRef.current.delete(body.id);
+        const completed = await runBotsInBatches([{ ...bot, enabled: true }], 1);
         if (completed) toast.success("Bot ran once");
         else toast.error("The bot cycle did not complete. Check its status and recent events.");
       } else if (action === "delete-bot") {
@@ -901,6 +1986,7 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
       overrides: {
         MAX_BID_WEI: botForm.maxBidWei || DEFAULT_OVERRIDES.MAX_BID_WEI,
         AUTO_TRADE_INTERVAL_SEC: botForm.intervalSec,
+        MAX_BIDS_PER_CYCLE: String(clampBidsPerCycle(botForm.maxBidsPerCycle)),
         ENABLE_BIDDING: botForm.enableBidding ? "true" : "false",
         ENABLE_FINALIZE: botForm.enableFinalize ? "true" : "false",
       },
@@ -996,6 +2082,17 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
   };
 
   const isBusy = Boolean(actionLoading);
+  const formActivity = getActivityUsage(botForm.intervalSec, botForm.maxBidsPerCycle);
+
+  const updateBotBidLimit = (botId, value) => {
+    const maxBidsPerCycle = clampBidsPerCycle(value);
+    updateBot(botId, (current) => ({
+      overrides: {
+        ...current.overrides,
+        MAX_BIDS_PER_CYCLE: String(maxBidsPerCycle),
+      },
+    }));
+  };
 
   if (headless) return null;
 
@@ -1111,17 +2208,42 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
         )}
 
         {rpcNotice && (
-          <Alert severity="info" sx={{ mt: 1.5 }}>
+          <Alert
+            severity="info"
+            onClose={() => setRpcNotice("")}
+            action={
+              <Button color="inherit" size="small" onClick={retryRpcProviders}>
+                Reset cooldown
+              </Button>
+            }
+            sx={{ mt: 1.5 }}
+          >
             {rpcNotice}
           </Alert>
         )}
 
         {error && (
-          <Alert severity="warning" sx={{ mt: 1.5 }}>
+          <Alert severity="warning" onClose={() => setError("")} sx={{ mt: 1.5 }}>
             {error}
           </Alert>
         )}
       </Box>
+
+      <DynamicAuctionIndex
+        snapshot={registrySnapshot}
+        nowMs={registryClock}
+        open={registryOpen}
+        onToggle={() => setRegistryOpen((current) => !current)}
+        onRefresh={refreshRegistryView}
+        refreshing={registryRefreshing}
+      />
+
+      <BotObservatory
+        rounds={observatoryRounds}
+        open={observatoryOpen}
+        onToggle={() => setObservatoryOpen((current) => !current)}
+        onClear={clearObservatory}
+      />
 
       <Box
         sx={{
@@ -1154,6 +2276,7 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
             <Button
               variant="outlined"
               size="small"
+              startIcon={<UploadFileRoundedIcon />}
               onClick={() => keyFileInputRef.current?.click()}
               disabled={isBusy}
               sx={{ borderRadius: 999 }}
@@ -1163,6 +2286,7 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
             <Button
               variant="contained"
               size="small"
+              startIcon={<AddRoundedIcon />}
               onClick={() => setShowBotForm((current) => !current)}
               sx={{ borderRadius: 999, backgroundColor: "#103090" }}
             >
@@ -1225,6 +2349,24 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
                 handleBotFormChange("intervalSec", event.target.value)
               }
             />
+            <TextField
+              label="Maximum bids per cycle"
+              size="small"
+              type="number"
+              value={botForm.maxBidsPerCycle}
+              inputProps={{ min: 1, max: 5, step: 1 }}
+              onChange={(event) =>
+                handleBotFormChange("maxBidsPerCycle", event.target.value)
+              }
+              helperText={`${formActivity.level} usage - up to ${formActivity.writesPerHour} bid writes/hour`}
+            />
+            {(formActivity.level === "high" ||
+              clampBidsPerCycle(botForm.maxBidsPerCycle) > 1 ||
+              Number(botForm.intervalSec) < 30) && (
+              <Alert severity="warning" sx={{ gridColumn: { sm: "1 / -1" }, py: 0 }}>
+                Elevated activity can consume RPC capacity quickly. Use one bid per cycle and an interval of at least 30 seconds for routine operation.
+              </Alert>
+            )}
             <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
               <Box component="label" sx={{ display: "flex", alignItems: "center" }}>
                 <Checkbox
@@ -1267,131 +2409,20 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
           </Box>
         )}
 
-        <Box sx={{ display: "grid", gap: 1, mt: 1.5 }}>
+        <Box sx={{ display: "grid", gap: 1.25, mt: 1.5 }}>
           {bots.length ? (
             bots.map((bot) => (
-              <Box
+              <BotCard
                 key={bot.id}
-                sx={{
-                  p: 1.5,
-                  borderRadius: 2,
-                  border: "1px solid #edf0fb",
-                  backgroundColor: "#fbfcff",
-                  display: "grid",
-                  gridTemplateColumns: { xs: "1fr", md: "minmax(0, 1fr) auto" },
-                  gap: 1,
-                }}
-              >
-                <Box sx={{ minWidth: 0 }}>
-                  <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
-                    <Typography variant="body2" sx={{ fontWeight: 800 }}>
-                      {bot.name}
-                    </Typography>
-                    <Typography
-                      variant="caption"
-                      sx={{
-                        px: 1,
-                        py: 0.25,
-                        borderRadius: 999,
-                        color: "#ffffff",
-                        backgroundColor: getBotStatusColor(bot.status),
-                        fontWeight: 800,
-                      }}
-                    >
-                      {bot.status || "stopped"}
-                    </Typography>
-                    <Typography
-                      variant="caption"
-                      sx={{
-                        px: 1,
-                        py: 0.25,
-                        borderRadius: 999,
-                        backgroundColor: bot.enabled ? "#e9f8ef" : "#f1f3f9",
-                        color: bot.enabled ? "#0f7a46" : "#5f6680",
-                        fontWeight: 800,
-                      }}
-                    >
-                      {bot.enabled ? "enabled" : "disabled"}
-                    </Typography>
-                    {isMetaMaskAgentBot(bot) && (
-                      <Typography
-                        variant="caption"
-                        sx={{
-                          px: 1,
-                          py: 0.25,
-                          borderRadius: 999,
-                          backgroundColor: "#e9efff",
-                          color: "#173b91",
-                          fontWeight: 800,
-                        }}
-                      >
-                        MetaMask Agent Wallet
-                      </Typography>
-                    )}
-                  </Box>
-                  <Typography variant="caption" color="text.secondary">
-                    {shortAddress(bot.wallet)} | {isMetaMaskAgentBot(bot)
-                      ? "runner-managed wallet session"
-                      : `key ${shortKey(bot.privateKey)}`} | last cycle {formatDate(bot.lastCycleAt)}
-                  </Typography>
-                  {bot.stats && (
-                    <Typography variant="caption" color="text.secondary" display="block">
-                      cycles {bot.stats.cycles || 0} | bids {bot.stats.bids || 0} |
-                      finalized {bot.stats.finalized || 0} | errors{" "}
-                      {bot.stats.errors || 0}
-                    </Typography>
-                  )}
-                  {bot.lastError && (
-                    <Typography variant="caption" color="error" display="block">
-                      {bot.lastError}
-                    </Typography>
-                  )}
-                </Box>
-                <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap", alignItems: "center" }}>
-                  {isMetaMaskAgentBot(bot) && (
-                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700 }}>
-                      Node runner
-                    </Typography>
-                  )}
-                  <Button
-                    size="small"
-                    variant="contained"
-                    onClick={() => runAction(`start-${bot.id}`, "start-bot", { id: bot.id })}
-                    disabled={isBusy || isMetaMaskAgentBot(bot)}
-                    sx={{ borderRadius: 999, backgroundColor: "#103090" }}
-                  >
-                    Start
-                  </Button>
-                  <Button
-                    size="small"
-                    variant="outlined"
-                    onClick={() => runAction(`run-${bot.id}`, "run-bot", { id: bot.id })}
-                    disabled={isBusy || isMetaMaskAgentBot(bot)}
-                    sx={{ borderRadius: 999 }}
-                  >
-                    Run
-                  </Button>
-                  <Button
-                    size="small"
-                    variant="outlined"
-                    color="error"
-                    onClick={() => runAction(`stop-${bot.id}`, "stop-bot", { id: bot.id })}
-                    disabled={isBusy || isMetaMaskAgentBot(bot)}
-                    sx={{ borderRadius: 999 }}
-                  >
-                    Stop
-                  </Button>
-                  <Button
-                    size="small"
-                    variant="text"
-                    color="error"
-                    onClick={() => runAction(`delete-${bot.id}`, "delete-bot", { id: bot.id })}
-                    disabled={isBusy}
-                  >
-                    Delete
-                  </Button>
-                </Box>
-              </Box>
+                bot={bot}
+                isBusy={isBusy}
+                onBidLimitChange={updateBotBidLimit}
+                onStart={(id) => runAction(`start-${id}`, "start-bot", { id })}
+                onRun={(id) => runAction(`run-${id}`, "run-bot", { id })}
+                onStop={(id) => runAction(`stop-${id}`, "stop-bot", { id })}
+                onDelete={(id) => runAction(`delete-${id}`, "delete-bot", { id })}
+                onClearError={clearBotError}
+              />
             ))
           ) : (
             <Typography variant="body2" color="text.secondary">
@@ -1405,29 +2436,67 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
         sx={{
           p: 1.5,
           borderRadius: 2,
-          backgroundColor: "#fbfcff",
-          border: "1px solid #e5e9f8",
+          background: "linear-gradient(145deg, #ffffff, #f8faff)",
+          border: "1px solid #dfe6f7",
+          boxShadow: "0 5px 16px rgba(24, 52, 121, 0.04)",
         }}
       >
-        <Typography variant="body2" sx={{ fontWeight: 800 }}>
-          Recent bot events
-        </Typography>
-        <Divider sx={{ my: 1 }} />
-        <Box sx={{ display: "grid", gap: 0.75, maxHeight: 220, overflow: "auto" }}>
-          {logs.length ? (
-            logs.slice(0, 20).map((entry, index) => (
-              <Typography
+        <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 1, flexWrap: "wrap" }}>
+          <Box>
+            <Typography variant="body2" sx={{ fontWeight: 800 }}>
+              Event inspector
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              Filter operational events and expand only the diagnostics you need.
+            </Typography>
+          </Box>
+          <Box sx={{ display: "flex", alignItems: "center", gap: 0.75, flexWrap: "wrap" }}>
+            <ToggleButtonGroup
+              exclusive
+              size="small"
+              value={logFilter}
+              onChange={(_, value) => value && setLogFilter(value)}
+              aria-label="Filter bot events"
+              sx={{
+                "& .MuiToggleButton-root": {
+                  px: 1.1,
+                  py: 0.45,
+                  borderColor: "#d8e1f5",
+                  textTransform: "none",
+                  lineHeight: 1.2,
+                },
+              }}
+            >
+              <ToggleButton value="all">All {logCounts.all}</ToggleButton>
+              <ToggleButton value="error">Errors {logCounts.error}</ToggleButton>
+              <ToggleButton value="warn">Warnings {logCounts.warn}</ToggleButton>
+              <ToggleButton value="info">Info {logCounts.info}</ToggleButton>
+            </ToggleButtonGroup>
+            <Tooltip title="Clear event history">
+              <span>
+                <IconButton size="small" onClick={clearLogs} disabled={!logs.length} aria-label="Clear bot event history">
+                  <DeleteSweepRoundedIcon fontSize="small" />
+                </IconButton>
+              </span>
+            </Tooltip>
+          </Box>
+        </Box>
+        <Divider sx={{ my: 1.25, borderColor: "#e6ebf7" }} />
+        <Box sx={{ display: "grid", gap: 0.75, maxHeight: 330, pr: 0.35, overflowY: "auto", overflowX: "hidden" }}>
+          {visibleLogs.length ? (
+            visibleLogs.map((entry, index) => (
+              <BotLogEntry
                 key={`${entry.time}-${index}`}
-                variant="caption"
-                sx={{ fontFamily: "monospace", color: "#30364f" }}
-              >
-                [{entry.level}] {entry.time} - {entry.message}
-              </Typography>
+                entry={entry}
+                onRetryProviders={retryRpcProviders}
+              />
             ))
           ) : (
-            <Typography variant="caption" color="text.secondary">
-              No bot events yet.
-            </Typography>
+            <Box sx={{ py: 2.25, textAlign: "center" }}>
+              <Typography variant="body2" color="text.secondary">
+                {logs.length ? `No ${logFilter} events in the current history.` : "No bot events yet."}
+              </Typography>
+            </Box>
           )}
         </Box>
       </Box>

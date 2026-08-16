@@ -13,6 +13,7 @@ import {
   getMarketOptions,
   subscribeToMarketChanges,
 } from "../../real_ethereum/marketConfig";
+import { registerCreatedAuctionReceipt } from "../../real_ethereum/activeAuctionRegistry";
 import styles from "./new.module.scss";
 import {
   Box,
@@ -162,7 +163,7 @@ function NewAuctionPage() {
 
       try {
         const account = await requestConnectedAccount();
-        await factory.methods
+        const receipt = await factory.methods
           .createCampaign(
             formData.minimumContribution,
             formData.dataForSell,
@@ -170,6 +171,19 @@ function NewAuctionPage() {
             formData.auctionDuration
           )
           .send({ from: account });
+
+        registerCreatedAuctionReceipt(
+          activeMarket.address,
+          receipt,
+          {
+            minimumContribution: formData.minimumContribution,
+            manager: account,
+            endTimeSec:
+              Math.floor(Date.now() / 1000) +
+              Number(formData.auctionDuration) * 60,
+          },
+          "single-auction-created",
+        );
 
         toast.success("🎉 Auction created successfully!", { id: toastId });
         navigate("/auctions-list");
@@ -181,7 +195,7 @@ function NewAuctionPage() {
         setLoading(false);
       }
     },
-    [formData, navigate, validateForm]
+    [activeMarket.address, formData, navigate, validateForm]
   );
 
   const renderTooltip = (field, text) => (

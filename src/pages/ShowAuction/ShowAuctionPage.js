@@ -48,6 +48,7 @@ import {
 } from "../AuctionsList/AuctionsListPage";
 import { getActiveFactoryAddress } from "../../real_ethereum/marketConfig";
 import { notifyBudgetChanged } from "../../real_ethereum/budget";
+import { markAuctionClosed } from "../../real_ethereum/activeAuctionRegistry";
 import {
   getEthereumAccounts,
   waitForEthereumProvider,
@@ -479,6 +480,11 @@ function ShowAuctionPage() {
       await state.auction.methods.finalizeAuctionIfNeeded().send({
         from: state.connectedAccount,
       });
+      markAuctionClosed(
+        getActiveFactoryAddress(),
+        address,
+        "auction-page-finalized",
+      );
       toast.success("Auction finalized, seller payment sent.");
       dispatch({ type: "SET_AUCTION_DATA", payload: { closed: true } });
       await fetchAuctionData();
@@ -488,7 +494,7 @@ function ShowAuctionPage() {
     } finally {
       setFinalizingPayment(false);
     }
-  }, [state.auction, state.connectedAccount, fetchAuctionData]);
+  }, [address, state.auction, state.connectedAccount, fetchAuctionData]);
 
   const claimRefund = useCallback(async () => {
     if (!state.auction || !state.connectedAccount) return;

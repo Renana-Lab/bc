@@ -39,7 +39,7 @@ const AppLoadingFallback = ({
           place-items: center;
           background: #f5d762;
           color: #07105c;
-          font-family: Arial, sans-serif;
+          font-family: var(--app-font-family);
         }
         .app-loading-panel {
           width: min(420px, calc(100vw - 48px));
@@ -323,7 +323,7 @@ function App() {
                 padding: 1.5rem;
                 text-align: center;
                 color: #ffffff;
-                font-family: Arial, sans-serif;
+                font-family: var(--app-font-family);
               }
               .icon-container {
                 margin-bottom: 1.5rem;

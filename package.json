@@ -5,6 +5,7 @@
   "dependencies": {
     "@emotion/react": "^11.10.6",
     "@emotion/styled": "^11.10.6",
+    "@fontsource-variable/manrope": "5.2.8",
     "@fortawesome/fontawesome-svg-core": "^6.4.0",
     "@fortawesome/free-solid-svg-icons": "^6.4.0",
     "@fortawesome/react-fontawesome": "^0.2.0",
@@ -42,7 +43,7 @@
     "auction-indexer": "node scripts/auctionIndexer.js",
     "botnet:api": "node scripts/botnet/server.js",
     "botnet:cycle": "node scripts/botnet/runCycle.js",
-    "botnet:agent:test": "node --test scripts/botnet/metamaskAgentWallet.test.js scripts/botnet/service.test.js",
+    "botnet:agent:test": "node --test scripts/botnet/metamaskAgentWallet.test.js scripts/botnet/service.test.js scripts/botnet/coordinatedCycle.test.mjs",
     "botnet:import": "node scripts/botnet/importBots.js",
     "presence:deploy": "node scripts/deployLivePresence.js",
     "stress:contract": "node scripts/stress/contractStress.js",

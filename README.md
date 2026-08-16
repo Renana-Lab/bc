@@ -258,7 +258,34 @@ The browser bot runner must not scan every deployed auction for every bot. The s
 - Common summaries are read once per scheduler round and shared by all bots.
 - Each bot performs only account-specific bid and budget reads before sending a transaction.
 - A per-round reservation prevents concurrent bots from targeting the same auction simultaneously.
+- Newly created auctions are registered from their transaction receipt immediately; a list reload is not required.
+- After bootstrap, new addresses are discovered incrementally from `AuctionCreatedDetailed` using a persisted block cursor.
+- Active, ended-but-finalizable, and closed auctions have separate lifecycle handling. Finalized auctions are removed immediately.
+- Normal refreshes reread only active, recently ended, and newly discovered auctions. Closed history is not part of a normal bot cycle.
+- Historical coverage is repaired in bounded rolling pages instead of a burst scan of the whole factory.
+- `BroadcastChannel`, `localStorage`, and expiring leases share snapshots and elect one bot scheduler across tabs on the same browser profile.
 - Rate-limited or plan-incompatible RPC endpoints are cooled down instead of repeatedly failing every bot.
+
+The defaults are intentionally conservative: a 15-second snapshot TTL, 2,000-block event windows, 15-call browser batches, 40-address rolling reconciliation pages, a five-minute reconciliation interval, and a 20-second scheduler lease. They can be tuned with `REACT_APP_ACTIVE_AUCTION_TTL_MS`, `REACT_APP_ACTIVE_AUCTION_EVENT_BLOCK_WINDOW`, `REACT_APP_ACTIVE_AUCTION_BATCH_SIZE`, `REACT_APP_ACTIVE_AUCTION_RECONCILE_PAGE_SIZE`, `REACT_APP_ACTIVE_AUCTION_FULL_RECONCILE_MS`, and `REACT_APP_BOT_COORDINATOR_LEASE_MS`.
+
+Both bot runners use the shared deterministic planner in `src/botnet/cyclePlanner.mjs`. One scheduler round creates one immutable active-auction snapshot, pins account reads to one block, assigns distinct auctions across all due bots, and gives every bid slot one reserve candidate. Budget reads are batched together, followed only by bid-state reads for assigned candidates. Different wallets can write concurrently, but each wallet has a serial queue and the whole runner has a small write semaphore to prevent nonce races and provider overload.
+
+`MAX_BIDS_PER_CYCLE` defaults to `1` for existing and new bots and is clamped to `1-5`. The Command Center stepper shows an estimated maximum write rate per hour. More than one bid per cycle or an interval below 30 seconds is intentionally flagged as elevated usage. A stopped bot immediately abandons queued work; a transaction already submitted to the chain remains pending normally.
+
+The Node runner persists its discovery cursor and active set in `botnet-data/active-auctions.json` by default. Relevant controls are `BOTNET_AUCTION_TTL_MS`, `BOTNET_EVENT_BLOCK_WINDOW`, `BOTNET_READ_BATCH_SIZE`, `BOTNET_RECONCILE_PAGE_SIZE`, `BOTNET_FULL_RECONCILE_MS`, `BOTNET_MAX_CONCURRENT_WRITES`, `BOTNET_FINALIZE_INTERVAL_MS`, and `BOTNET_SCHEDULER_TICK_MS`. Finalization uses a separate slower queue and does not rescan auction history.
+
+Command Center round metrics are operational diagnostics:
+
+- `duration`: wall-clock time for the coordinated round.
+- `snapshot age`: age of the active-auction index used for decisions.
+- `active`: number of open auctions considered.
+- `reads` and `batches`: logical calls and actual JSON-RPC batches.
+- `candidates`: planner eligibility checks, not chain calls.
+- `attempted` and `sent`: transaction attempts and successful receipts.
+- `cache hits`: reused active-index snapshots.
+- `skipped reason`: the first actionable reason no bid was sent.
+
+This coordination is deliberately browser-local and does not introduce a classic backend. Tabs in the same browser profile cooperate; separate computers do not share a leader lease. The chain remains authoritative, and rolling reconciliation repairs stale browser state.
 
 `publicnode.com` is an anonymous RPC service operated by Allnodes; it is not part of the contracts. Anonymous RPC endpoints are acceptable as emergency fallbacks, but reliable experiments should set `REACT_APP_RPC_URLS` to one or more authenticated Sepolia endpoints. The browser runner only operates while the site is open; unattended 24/7 operation requires the repository bot service or another hosted worker.
 

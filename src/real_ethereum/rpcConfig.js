@@ -53,7 +53,13 @@ export const getRpcFailureKind = (error) => {
     message.includes("timed out") ||
     message.includes("failed to fetch") ||
     message.includes("network error") ||
-    message.includes("connection not open")
+    message.includes("connection error") ||
+    message.includes("connection not open") ||
+    message.includes("couldn't connect") ||
+    message.includes("could not connect") ||
+    message.includes("connection refused") ||
+    message.includes("econnrefused") ||
+    message.includes("enotfound")
   ) {
     return "network";
   }

@@ -1,18 +1,29 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
+import '@fontsource-variable/manrope';
+import { ThemeProvider, createTheme } from '@mui/material/styles';
 import './index.css';
 import { APPWithRouter } from './App';  // Import both default and named export
 import reportWebVitals from './reportWebVitals';
 import { BrowserRouter } from 'react-router-dom';
 
+const appTheme = createTheme({
+  typography: {
+    fontFamily:
+      '"Manrope Variable", "Avenir Next", "Segoe UI Variable", "Segoe UI", sans-serif',
+  },
+});
+
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(
   <React.StrictMode>
-    <BrowserRouter
-      future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
-    >
-      <APPWithRouter /> {/* Correctly use APPWithRouter */}
-    </BrowserRouter>
+    <ThemeProvider theme={appTheme}>
+      <BrowserRouter
+        future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
+      >
+        <APPWithRouter /> {/* Correctly use APPWithRouter */}
+      </BrowserRouter>
+    </ThemeProvider>
   </React.StrictMode>
 );
 

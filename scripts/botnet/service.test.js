@@ -5,6 +5,10 @@ const {
   isBotConfigured,
   isMetaMaskAgentBot,
   normalizeBotRecord,
+  classifyIndexedAuctions,
+  getStrategy,
+  getRpcFailureKind,
+  enqueueWalletWrite,
   runWithConcurrency,
 } = require("./service");
 
@@ -21,6 +25,54 @@ test("a MetaMask Agent Wallet bot is configured without a private key", () => {
   assert.equal(isBotConfigured(bot), true);
   assert.equal(bot.enabled, true);
   assert.equal(bot.privateKey, "");
+});
+
+test("existing bots receive one protected bid per cycle by default", () => {
+  const bot = normalizeBotRecord({ id: "legacy", name: "Legacy", privateKey: key("1") });
+  assert.equal(bot.overrides.MAX_BIDS_PER_CYCLE, "1");
+  assert.equal(getStrategy(bot).maxBidsPerCycle, 1);
+  bot.overrides.MAX_BIDS_PER_CYCLE = "99";
+  assert.equal(getStrategy(bot).maxBidsPerCycle, 5);
+});
+
+test("the Node index excludes closed history from normal cycle work", () => {
+  const now = 2000000000;
+  const indexed = classifyIndexedAuctions([
+    { address: "0x1", endTimeSec: now + 100, closed: false },
+    { address: "0x2", endTimeSec: now - 100, closed: true },
+    { address: "0x3", endTimeSec: now - 1, closed: false, approversCount: 1 },
+    { address: "0x4", endTimeSec: now - 1, closed: false, approversCount: 0 },
+  ], now);
+  assert.deepEqual(indexed.activeAuctions.map((item) => item.address), ["0x1"]);
+  assert.deepEqual(indexed.finalizableAuctions.map((item) => item.address), ["0x3", "0x4"]);
+});
+
+test("provider capacity failures are distinct from bot logic failures", () => {
+  assert.equal(getRpcFailureKind(new Error("429 Too Many Requests")), "capacity");
+  assert.equal(getRpcFailureKind(new Error("chain is not available on free plan")), "unsupported-plan");
+  assert.equal(getRpcFailureKind(new Error("All configured RPC endpoints are cooling down.")), "network");
+  assert.equal(getRpcFailureKind(new Error("execution reverted")), "other");
+});
+
+test("wallet writes are sequential per address but concurrent across addresses", async () => {
+  const order = [];
+  let active = 0;
+  let peak = 0;
+  const task = (label, delay = 5) => async () => {
+    active += 1;
+    peak = Math.max(peak, active);
+    order.push(`start-${label}`);
+    await new Promise((resolve) => setTimeout(resolve, delay));
+    order.push(`end-${label}`);
+    active -= 1;
+  };
+  await Promise.all([
+    enqueueWalletWrite("0xaaa", task("a1")),
+    enqueueWalletWrite("0xaaa", task("a2")),
+    enqueueWalletWrite("0xbbb", task("b1")),
+  ]);
+  assert.ok(order.indexOf("end-a1") < order.indexOf("start-a2"));
+  assert.ok(peak >= 2);
 });
 
 test("exactly one of four bots is promoted to the Agent Wallet signer", () => {

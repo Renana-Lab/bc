@@ -3,6 +3,7 @@ const fs = require("fs");
 const http = require("http");
 const path = require("path");
 const crypto = require("crypto");
+const { pathToFileURL } = require("url");
 
 const Web3Package = require("web3");
 const Web3 = Web3Package.Web3 || Web3Package;
@@ -19,6 +20,9 @@ const ROOT_DIR = path.resolve(__dirname, "../..");
 const DATA_DIR = path.resolve(process.env.BOTNET_DATA_DIR || path.join(ROOT_DIR, "botnet-data"));
 const BOTS_PATH = path.resolve(process.env.BOTNET_BOTS_PATH || path.join(DATA_DIR, "bots.json"));
 const LOG_PATH = path.resolve(process.env.BOTNET_LOG_PATH || path.join(DATA_DIR, "botnet.log"));
+const AUCTION_INDEX_PATH = path.resolve(
+  process.env.BOTNET_AUCTION_INDEX_PATH || path.join(DATA_DIR, "active-auctions.json"),
+);
 const DEFAULT_PORT = Number(process.env.BOTNET_PORT || process.env.PORT || 3002);
 const LEGACY_BOTNET_BOTS_PATH =
   process.env.BOTNET_LEGACY_BOTS_PATH ||
@@ -30,6 +34,7 @@ const DEFAULT_RPC_URLS = [
 
 const DEFAULT_OVERRIDES = {
   AUTO_TRADE_INTERVAL_SEC: "60",
+  MAX_BIDS_PER_CYCLE: "1",
   MAX_BID_WEI: "2000",
   OUTBID_BY_WEI: "10",
   MAX_MIN_CONTRIBUTION_WEI: "2000",
@@ -41,6 +46,32 @@ const DEFAULT_OVERRIDES = {
 
 const runtime = new Map();
 const memoryLog = [];
+const providerCache = new Map();
+const rpcCooldowns = new Map();
+const campaignCache = new Map();
+const walletAccountCache = new Map();
+const walletQueues = new Map();
+const cyclePlannerPromise = import(
+  pathToFileURL(path.join(ROOT_DIR, "src", "botnet", "cyclePlanner.mjs")).href
+);
+const NODE_SCHEDULER_TICK_MS = Math.max(2500, Number(process.env.BOTNET_SCHEDULER_TICK_MS || 5000));
+const AUCTION_SNAPSHOT_TTL_MS = Math.max(5000, Number(process.env.BOTNET_AUCTION_TTL_MS || 15000));
+const FULL_RECONCILE_MS = Math.max(60000, Number(process.env.BOTNET_FULL_RECONCILE_MS || 5 * 60 * 1000));
+const RECONCILE_PAGE_SIZE = Math.max(20, Number(process.env.BOTNET_RECONCILE_PAGE_SIZE || 40));
+const EVENT_BLOCK_WINDOW = Math.max(100, Number(process.env.BOTNET_EVENT_BLOCK_WINDOW || 2000));
+const READ_BATCH_SIZE = Math.max(5, Number(process.env.BOTNET_READ_BATCH_SIZE || 25));
+const MAX_CONCURRENT_WRITES = Math.max(1, Number(process.env.BOTNET_MAX_CONCURRENT_WRITES || 3));
+const FINALIZE_INTERVAL_MS = Math.max(15000, Number(process.env.BOTNET_FINALIZE_INTERVAL_MS || 30000));
+const ENDED_VERIFICATION_GRACE_SEC = Math.max(
+  30,
+  Number(process.env.BOTNET_AUCTION_END_GRACE_SEC || 120),
+);
+let auctionIndexCache = null;
+let auctionIndexRefresh = null;
+let networkTimer = null;
+let networkCycleRunning = false;
+let allocationCursor = 0;
+let lastFinalizeAt = 0;
 
 function ensureDataDir() {
   fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -290,11 +321,12 @@ function serializeBot(bot) {
     createdAt: bot.createdAt,
     updatedAt: bot.updatedAt,
     status: configurationError ? "invalid-config" : state.status || "stopped",
-    running: Boolean(state.timer),
+    running: Boolean(state.running),
     wallet: state.wallet || getBotWalletAddress(bot),
     lastCycleAt: state.lastCycleAt || null,
     lastError: configurationError || state.lastError || null,
     stats: state.stats || { cycles: 0, bids: 0, finalized: 0, errors: 0 },
+    lastCycleMetrics: state.lastCycleMetrics || null,
   };
 }
 
@@ -496,15 +528,302 @@ function getFactoryAddress() {
   );
 }
 
-async function buildContext(bot) {
+function getRpcFailureKind(error) {
+  const message = String(error?.message || error || "").toLowerCase();
+  if (/chain is not available|free plan|upgrade to paid|unsupported chain/.test(message)) {
+    return "unsupported-plan";
+  }
+  if (/rate limit|too many requests|usage limit|higher limits|429/.test(message)) {
+    return "capacity";
+  }
+  if (/timeout|timed out|failed to fetch|network error|connection|cooling down|no healthy rpc/.test(message)) {
+    return "network";
+  }
+  return "other";
+}
+
+function isProviderFailure(error) {
+  return getRpcFailureKind(error) !== "other";
+}
+
+function coolDownProvider(rpcUrl, error) {
+  const kind = getRpcFailureKind(error);
+  const duration = kind === "unsupported-plan" ? 24 * 60 * 60 * 1000 : kind === "network" ? 15000 : 45000;
+  rpcCooldowns.set(rpcUrl, Date.now() + duration);
+  let provider = rpcUrl;
+  try {
+    provider = new URL(rpcUrl).hostname;
+  } catch (_) {}
+  log("warn", "RPC endpoint entered cooldown", { provider, kind });
+}
+
+function getProviderContext(factoryAddress = getFactoryAddress()) {
+  const urls = getRpcUrls();
+  const rpcUrl = urls.find((url) => Number(rpcCooldowns.get(url) || 0) <= Date.now());
+  if (!rpcUrl) throw new Error("All configured RPC endpoints are cooling down.");
+  const key = `${rpcUrl}:${factoryAddress.toLowerCase()}`;
+  if (!providerCache.has(key)) {
+    const web3 = new Web3(rpcUrl);
+    providerCache.set(key, {
+      rpcUrl,
+      web3,
+      factoryAddress,
+      factory: new web3.eth.Contract(factoryJson.abi, factoryAddress),
+    });
+  }
+  return providerCache.get(key);
+}
+
+function getCachedCampaign(ctx, address) {
+  const key = `${ctx.rpcUrl}:${String(address).toLowerCase()}`;
+  if (!campaignCache.has(key)) {
+    campaignCache.set(key, new ctx.web3.eth.Contract(campaignJson.abi, address));
+  }
+  return campaignCache.get(key);
+}
+
+function executeBatch(ctx, methods, blockNumber = "latest") {
+  if (!methods.length) return Promise.resolve([]);
+  return new Promise((resolve, reject) => {
+    const batch = new ctx.web3.BatchRequest();
+    const results = new Array(methods.length);
+    let remaining = methods.length;
+    methods.forEach((method, index) => {
+      const callback = (error, value) => {
+        results[index] = error
+          ? { status: "rejected", reason: error }
+          : { status: "fulfilled", value };
+        remaining -= 1;
+        if (!remaining) resolve(results);
+      };
+      batch.add(method.call.request({}, blockNumber, callback));
+    });
+    try {
+      batch.execute();
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
+function createSemaphore(limit) {
+  let active = 0;
+  const queue = [];
+  const next = () => {
+    if (active >= limit || !queue.length) return;
+    active += 1;
+    const item = queue.shift();
+    Promise.resolve()
+      .then(item.task)
+      .then(item.resolve, item.reject)
+      .finally(() => {
+        active -= 1;
+        next();
+      });
+  };
+  return (task) => new Promise((resolve, reject) => {
+    queue.push({ task, resolve, reject });
+    next();
+  });
+}
+
+const withWriteSlot = createSemaphore(MAX_CONCURRENT_WRITES);
+
+function enqueueWalletWrite(address, task) {
+  const key = String(address || "").toLowerCase();
+  const previous = walletQueues.get(key) || Promise.resolve();
+  const current = previous.catch(() => undefined).then(() => withWriteSlot(task));
+  const tracked = current.finally(() => {
+    if (walletQueues.get(key) === tracked) walletQueues.delete(key);
+  });
+  walletQueues.set(key, tracked);
+  return current;
+}
+
+function normalizeIndexedAuction(auction = {}) {
+  return {
+    address: String(auction.address || ""),
+    minimumContribution: String(auction.minimumContribution || "0"),
+    approversCount: Number(auction.approversCount || 0),
+    manager: String(auction.manager || ""),
+    highestBid: String(auction.highestBid || "0"),
+    highestBidder: String(auction.highestBidder || ""),
+    endTimeSec: Number(auction.endTimeSec || 0),
+    closed: Boolean(auction.closed),
+  };
+}
+
+function loadAuctionIndex() {
+  if (auctionIndexCache) return auctionIndexCache;
+  try {
+    auctionIndexCache = JSON.parse(fs.readFileSync(AUCTION_INDEX_PATH, "utf8"));
+  } catch (_) {
+    auctionIndexCache = null;
+  }
+  return auctionIndexCache;
+}
+
+function saveAuctionIndex(index) {
+  ensureDataDir();
+  const tempPath = `${AUCTION_INDEX_PATH}.tmp`;
+  fs.writeFileSync(tempPath, `${JSON.stringify(index, null, 2)}\n`, "utf8");
+  fs.renameSync(tempPath, AUCTION_INDEX_PATH);
+  auctionIndexCache = index;
+  return index;
+}
+
+function classifyIndexedAuctions(auctions, nowSec = Math.floor(Date.now() / 1000)) {
+  const unique = new Map();
+  auctions.map(normalizeIndexedAuction).forEach((auction) => {
+    if (auction.address) unique.set(auction.address.toLowerCase(), auction);
+  });
+  const values = [...unique.values()];
+  return {
+    activeAuctions: values.filter((auction) => !auction.closed && auction.endTimeSec > nowSec),
+    finalizableAuctions: values.filter((auction) =>
+      !auction.closed && auction.endTimeSec > 0 && auction.endTimeSec <= nowSec &&
+      (auction.approversCount > 0 ||
+        auction.endTimeSec + ENDED_VERIFICATION_GRACE_SEC > nowSec),
+    ).slice(0, 100),
+  };
+}
+
+async function readIndexedSummaries(ctx, addresses, blockNumber) {
+  const auctions = [];
+  const failed = [];
+  for (let offset = 0; offset < addresses.length; offset += READ_BATCH_SIZE) {
+    const chunk = addresses.slice(offset, offset + READ_BATCH_SIZE);
+    const results = await executeBatch(
+      ctx,
+      chunk.map((address) => getCachedCampaign(ctx, address).methods.getListSummary()),
+      blockNumber,
+    );
+    results.forEach((result, index) => {
+      if (result?.status !== "fulfilled") {
+        failed.push(chunk[index]);
+        return;
+      }
+      const value = result.value;
+      auctions.push(normalizeIndexedAuction({
+        address: chunk[index],
+        minimumContribution: value[0],
+        approversCount: value[2],
+        manager: value[3],
+        highestBid: value[4],
+        highestBidder: value[6],
+        endTimeSec: value[7],
+        closed: value[8],
+      }));
+    });
+  }
+  return { auctions, failed };
+}
+
+async function performNodeAuctionIndexRefresh(ctx, { force = false } = {}) {
+  const cached = loadAuctionIndex();
+  if (
+    !force &&
+    cached?.factoryAddress?.toLowerCase() === ctx.factoryAddress.toLowerCase() &&
+    Date.now() - Number(cached.updatedAt || 0) < AUCTION_SNAPSHOT_TTL_MS
+  ) {
+    return { ...cached, cacheHit: true, rpcBatches: 0, logicalReads: 0 };
+  }
+
+  const blockNumber = Number(await ctx.web3.eth.getBlockNumber());
+  const sameFactory = cached?.factoryAddress?.toLowerCase() === ctx.factoryAddress.toLowerCase();
+  const previous = sameFactory ? cached : null;
+  let allAddresses = Array.isArray(previous?.allAddresses) ? previous.allAddresses : [];
+  let eventCursor = Number(previous?.eventCursor || 0);
+  const discovered = [];
+
+  if (!eventCursor || !allAddresses.length) {
+    allAddresses = await ctx.factory.methods.getDeployedCampaigns().call();
+    eventCursor = blockNumber;
+  } else if (eventCursor < blockNumber) {
+    const toBlock = Math.min(blockNumber, eventCursor + EVENT_BLOCK_WINDOW);
+    const events = await ctx.factory.getPastEvents("AuctionCreatedDetailed", {
+      fromBlock: eventCursor + 1,
+      toBlock,
+    });
+    events.forEach((event) => {
+      const address = event.returnValues?.campaignAddress || event.returnValues?.[0];
+      if (address) discovered.push(address);
+    });
+    eventCursor = toBlock;
+    allAddresses = [...new Set([...allAddresses, ...discovered])];
+  }
+
+  const reconciliationDue =
+    !previous?.lastFullReconcileAt ||
+    Date.now() - Number(previous.lastFullReconcileAt || 0) >= FULL_RECONCILE_MS ||
+    Number(previous?.reconcileCursor || 0) > 0;
+  const reconcileCursor = reconciliationDue ? Number(previous?.reconcileCursor || 0) : 0;
+  const reconcileEnd = reconciliationDue
+    ? Math.min(allAddresses.length, reconcileCursor + RECONCILE_PAGE_SIZE)
+    : reconcileCursor;
+  const tracked = [
+    ...(previous?.activeAuctions || []),
+    ...(previous?.finalizableAuctions || []),
+  ];
+  const candidates = [...new Set([
+    ...tracked.map((auction) => auction.address),
+    ...discovered,
+    ...(reconciliationDue ? allAddresses.slice(reconcileCursor, reconcileEnd) : []),
+    ...(!previous ? allAddresses : []),
+  ])].filter(Boolean);
+  const summaryResult = await readIndexedSummaries(ctx, candidates, blockNumber);
+  const failedSet = new Set(summaryResult.failed.map((address) => address.toLowerCase()));
+  const preserved = tracked.filter((auction) => failedSet.has(auction.address.toLowerCase()));
+  const classified = classifyIndexedAuctions([...preserved, ...summaryResult.auctions]);
+  const reconcileComplete = reconciliationDue && reconcileEnd >= allAddresses.length;
+  const index = saveAuctionIndex({
+    version: 1,
+    factoryAddress: ctx.factoryAddress,
+    updatedAt: Date.now(),
+    blockNumber,
+    eventCursor,
+    allAddresses,
+    knownAddressCount: allAddresses.length,
+    reconcileCursor: reconciliationDue && !reconcileComplete ? reconcileEnd : 0,
+    lastFullReconcileAt: reconcileComplete ? Date.now() : Number(previous?.lastFullReconcileAt || 0),
+    unreadableCount: summaryResult.failed.length,
+    ...classified,
+  });
+  return {
+    ...index,
+    cacheHit: false,
+    logicalReads: 2 + candidates.length,
+    rpcBatches: 1 + Math.ceil(candidates.length / READ_BATCH_SIZE),
+  };
+}
+
+async function refreshNodeAuctionIndex(ctx, options = {}) {
+  if (auctionIndexRefresh) return auctionIndexRefresh;
+  auctionIndexRefresh = performNodeAuctionIndexRefresh(ctx, options).finally(() => {
+    auctionIndexRefresh = null;
+  });
+  return auctionIndexRefresh;
+}
+
+async function syncNodeAuctionIndex() {
+  let lastError;
+  for (let attempt = 0; attempt < Math.min(3, getRpcUrls().length); attempt += 1) {
+    const context = getProviderContext();
+    try {
+      return await refreshNodeAuctionIndex(context, { force: true });
+    } catch (error) {
+      lastError = error;
+      if (!isProviderFailure(error)) throw error;
+      coolDownProvider(context.rpcUrl, error);
+    }
+  }
+  throw lastError || new Error("No healthy RPC endpoint is available.");
+}
+
+async function buildBotContext(sharedContext, bot) {
   if (!isBotConfigured(bot)) {
     throw new Error(`Bot ${bot.name} has an invalid wallet configuration.`);
   }
-
-  const rpcUrl = getRpcUrls()[0];
-  if (!rpcUrl) throw new Error("Missing BOTNET_RPC_URL/RPC_URL/INFURA_KEY.");
-
-  const web3 = new Web3(rpcUrl);
   let account;
   let agentWallet = null;
   if (isMetaMaskAgentBot(bot)) {
@@ -512,84 +831,24 @@ async function buildContext(bot) {
     await agentWallet.assertReady();
     account = { address: await agentWallet.getAddress() };
   } else {
-    account = web3.eth.accounts.privateKeyToAccount(normalizePrivateKey(bot.privateKey));
-    web3.eth.accounts.wallet.add(account);
-    web3.eth.defaultAccount = account.address;
+    const cacheKey = `${bot.id}:${normalizePrivateKey(bot.privateKey).toLowerCase()}`;
+    account = walletAccountCache.get(cacheKey);
+    if (!account) {
+      account = sharedContext.web3.eth.accounts.privateKeyToAccount(
+        normalizePrivateKey(bot.privateKey),
+      );
+      walletAccountCache.set(cacheKey, account);
+    }
+    if (!sharedContext.web3.eth.accounts.wallet[account.address]) {
+      sharedContext.web3.eth.accounts.wallet.add(account);
+    }
   }
-
-  const factoryAddress = getFactoryAddress();
-  const factory = new web3.eth.Contract(factoryJson.abi, factoryAddress);
-
   return {
-    web3,
+    ...sharedContext,
     account,
     agentWallet,
     signerType: isMetaMaskAgentBot(bot) ? METAMASK_AGENT_WALLET : PRIVATE_KEY_WALLET,
-    factory,
-    factoryAddress,
-    rpcUrl,
   };
-}
-
-const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-async function fetchAuctions(ctx, bot) {
-  const now = Math.floor(Date.now() / 1000);
-  const me = ctx.account.address.toLowerCase();
-  const addresses = await ctx.factory.methods.getDeployedCampaigns().call();
-  const auctions = [];
-
-  for (const address of addresses) {
-    try {
-      const campaign = new ctx.web3.eth.Contract(campaignJson.abi, address);
-      const [summary, closed, myBid] = await Promise.all([
-        campaign.methods.getSummary().call(),
-        campaign.methods.getStatus().call().catch(() => false),
-        campaign.methods.getBid(ctx.account.address).call().catch(() => "0"),
-      ]);
-      const endTimeSec = Number(summary[9]);
-      const highestBidder = String(summary[7] || "").toLowerCase();
-
-      auctions.push({
-        address,
-        campaign,
-        minimumContribution: asBigInt(summary[0]),
-        balance: asBigInt(summary[1]),
-        approversCount: Number(summary[2] || 0),
-        manager: summary[3],
-        highestBid: asBigInt(summary[4]),
-        dataForSell: summary[5],
-        dataDescription: summary[6],
-        highestBidder: summary[7],
-        bidderAddresses: summary[8] || [],
-        endTimeSec,
-        closed: Boolean(closed),
-        isActive: endTimeSec > now,
-        secondsLeft: Math.max(0, endTimeSec - now),
-        isManager: String(summary[3] || "").toLowerCase() === me,
-        isWinner: highestBidder === me,
-        myBid: asBigInt(myBid),
-        botName: bot.name,
-      });
-    } catch (error) {
-      log("warn", `Bot skipped unreadable auction ${address}`, {
-        bot: bot.name,
-        error: error.message || String(error),
-      });
-    }
-  }
-
-  return auctions;
-}
-
-async function fetchBudget(ctx) {
-  try {
-    const budget = asBigInt(await ctx.factory.methods.getBudget(ctx.account.address).call());
-    if (budget > 0n) return budget;
-  } catch (_) {}
-
-  const balance = await ctx.web3.eth.getBalance(ctx.account.address);
-  return asBigInt(balance);
 }
 
 function getStrategy(bot) {
@@ -611,48 +870,11 @@ function getStrategy(bot) {
       overrides.AUTO_TRADE_INTERVAL_SEC,
       Number(DEFAULT_OVERRIDES.AUTO_TRADE_INTERVAL_SEC)
     ),
+    maxBidsPerCycle: Math.min(
+      5,
+      Math.max(1, toPositiveInt(overrides.MAX_BIDS_PER_CYCLE, 1)),
+    ),
   };
-}
-
-function pickBidCandidate(auctions) {
-  const open = auctions.filter((auction) => auction.isActive);
-  const notWinning = open.filter((auction) => !auction.isWinner);
-  const pool = notWinning.length ? notWinning : open;
-  if (!pool.length) return null;
-  return pool[Math.floor(Math.random() * pool.length)];
-}
-
-function getBidDecision(auction, budget, strategy) {
-  if (!auction) return { bid: false, reason: "No auction candidate" };
-  if (!auction.isActive) return { bid: false, reason: "Auction closed" };
-  if (auction.isManager) return { bid: false, reason: "Bot is the seller" };
-  if (auction.secondsLeft < strategy.minTimeRemainingSec) {
-    return { bid: false, reason: "Too little time remaining" };
-  }
-  if (strategy.skipIfWinning && auction.isWinner) {
-    return { bid: false, reason: "Bot already winning" };
-  }
-  if (auction.minimumContribution > strategy.maxMinContributionWei) {
-    return { bid: false, reason: "Minimum contribution too high" };
-  }
-
-  const emptyAuction = auction.approversCount === 0 && auction.highestBid === 0n;
-  const targetBid = emptyAuction
-    ? auction.minimumContribution
-    : auction.highestBid + strategy.outbidByWei;
-  const incrementalValue = auction.myBid > 0n ? targetBid - auction.myBid : targetBid;
-
-  if (targetBid > strategy.maxBidWei) {
-    return { bid: false, reason: "Target bid exceeds max bid" };
-  }
-  if (incrementalValue <= 0n) {
-    return { bid: false, reason: "Existing bid already covers target" };
-  }
-  if (incrementalValue > budget) {
-    return { bid: false, reason: "Insufficient budget" };
-  }
-
-  return { bid: true, amountWei: incrementalValue, targetBid };
 }
 
 async function sendContractTx(ctx, contractAddress, method, options, intent) {
@@ -676,86 +898,284 @@ async function sendContractTx(ctx, contractAddress, method, options, intent) {
   });
 }
 
+function updateIndexedAuction(index, address, patch) {
+  const key = String(address).toLowerCase();
+  const combined = [
+    ...(index.activeAuctions || []),
+    ...(index.finalizableAuctions || []),
+  ];
+  const next = combined.map((auction) =>
+    auction.address.toLowerCase() === key ? normalizeIndexedAuction({ ...auction, ...patch }) : auction,
+  );
+  const classified = classifyIndexedAuctions(next);
+  return saveAuctionIndex({ ...index, updatedAt: Date.now(), ...classified });
+}
+
+async function refreshAffectedAuction(ctx, index, address) {
+  const result = await readIndexedSummaries(ctx, [address], "latest");
+  if (!result.auctions.length) return index;
+  return updateIndexedAuction(index, address, result.auctions[0]);
+}
+
+async function executeRoundOnProvider(bots, sharedContext) {
+  const planner = await cyclePlannerPromise;
+  const startedAt = Date.now();
+  let index = await refreshNodeAuctionIndex(sharedContext);
+  const blockNumber = index.blockNumber;
+  const nowSec = Math.floor(Date.now() / 1000);
+  const botContexts = [];
+
+  for (const bot of bots) {
+    const state = getRuntimeState(bot.id);
+    try {
+      const ctx = await buildBotContext(sharedContext, bot);
+      state.wallet = ctx.account.address;
+      botContexts.push({ bot, ctx, state, strategy: getStrategy(bot) });
+    } catch (error) {
+      state.lastError = error.message || String(error);
+      state.stats.errors += 1;
+      state.status = state.running ? "running" : "stopped";
+    }
+  }
+
+  const allocation = planner.allocateCycleCandidates({
+    bots: botContexts
+      .filter(({ strategy }) => strategy.enableBidding)
+      .map(({ bot, ctx, strategy }) => ({ id: bot.id, wallet: ctx.account.address, strategy })),
+    auctions: index.activeAuctions,
+    cursor: allocationCursor,
+    nowSec,
+    reservePerSlot: 1,
+  });
+  allocationCursor = allocation.nextCursor;
+
+  const reads = [];
+  botContexts.forEach(({ bot, ctx }) => {
+    reads.push({ botId: bot.id, kind: "budget", method: sharedContext.factory.methods.getBudget(ctx.account.address) });
+    const assignment = allocation.assignments[bot.id] || { primary: [], reserve: [] };
+    [...assignment.primary, ...assignment.reserve].forEach((auction) => {
+      reads.push({
+        botId: bot.id,
+        kind: "bid",
+        auctionAddress: auction.address,
+        method: getCachedCampaign(sharedContext, auction.address).methods.getBid(ctx.account.address),
+      });
+    });
+  });
+
+  const readResults = [];
+  for (let offset = 0; offset < reads.length; offset += READ_BATCH_SIZE) {
+    const chunk = reads.slice(offset, offset + READ_BATCH_SIZE);
+    const results = await executeBatch(sharedContext, chunk.map((item) => item.method), blockNumber);
+    results.forEach((result, indexInChunk) => readResults.push({ ...chunk[indexInChunk], result }));
+  }
+  const budgets = new Map();
+  const myBids = new Map();
+  readResults.forEach((item) => {
+    if (item.result.status !== "fulfilled") return;
+    if (item.kind === "budget") budgets.set(item.botId, asBigInt(item.result.value));
+    if (item.kind === "bid") {
+      myBids.set(`${item.botId}:${item.auctionAddress.toLowerCase()}`, asBigInt(item.result.value));
+    }
+  });
+
+  const sharedMetrics = {
+    snapshotAgeMs: Math.max(0, Date.now() - Number(index.updatedAt || Date.now())),
+    activeAuctions: index.activeAuctions.length,
+    logicalReads: Number(index.logicalReads || 0) + reads.length,
+    rpcBatches: Number(index.rpcBatches || 0) + Math.ceil(reads.length / READ_BATCH_SIZE),
+    candidatesEvaluated: allocation.candidatesEvaluated,
+    cacheHits: index.cacheHit ? 1 : 0,
+  };
+
+  await runWithConcurrency(botContexts, async ({ bot, ctx, state, strategy }) => {
+    const metrics = planner.createEmptyCycleMetrics(startedAt);
+    Object.assign(metrics, sharedMetrics);
+    state.cycleRunning = true;
+    state.status = "running-cycle";
+    state.lastCycleAt = new Date().toISOString();
+    state.lastError = null;
+    state.stats.cycles += 1;
+    let budget = budgets.get(bot.id) || 0n;
+    let sent = 0;
+    const skipped = [];
+    const assignment = allocation.assignments[bot.id] || { primary: [], reserve: [] };
+    const slots = assignment.primary.map((primary, slot) => [primary, assignment.reserve[slot]].filter(Boolean));
+
+    try {
+      if (!strategy.enableBidding) skipped.push("Bidding disabled");
+      if (strategy.enableBidding && !budgets.has(bot.id)) skipped.push("Budget read unavailable");
+      for (const candidates of slots) {
+        if (!state.running || !budgets.has(bot.id) || sent >= strategy.maxBidsPerCycle) break;
+        let slotCompleted = false;
+        for (const candidate of candidates) {
+          if (!state.running || slotCompleted) break;
+          const dynamicAuction = {
+            ...candidate,
+            isActive: !candidate.closed && candidate.endTimeSec > Math.floor(Date.now() / 1000),
+            secondsLeft: Math.max(0, candidate.endTimeSec - Math.floor(Date.now() / 1000)),
+            isManager: candidate.manager.toLowerCase() === ctx.account.address.toLowerCase(),
+            isWinner: candidate.highestBidder.toLowerCase() === ctx.account.address.toLowerCase(),
+            myBid: myBids.get(`${bot.id}:${candidate.address.toLowerCase()}`) || 0n,
+          };
+          if (!myBids.has(`${bot.id}:${candidate.address.toLowerCase()}`)) {
+            skipped.push("Candidate bid read unavailable");
+            continue;
+          }
+          const decision = planner.getBidDecision(dynamicAuction, budget, strategy);
+          if (!decision.bid) {
+            skipped.push(decision.reason);
+            continue;
+          }
+          metrics.bidsAttempted += 1;
+          try {
+            await enqueueWalletWrite(ctx.account.address, async () => {
+              if (!state.running) throw Object.assign(new Error("Bot stopped before queued write."), { cancelled: true });
+              const campaign = getCachedCampaign(sharedContext, candidate.address);
+              return sendContractTx(
+                ctx,
+                candidate.address,
+                campaign.methods.contribute(),
+                { from: ctx.account.address, value: decision.amountWei.toString() },
+                `Place a ${decision.amountWei.toString()} wei bid on auction ${candidate.address}`,
+              );
+            });
+            budget -= decision.amountWei;
+            sent += 1;
+            slotCompleted = true;
+            metrics.bidsSent += 1;
+            state.stats.bids += 1;
+            index = updateIndexedAuction(index, candidate.address, {
+              highestBid: decision.targetBid.toString(),
+              highestBidder: ctx.account.address,
+              approversCount: Math.max(1, Number(candidate.approversCount || 0)),
+            });
+            log("info", `Bid sent by ${bot.name}`, {
+              auction: candidate.address,
+              amountWei: decision.amountWei.toString(),
+            });
+          } catch (error) {
+            if (error.cancelled) {
+              skipped.push("Stopped before queued write");
+              break;
+            }
+            if (isProviderFailure(error)) {
+              coolDownProvider(sharedContext.rpcUrl, error);
+              state.lastError = error.message || String(error);
+              skipped.push("RPC provider unavailable");
+              break;
+            }
+            skipped.push("Auction state changed");
+            index = await refreshAffectedAuction(sharedContext, index, candidate.address);
+            log("warn", `Bid deferred after stale state for ${candidate.address}`, {
+              bot: bot.name,
+              error: error.message || String(error),
+            });
+          }
+        }
+      }
+    } finally {
+      metrics.skippedReason = sent ? "" : skipped[0] || (index.activeAuctions.length ? "No eligible candidate" : "No active auctions");
+      state.lastCycleMetrics = planner.finishCycleMetrics(metrics);
+      state.cycleRunning = false;
+      state.status = state.running ? "running" : "stopped";
+    }
+  }, Math.max(1, Number(process.env.BOTNET_MAX_CONCURRENT_BOTS || 4)));
+
+  if (Date.now() - lastFinalizeAt >= FINALIZE_INTERVAL_MS) {
+    lastFinalizeAt = Date.now();
+    const finalizers = new Map(
+      botContexts
+        .filter(({ state, strategy }) => state.running && strategy.enableFinalize)
+        .map((item) => [item.ctx.account.address.toLowerCase(), item]),
+    );
+    for (const auction of index.finalizableAuctions.slice(0, 2)) {
+      const owner = finalizers.get(auction.manager.toLowerCase());
+      if (!owner) continue;
+      try {
+        await enqueueWalletWrite(owner.ctx.account.address, () => {
+          if (!owner.state.running) {
+            throw Object.assign(new Error("Bot stopped before queued finalization."), { cancelled: true });
+          }
+          return sendContractTx(
+            owner.ctx,
+            auction.address,
+            getCachedCampaign(sharedContext, auction.address).methods.finalizeAuctionIfNeeded(),
+            { from: owner.ctx.account.address },
+            `Finalize ended auction ${auction.address}`,
+          );
+        });
+        owner.state.stats.finalized += 1;
+        index = updateIndexedAuction(index, auction.address, { closed: true });
+        log("info", `Finalized auction ${auction.address}`, { bot: owner.bot.name });
+      } catch (error) {
+        if (error.cancelled) continue;
+        if (isProviderFailure(error)) {
+          coolDownProvider(sharedContext.rpcUrl, error);
+          owner.state.lastError = error.message || String(error);
+          continue;
+        }
+        owner.state.stats.errors += 1;
+        log("warn", `Finalize failed for ${auction.address}`, {
+          bot: owner.bot.name,
+          error: error.message || String(error),
+        });
+      }
+    }
+  }
+
+  return botContexts.map(({ bot }) => serializeBot(bot));
+}
+
+async function runCoordinatedCycle(inputBots) {
+  const bots = (inputBots || []).filter(isBotConfigured);
+  if (!bots.length) return [];
+  if (networkCycleRunning) {
+    log("warn", "Skipped overlapping coordinated bot cycle");
+    return bots.map(serializeBot);
+  }
+  networkCycleRunning = true;
+  let lastError;
+  try {
+    for (let attempt = 0; attempt < Math.min(3, getRpcUrls().length); attempt += 1) {
+      const sharedContext = getProviderContext();
+      try {
+        return await executeRoundOnProvider(bots, sharedContext);
+      } catch (error) {
+        lastError = error;
+        if (!isProviderFailure(error)) throw error;
+        coolDownProvider(sharedContext.rpcUrl, error);
+      }
+    }
+    throw lastError || new Error("No healthy RPC endpoint is available.");
+  } catch (error) {
+    bots.forEach((bot) => {
+      const state = getRuntimeState(bot.id);
+      state.lastError = error.message || String(error);
+      if (!isProviderFailure(error)) state.stats.errors += 1;
+      state.cycleRunning = false;
+      state.status = state.running ? "running" : "stopped";
+    });
+    log(isProviderFailure(error) ? "warn" : "error", "Coordinated bot cycle failed", {
+      error: error.message || String(error),
+    });
+    return bots.map(serializeBot);
+  } finally {
+    networkCycleRunning = false;
+  }
+}
+
 async function runBotCycle(idOrBot) {
   const bot = typeof idOrBot === "string"
     ? loadBots().find((item) => item.id === idOrBot)
     : idOrBot;
   if (!bot) throw new Error("Bot not found.");
-
   const state = getRuntimeState(bot.id);
-  if (state.cycleRunning) {
-    log("warn", `Skipped overlapping cycle for ${bot.name}`, { id: bot.id });
-    return serializeBot(bot);
-  }
-
-  state.cycleRunning = true;
-  state.status = state.timer ? "running-cycle" : "running-cycle";
-  state.lastCycleAt = new Date().toISOString();
-  state.lastError = null;
-  state.stats.cycles += 1;
-
-  try {
-    const ctx = await buildContext(bot);
-    state.wallet = ctx.account.address;
-    const strategy = getStrategy(bot);
-    const auctions = await fetchAuctions(ctx, bot);
-
-    if (strategy.enableFinalize) {
-      for (const auction of auctions.filter(
-        (item) => !item.isActive && !item.closed && item.isManager && item.approversCount > 0
-      )) {
-        try {
-          await sendContractTx(
-            ctx,
-            auction.address,
-            auction.campaign.methods.finalizeAuctionIfNeeded(),
-            { from: ctx.account.address },
-            `Finalize ended auction ${auction.address}`,
-          );
-          state.stats.finalized += 1;
-          log("info", `Finalized auction ${auction.address}`, { bot: bot.name });
-          await wait(1000);
-        } catch (error) {
-          state.stats.errors += 1;
-          log("warn", `Finalize failed for ${auction.address}`, {
-            bot: bot.name,
-            error: error.message || String(error),
-          });
-        }
-      }
-    }
-
-    if (strategy.enableBidding) {
-      const budget = await fetchBudget(ctx);
-      const candidate = pickBidCandidate(auctions);
-      const decision = getBidDecision(candidate, budget, strategy);
-
-      if (decision.bid) {
-        await sendContractTx(
-          ctx,
-          candidate.address,
-          candidate.campaign.methods.contribute(),
-          { from: ctx.account.address, value: decision.amountWei.toString() },
-          `Place a ${decision.amountWei.toString()} wei bid on auction ${candidate.address}`,
-        );
-        state.stats.bids += 1;
-        log("info", `Bid sent by ${bot.name}`, {
-          auction: candidate.address,
-          amountWei: decision.amountWei.toString(),
-        });
-      } else {
-        log("info", `No bid sent by ${bot.name}: ${decision.reason}`);
-      }
-    }
-  } catch (error) {
-    state.stats.errors += 1;
-    state.lastError = error.message || String(error);
-    log("error", `Bot cycle failed for ${bot.name}`, { error: state.lastError });
-  } finally {
-    state.cycleRunning = false;
-    state.status = state.timer ? "running" : "stopped";
-  }
-
+  const wasRunning = state.running;
+  state.running = true;
+  const [result] = await runCoordinatedCycle([bot]);
+  state.running = wasRunning;
+  state.status = state.running ? "running" : "stopped";
   return serializeBot(bot);
 }
 
@@ -764,12 +1184,13 @@ function getRuntimeState(id) {
   if (existing) return existing;
 
   const next = {
-    timer: null,
+    running: false,
     status: "stopped",
     wallet: null,
     lastCycleAt: null,
     lastError: null,
     cycleRunning: false,
+    lastCycleMetrics: null,
     stats: { cycles: 0, bids: 0, finalized: 0, errors: 0 },
   };
   runtime.set(id, next);
@@ -784,31 +1205,19 @@ async function startBot(id) {
   }
 
   const state = getRuntimeState(id);
-  if (state.timer) return serializeBot(bot);
-
+  if (state.running) return serializeBot(bot);
   const intervalSec = getStrategy(bot).intervalSec;
+  state.running = true;
   state.status = "running";
-  state.timer = setInterval(() => {
-    runBotCycle(bot.id).catch((error) => {
-      state.lastError = error.message || String(error);
-      state.stats.errors += 1;
-    });
-  }, intervalSec * 1000);
-
+  ensureNetworkScheduler();
   log("info", `Started bot ${bot.name}`, { id, intervalSec });
-  runBotCycle(bot.id).catch((error) => {
-    state.lastError = error.message || String(error);
-    state.stats.errors += 1;
-  });
+  runDueBots().catch((error) => log("error", "Network scheduler failed", { error: error.message }));
   return serializeBot(bot);
 }
 
 async function stopBot(id) {
   const state = getRuntimeState(id);
-  if (state.timer) {
-    clearInterval(state.timer);
-    state.timer = null;
-  }
+  state.running = false;
   state.status = "stopped";
   log("info", `Stopped bot ${id}`);
   const bot = loadBots().find((item) => item.id === id);
@@ -817,17 +1226,23 @@ async function stopBot(id) {
 
 async function startEnabledBots() {
   const bots = loadBots().filter((bot) => bot.enabled && isBotConfigured(bot));
-  for (const bot of bots) {
-    await startBot(bot.id);
-  }
+  bots.forEach((bot) => {
+    const state = getRuntimeState(bot.id);
+    state.running = true;
+    state.status = "running";
+  });
+  ensureNetworkScheduler();
+  await runCoordinatedCycle(bots);
   return getBotNetworkStatus();
 }
 
 async function stopAllBots() {
-  const ids = [...runtime.keys()];
-  for (const id of ids) {
-    await stopBot(id);
-  }
+  runtime.forEach((state) => {
+    state.running = false;
+    state.status = "stopped";
+  });
+  if (networkTimer) clearInterval(networkTimer);
+  networkTimer = null;
   return getBotNetworkStatus();
 }
 
@@ -837,7 +1252,7 @@ function selectBots(scope = "running") {
   if (scope === "enabled") {
     return bots.filter((bot) => bot.enabled && isBotConfigured(bot));
   }
-  return bots.filter((bot) => runtime.get(bot.id)?.timer);
+  return bots.filter((bot) => runtime.get(bot.id)?.running);
 }
 
 async function runWithConcurrency(items, worker, maxConcurrent = 4) {
@@ -858,9 +1273,47 @@ async function runWithConcurrency(items, worker, maxConcurrent = 4) {
 
 async function runSelectedBotsOnce(scope = "running") {
   const bots = selectBots(scope);
-  const maxConcurrent = Math.max(1, Number(process.env.BOTNET_MAX_CONCURRENT_BOTS || 4));
-  const results = await runWithConcurrency(bots, runBotCycle, maxConcurrent);
+  const prior = bots.map((bot) => [bot.id, getRuntimeState(bot.id).running]);
+  bots.forEach((bot) => { getRuntimeState(bot.id).running = true; });
+  const results = await runCoordinatedCycle(bots);
+  prior.forEach(([id, running]) => {
+    const state = getRuntimeState(id);
+    state.running = running;
+    state.status = running ? "running" : "stopped";
+  });
   return { ok: true, triggered: results.length, bots: results };
+}
+
+async function runDueBots() {
+  const now = Date.now();
+  const due = loadBots().filter((bot) => {
+    const state = getRuntimeState(bot.id);
+    if (!bot.enabled || !state.running || state.cycleRunning || !isBotConfigured(bot)) return false;
+    const last = state.lastCycleAt ? Date.parse(state.lastCycleAt) : 0;
+    return now - last >= getStrategy(bot).intervalSec * 1000;
+  });
+  if (due.length) await runCoordinatedCycle(due);
+  return due.length;
+}
+
+function ensureNetworkScheduler() {
+  if (networkTimer) return networkTimer;
+  const tick = async () => {
+    try {
+      await syncNodeAuctionIndex();
+      await runDueBots();
+    } catch (error) {
+      log(isProviderFailure(error) ? "warn" : "error", "Network scheduler failed", {
+        error: error.message || String(error),
+      });
+    }
+  };
+  networkTimer = setInterval(() => {
+    tick();
+  }, NODE_SCHEDULER_TICK_MS);
+  networkTimer.unref?.();
+  tick();
+  return networkTimer;
 }
 
 function json(res, data, status = 200, cors = {}) {
@@ -1009,6 +1462,8 @@ function startServer(port = DEFAULT_PORT) {
 
 module.exports = {
   BOTS_PATH,
+  classifyIndexedAuctions,
+  enqueueWalletWrite,
   getBotNetworkStatus,
   getLogs,
   loadBots,
@@ -1016,6 +1471,9 @@ module.exports = {
   isMetaMaskAgentBot,
   ensureSingleMetaMaskAgentBot,
   normalizeBotRecord,
+  getStrategy,
+  getRpcFailureKind,
+  runCoordinatedCycle,
   runBotCycle,
   runWithConcurrency,
   runSelectedBotsOnce,

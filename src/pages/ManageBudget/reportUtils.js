@@ -60,19 +60,27 @@ export const toDateInputValue = (seconds) => {
 export const shortAddress = (address) =>
   address ? `${address.slice(0, 6)}...${address.slice(-4)}` : "";
 
-const getDateRangeMs = (filters) => {
+export const getReportDateRangeMs = (filters = {}) => {
   const fromMs = filters.from
     ? new Date(`${filters.from}T00:00:00`).getTime()
     : null;
-  const toMs = filters.to ? new Date(`${filters.to}T23:59:59`).getTime() : null;
-  return { fromMs, toMs };
+  const toMs = filters.to
+    ? new Date(`${filters.to}T23:59:59.999`).getTime()
+    : null;
+  return {
+    fromMs: Number.isFinite(fromMs) ? fromMs : null,
+    toMs: Number.isFinite(toMs) ? toMs : null,
+    invalidFrom: Boolean(filters.from) && !Number.isFinite(fromMs),
+    invalidTo: Boolean(filters.to) && !Number.isFinite(toMs),
+  };
 };
 
 export const isEndTimeInDateRange = (endTime, filters) => {
   const endMs = Number(endTime || 0) * 1000;
-  const { fromMs, toMs } = getDateRangeMs(filters);
+  const { fromMs, toMs, invalidFrom, invalidTo } = getReportDateRangeMs(filters);
 
   if (!Number.isFinite(endMs) || endMs <= 0) return false;
+  if (invalidFrom || invalidTo) return false;
   if (fromMs !== null && endMs < fromMs) return false;
   if (toMs !== null && endMs > toMs) return false;
   return true;
@@ -81,6 +89,68 @@ export const isEndTimeInDateRange = (endTime, filters) => {
 export const filterReportsByDate = (reports, filters) => {
   if (!filters.from && !filters.to) return reports;
   return reports.filter(({ auction }) => isEndTimeInDateRange(auction.endTime, filters));
+};
+
+export const toAuctionListStateRows = (history = [], range = {}) => {
+  if (!history.length) {
+    return [
+      {
+        Status: "No observations",
+        Detail:
+          "This browser did not record an auction-list state for the requested range.",
+        "Requested From ISO": range.from || "",
+        "Requested To ISO": range.to || "",
+      },
+    ];
+  }
+
+  return history.flatMap((state) => {
+    const active = state.activeAuctions || [];
+    const finalizable = state.finalizableAuctions || [];
+    const auctions = [
+      ...active.map((auction) => ({ ...auction, listState: "Active" })),
+      ...finalizable.map((auction) => ({
+        ...auction,
+        listState: "Awaiting finalization",
+      })),
+    ];
+    const base = {
+      "State ID": state.stateId || "",
+      "Observed At ISO":
+        state.observedAtIso || new Date(state.observedAt).toISOString(),
+      "Boundary Role": state.boundaryRole || "Observed transition",
+      Market: state.marketLabel || state.marketId || "",
+      "Factory Address": state.factoryAddress || "",
+      Source: state.source || "",
+      "Discovery Mode": state.discoveryMode || "",
+      "Event Cursor Block": Number(state.eventCursor || 0),
+      "Active Count": active.length,
+      "Awaiting Finalization Count": finalizable.length,
+      "Known Address Count": Number(state.knownAddressCount || 0),
+      "Unreadable Count": Number(state.unreadableCount || 0),
+    };
+    if (!auctions.length) {
+      return [
+        {
+          ...base,
+          "List State": "No tracked auctions",
+          "Auction Address": "",
+        },
+      ];
+    }
+    return auctions.map((auction) => ({
+      ...base,
+      "List State": auction.listState,
+      "Auction Address": auction.address || "",
+      "Seller Address": auction.manager || "",
+      "End Time ISO": toIsoDateTime(auction.endTimeSec),
+      "Minimum Contribution (wei)": auction.minimumContribution || "0",
+      "Highest Bid (wei)": auction.highestBid || "0",
+      "Highest Bidder": auction.highestBidder || "",
+      "Bidder Count": Number(auction.approversCount || 0),
+      Closed: auction.closed ? "Yes" : "No",
+    }));
+  });
 };
 
 const buildWorksheet = (name, rows) => {
@@ -1571,6 +1641,30 @@ export const buildReportSheets = (reports, errors, options = {}) => {
       "Why It Matters": "Helps diagnose duplicated tabs without treating them as extra participants.",
       Example: "5 sessions can represent 3 unique connected wallets.",
     },
+    {
+      Order: 18,
+      Section: "Report Info",
+      Term: "Auction List History",
+      Definition:
+        "A transition log of the shared active-auction index observed by this admin browser. It includes the state immediately before the requested start when available, then each changed state in the range.",
+      "Where It Appears": "README, Auction List History",
+      "Why It Matters":
+        "Shows which auctions were active or awaiting finalization when reports and browser bots made decisions.",
+      Example: "An auction moves from Active to Awaiting finalization at its deadline.",
+    },
+    {
+      Order: 19,
+      Section: "Definitions",
+      Term: "Observed list state",
+      Definition:
+        "A browser-local observation, not a complete historical blockchain archive. Unchanged refreshes are deduplicated; openings, closes, deadline transitions, bid-summary changes, and read-health changes create new states.",
+      "Where It Appears": "Auction List History",
+      "Why It Matters":
+        "Distinguishes what the system actually observed from state reconstructed later.",
+      Example: options.listStateRange
+        ? `${options.listStateRange.from} through ${options.listStateRange.to}`
+        : "Times use ISO 8601 UTC format.",
+    },
     ...analysis.dictionaryRows,
   ];
 
@@ -1593,6 +1687,11 @@ export const buildReportSheets = (reports, errors, options = {}) => {
         name: "Site Activity",
         rows: options.activityRows || [],
       },
+      {
+        key: "listState",
+        name: "Auction List History",
+        rows: options.listStateRows || [],
+      },
     ],
     options
   ).map(({ name, rows }) => ({ name, rows }));
@@ -1609,6 +1708,9 @@ export const buildReportPayload = (reports, errors, options = {}) => {
     ...(includeSection("timeline") ? { timelineRows: tables.timelineRows } : {}),
     ...(includeSection("activity")
       ? { activityRows: options.activityRows || [] }
+      : {}),
+    ...(includeSection("listState")
+      ? { listStateRows: options.listStateRows || [] }
       : {}),
     analysis: {
       ...(includeSection("readme")
@@ -1632,6 +1734,7 @@ export const buildReportPayload = (reports, errors, options = {}) => {
   let bidRows = 0;
   const payloadOptions = { ...options };
   delete payloadOptions.activityRows;
+  delete payloadOptions.listStateRows;
 
   reports.forEach(({ auction, transactions }) => {
     totalHighestBid += toBigIntSafe(auction.highestBid);
@@ -1660,6 +1763,13 @@ export const buildReportPayload = (reports, errors, options = {}) => {
       ).length,
       activitySamples: includeSection("activity")
         ? (options.activityRows || []).filter((row) => row["Time ISO"]).length
+        : 0,
+      listStateObservations: includeSection("listState")
+        ? new Set(
+            (options.listStateRows || [])
+              .map((row) => row["State ID"])
+              .filter(Boolean),
+          ).size
         : 0,
     },
     tables: selectedTables,
@@ -1710,7 +1820,7 @@ export const downloadHtmlReport = (payload) => {
   <meta charset="utf-8" />
   <title>Auction Admin Report</title>
   <style>
-    body { font-family: Arial, sans-serif; color: #07105c; margin: 32px; }
+    body { font-family: "Manrope Variable", "Avenir Next", "Segoe UI Variable", "Segoe UI", sans-serif; color: #07105c; margin: 32px; }
     h1 { margin-bottom: 4px; }
     h2 { margin-top: 32px; }
     .meta { color: #5e638a; margin-bottom: 24px; }
@@ -1747,6 +1857,7 @@ export const downloadHtmlReport = (payload) => {
     )}</div></div>
   </div>
   ${showSection("activity") ? renderHtmlTable("Site Activity", tables.activityRows, 2000) : ""}
+  ${showSection("listState") ? renderHtmlTable("Auction List History", tables.listStateRows, 2000) : ""}
   ${showSection("flags") ? renderHtmlTable("Review Flags", tables.analysis.flagRows, 30) : ""}
   ${showSection("leaderboards") ? renderHtmlTable("Leaderboards", tables.analysis.leaderboardRows, 40) : ""}
   ${showSection("participants") ? renderHtmlTable("Participant Analysis", tables.analysis.participantRows, 40) : ""}

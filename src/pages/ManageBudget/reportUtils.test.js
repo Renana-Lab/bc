@@ -3,9 +3,11 @@ import {
   buildReportSheets,
   compareWeiDesc,
   filterReportsByDate,
+  getReportDateRangeMs,
   isEndTimeInDateRange,
   mapWithConcurrency,
   shortAddress,
+  toAuctionListStateRows,
   toDateInputValue,
 } from "./reportUtils";
 
@@ -66,6 +68,10 @@ describe("report generation stress cases", () => {
     expect(isEndTimeInDateRange(0, { from: "2026-05-25", to: "2026-05-25" })).toBe(false);
     expect(toDateInputValue(seconds)).toBe("2026-05-25");
     expect(filterReportsByDate([{ auction: { endTime: seconds } }], { from: "2026-05-26", to: "2026-05-27" })).toEqual([]);
+    const endOfDay = Date.parse("2026-05-25T23:59:59.999") / 1000;
+    expect(isEndTimeInDateRange(endOfDay, { from: "2026-05-25", to: "2026-05-25" })).toBe(true);
+    expect(isEndTimeInDateRange(seconds, { from: "not-a-date", to: "2026-05-25" })).toBe(false);
+    expect(getReportDateRangeMs({ from: "not-a-date" }).invalidFrom).toBe(true);
   });
 
   test("sorts wei beyond Number.MAX_SAFE_INTEGER exactly", () => {
@@ -114,5 +120,57 @@ describe("report generation stress cases", () => {
     expect(payload.tables.activityRows).toEqual(activityRows);
     expect(payload.totals.activitySamples).toBe(1);
     expect(payload.options.activityRows).toBeUndefined();
+  });
+
+  test("exports the range baseline and every observed auction-list state", () => {
+    const rows = toAuctionListStateRows([
+      {
+        stateId: "state-1",
+        observedAtIso: "2026-08-16T10:00:00.000Z",
+        boundaryRole: "Baseline at range start",
+        factoryAddress: "0xfactory",
+        marketLabel: "Production",
+        source: "auction-created",
+        knownAddressCount: 4,
+        unreadableCount: 0,
+        activeAuctions: [{
+          address: "0xauction",
+          manager: "0xseller",
+          endTimeSec: 1786878000,
+          minimumContribution: "100",
+          highestBid: "0",
+          highestBidder: "0x0",
+          approversCount: 0,
+          closed: false,
+        }],
+        finalizableAuctions: [],
+      },
+      {
+        stateId: "state-2",
+        observedAtIso: "2026-08-16T10:05:00.000Z",
+        activeAuctions: [],
+        finalizableAuctions: [],
+      },
+    ]);
+    const options = { listStateRows: rows, sections: { listState: true } };
+    const sheets = buildReportSheets([], [], options);
+    const payload = buildReportPayload([], [], options);
+
+    expect(sheets.find((sheet) => sheet.name === "Auction List History")?.rows)
+      .toEqual(rows);
+    expect(rows[0]["Boundary Role"]).toBe("Baseline at range start");
+    expect(rows[1]["List State"]).toBe("No tracked auctions");
+    expect(payload.tables.listStateRows).toEqual(rows);
+    expect(payload.totals.listStateObservations).toBe(2);
+    expect(payload.options.listStateRows).toBeUndefined();
+  });
+
+  test("makes an empty observed range explicit instead of dropping the sheet", () => {
+    const rows = toAuctionListStateRows([], {
+      from: "2026-08-16T00:00:00.000Z",
+      to: "2026-08-16T23:59:59.999Z",
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].Status).toBe("No observations");
   });
 });

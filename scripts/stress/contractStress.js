@@ -194,6 +194,24 @@ const main = async () => {
     "Winner received a refund",
   );
 
+  console.log("[stress] closing an ended zero-bid auction without moving budget");
+  const sellerBudgetBeforeZeroBidClose = await factory.methods.getBudget(seller).call();
+  const zeroBidAuction = await createAuction({ description: "zero-bid boundary" });
+  await provider.request({ method: "evm_increaseTime", params: [61] });
+  await provider.request({ method: "evm_mine", params: [] });
+  await zeroBidAuction.methods
+    .finalizeAuctionIfNeeded()
+    .send({ from: accounts[4], gas: 700000 });
+  check(await zeroBidAuction.methods.getStatus().call(), "Zero-bid auction did not close");
+  check(
+    (await zeroBidAuction.methods.highestBid().call()) === "0",
+    "Zero-bid auction gained an unexpected winner",
+  );
+  check(
+    (await factory.methods.getBudget(seller).call()) === sellerBudgetBeforeZeroBidClose,
+    "Zero-bid finalization changed the seller budget",
+  );
+
   console.log("[stress] creating 30 auctions and bidding with 30 bots concurrently");
   const parallelAuctions = [];
   for (let index = 0; index < 30; index += 1) {
@@ -240,13 +258,13 @@ const main = async () => {
   );
   check(firstTenClosed.every(Boolean), "Bounded finalizer did not close its first batch");
   check(
-    (await factory.methods.getDeployedCampaigns().call()).length === 31,
+    (await factory.methods.getDeployedCampaigns().call()).length === 32,
     "Factory deployment index lost auctions under load",
   );
 
   await provider.disconnect();
   console.log(
-    `[stress] PASS: ${assertions} invariant groups, 31 auctions, 30 parallel bots in ${(
+    `[stress] PASS: ${assertions} invariant groups, 32 auctions, 30 parallel bots in ${(
       (Date.now() - startedAt) /
       1000
     ).toFixed(1)}s`,

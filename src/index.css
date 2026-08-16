@@ -1,4 +1,6 @@
 :root {
+  --app-font-family: 'Manrope Variable', 'Avenir Next', 'Segoe UI Variable',
+    'Segoe UI', sans-serif;
   --motion-fast: 100ms;
   --motion-base: 170ms;
   --motion-slow: 260ms;
@@ -8,11 +10,16 @@
 
 body {
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
-    sans-serif;
+  font-family: var(--app-font-family);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
 }
 
 code {

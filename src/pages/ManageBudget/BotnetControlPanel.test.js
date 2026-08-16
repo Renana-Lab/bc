@@ -1,10 +1,14 @@
 import {
   extractPrivateKeysFromText,
   ensureSingleMetaMaskAgentBot,
+  formatAuctionCountdown,
   getBidDecision,
+  getRegistryDisplayRows,
   getStrategy,
+  getUsableCachedAuctionSnapshot,
   isValidPrivateKey,
   normalizeBot,
+  normalizeObservatoryRounds,
   normalizePrivateKey,
   METAMASK_AGENT_WALLET,
 } from "./BotnetControlPanel";
@@ -139,5 +143,49 @@ describe("bot command center stress cases", () => {
     expect(normalized.maxBidWei).toBe(0n);
     expect(normalized.intervalSec).toBe(60);
     expect(normalized.enableBidding).toBe(false);
+  });
+
+  test("formats auction countdowns at and across the deadline boundary", () => {
+    const now = Date.UTC(2026, 7, 16, 12, 0, 0);
+    expect(formatAuctionCountdown(now / 1000 + 3661, now)).toBe("01:01:01");
+    expect(formatAuctionCountdown(now / 1000, now)).toBe("00:00:00");
+    expect(formatAuctionCountdown(now / 1000 - 5, now)).toBe("00:00:00");
+  });
+
+  test("shows active and finalizable auctions as distinct registry rows", () => {
+    expect(
+      getRegistryDisplayRows({
+        activeAuctions: [{ address: "0xactive" }],
+        finalizableAuctions: [{ address: "0xfinalize" }],
+      }),
+    ).toEqual([
+      { address: "0xactive", registryState: "active" },
+      { address: "0xfinalize", registryState: "awaiting-finalization" },
+    ]);
+  });
+
+  test("keeps observatory rounds newest-first, unique, and bounded", () => {
+    const rounds = Array.from({ length: 35 }, (_, index) => ({
+      id: `round-${index}`,
+      startedAt: index,
+    }));
+    rounds.push({ id: "round-34", startedAt: 9999 });
+
+    const normalized = normalizeObservatoryRounds(rounds);
+    expect(normalized).toHaveLength(30);
+    expect(normalized[0].id).toBe("round-34");
+    expect(new Set(normalized.map((round) => round.id)).size).toBe(30);
+  });
+
+  test("uses only recent cached auction indexes during provider outages", () => {
+    const now = Date.UTC(2026, 7, 16, 12, 0, 0);
+    const snapshot = { updatedAt: now - 120000, activeAuctions: [] };
+
+    expect(getUsableCachedAuctionSnapshot(snapshot, now, 120000)).toEqual({
+      snapshot,
+      ageMs: 120000,
+    });
+    expect(getUsableCachedAuctionSnapshot(snapshot, now + 1, 120000)).toBeNull();
+    expect(getUsableCachedAuctionSnapshot(null, now, 120000)).toBeNull();
   });
 });

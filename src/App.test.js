@@ -19,6 +19,26 @@ jest.mock('./real_ethereum/ethereumProvider', () => ({
   waitForEthereumProvider: jest.fn(),
 }));
 
+jest.mock('./real_ethereum/socketFactory', () => {
+  const createSubscription = () => ({
+    on: jest.fn().mockReturnThis(),
+    unsubscribe: jest.fn(),
+  });
+  const events = new Proxy(
+    {},
+    {
+      get: () => () => createSubscription(),
+    }
+  );
+
+  return {
+    campaignSocket: jest.fn(() => ({ events })),
+    factorySocket: { events },
+    shouldLimitLiveEventLoad: jest.fn(() => true),
+    web3Socket: {},
+  };
+});
+
 beforeEach(() => {
   getEthereumAccounts.mockResolvedValue([]);
   getMetaMaskErrorMessage.mockReturnValue('MetaMask is unavailable.');
