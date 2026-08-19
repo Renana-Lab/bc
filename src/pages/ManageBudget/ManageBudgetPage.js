@@ -12,7 +12,7 @@ import {
   IconButton,
 } from "@mui/material";
 import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
-import { useState, useEffect, useCallback, useRef } from "react";
+import { lazy, Suspense, useState, useEffect, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import Layout from "../../components/Layout";
 import toast from "react-hot-toast";
@@ -25,7 +25,6 @@ import {
 } from "../../real_ethereum/activeAuctionRegistry";
 import componentStyles from "../../styles/components.module.scss";
 import AutoFinalizerMonitor from "./AutoFinalizerMonitor";
-import BotnetControlPanel from "./BotnetControlPanel";
 import LiveActivityPanel from "./LiveActivityPanel";
 import {
   getPresenceHistory,
@@ -73,6 +72,8 @@ import {
   toAuctionListStateRows,
   toDateInputValue,
 } from "./reportUtils";
+
+const BotnetControlPanel = lazy(() => import("./BotnetControlPanel"));
 
 const LOCAL_STORAGE_KEY = "globalBudgetStore";
 const ADMIN_SECRET = "1234"; // Do not store production secrets on the frontend.
@@ -2224,7 +2225,15 @@ const ManageBudgetPage = () => {
                     transition: ADMIN_COLLAPSE_INNER_TRANSITION,
                   }}
                 >
-                  <BotnetControlPanel schedulerEnabled={false} />
+                  <Suspense
+                    fallback={
+                      <Box sx={{ py: 2, color: "text.secondary", fontSize: 14 }}>
+                        Preparing bot controls...
+                      </Box>
+                    }
+                  >
+                    <BotnetControlPanel schedulerEnabled={false} />
+                  </Suspense>
                 </Box>
               </Collapse>
             </Box>

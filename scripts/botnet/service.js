@@ -29,7 +29,9 @@ const LEGACY_BOTNET_BOTS_PATH =
   "C:\\Users\\Programmers\\Desktop\\bc_SUPERBOT\\files\\data\\bots.json";
 
 const DEFAULT_RPC_URLS = [
-  "https://rpc.sepolia.org",
+  "https://sepolia.gateway.tenderly.co",
+  "https://sepolia.rpc.thirdweb.com",
+  "https://ethereum-sepolia-rpc.publicnode.com",
 ];
 
 const DEFAULT_OVERRIDES = {
@@ -72,6 +74,7 @@ let networkTimer = null;
 let networkCycleRunning = false;
 let allocationCursor = 0;
 let lastFinalizeAt = 0;
+let nextRpcIndex = 0;
 
 function ensureDataDir() {
   fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -503,6 +506,9 @@ function getRpcUrls() {
     process.env.BOTNET_RPC_URL,
     process.env.RPC_URL,
     process.env.INFURA_KEY ? `https://sepolia.infura.io/v3/${process.env.INFURA_KEY}` : "",
+    process.env.ALCHEMY_API_KEY
+      ? `https://eth-sepolia.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`
+      : "",
     ...DEFAULT_RPC_URLS,
   ];
   const urls = [
@@ -548,19 +554,45 @@ function isProviderFailure(error) {
 
 function coolDownProvider(rpcUrl, error) {
   const kind = getRpcFailureKind(error);
-  const duration = kind === "unsupported-plan" ? 24 * 60 * 60 * 1000 : kind === "network" ? 15000 : 45000;
-  rpcCooldowns.set(rpcUrl, Date.now() + duration);
-  let provider = rpcUrl;
-  try {
-    provider = new URL(rpcUrl).hostname;
-  } catch (_) {}
-  log("warn", "RPC endpoint entered cooldown", { provider, kind });
+  const previous = rpcCooldowns.get(rpcUrl) || {};
+  const failures = Number(previous.failures || 0) + 1;
+  const baseDuration =
+    kind === "unsupported-plan"
+      ? 24 * 60 * 60 * 1000
+      : kind === "network"
+        ? 30000
+        : 2 * 60 * 1000;
+  const duration =
+    kind === "unsupported-plan"
+      ? baseDuration
+      : Math.min(15 * 60 * 1000, baseDuration * 2 ** Math.min(4, failures - 1));
+  rpcCooldowns.set(rpcUrl, {
+    failures,
+    kind,
+    cooldownUntil: Date.now() + duration,
+  });
+}
+
+function markProviderSuccess(rpcUrl) {
+  const previous = rpcCooldowns.get(rpcUrl);
+  if (!previous) return;
+  if (Number(previous.cooldownUntil || 0) > Date.now()) return;
+  const failures = Math.max(0, Number(previous.failures || 0) - 1);
+  if (!failures) {
+    rpcCooldowns.delete(rpcUrl);
+    return;
+  }
+  rpcCooldowns.set(rpcUrl, { ...previous, failures, cooldownUntil: 0 });
 }
 
 function getProviderContext(factoryAddress = getFactoryAddress()) {
   const urls = getRpcUrls();
-  const rpcUrl = urls.find((url) => Number(rpcCooldowns.get(url) || 0) <= Date.now());
+  const healthy = urls.filter(
+    (url) => Number(rpcCooldowns.get(url)?.cooldownUntil || 0) <= Date.now(),
+  );
+  const rpcUrl = healthy.length ? healthy[nextRpcIndex % healthy.length] : "";
   if (!rpcUrl) throw new Error("All configured RPC endpoints are cooling down.");
+  nextRpcIndex = (nextRpcIndex + 1) % Math.max(1, healthy.length);
   const key = `${rpcUrl}:${factoryAddress.toLowerCase()}`;
   if (!providerCache.has(key)) {
     const web3 = new Web3(rpcUrl);
@@ -807,10 +839,12 @@ async function refreshNodeAuctionIndex(ctx, options = {}) {
 
 async function syncNodeAuctionIndex() {
   let lastError;
-  for (let attempt = 0; attempt < Math.min(3, getRpcUrls().length); attempt += 1) {
+  for (let attempt = 0; attempt < getRpcUrls().length; attempt += 1) {
     const context = getProviderContext();
     try {
-      return await refreshNodeAuctionIndex(context, { force: true });
+      const result = await refreshNodeAuctionIndex(context, { force: true });
+      markProviderSuccess(context.rpcUrl);
+      return result;
     } catch (error) {
       lastError = error;
       if (!isProviderFailure(error)) throw error;
@@ -1061,7 +1095,7 @@ async function executeRoundOnProvider(bots, sharedContext) {
             }
             if (isProviderFailure(error)) {
               coolDownProvider(sharedContext.rpcUrl, error);
-              state.lastError = error.message || String(error);
+              state.lastError = "Blockchain connectivity was interrupted. Automatic recovery is in progress.";
               skipped.push("RPC provider unavailable");
               break;
             }
@@ -1112,7 +1146,7 @@ async function executeRoundOnProvider(bots, sharedContext) {
         if (error.cancelled) continue;
         if (isProviderFailure(error)) {
           coolDownProvider(sharedContext.rpcUrl, error);
-          owner.state.lastError = error.message || String(error);
+          owner.state.lastError = "Blockchain connectivity was interrupted. Automatic recovery is in progress.";
           continue;
         }
         owner.state.stats.errors += 1;
@@ -1137,10 +1171,12 @@ async function runCoordinatedCycle(inputBots) {
   networkCycleRunning = true;
   let lastError;
   try {
-    for (let attempt = 0; attempt < Math.min(3, getRpcUrls().length); attempt += 1) {
+    for (let attempt = 0; attempt < getRpcUrls().length; attempt += 1) {
       const sharedContext = getProviderContext();
       try {
-        return await executeRoundOnProvider(bots, sharedContext);
+        const result = await executeRoundOnProvider(bots, sharedContext);
+        markProviderSuccess(sharedContext.rpcUrl);
+        return result;
       } catch (error) {
         lastError = error;
         if (!isProviderFailure(error)) throw error;
@@ -1151,13 +1187,17 @@ async function runCoordinatedCycle(inputBots) {
   } catch (error) {
     bots.forEach((bot) => {
       const state = getRuntimeState(bot.id);
-      state.lastError = error.message || String(error);
+      state.lastError = isProviderFailure(error)
+        ? "Every configured blockchain connection is currently unavailable. The scheduler will retry automatically."
+        : error.message || String(error);
       if (!isProviderFailure(error)) state.stats.errors += 1;
       state.cycleRunning = false;
       state.status = state.running ? "running" : "stopped";
     });
     log(isProviderFailure(error) ? "warn" : "error", "Coordinated bot cycle failed", {
-      error: error.message || String(error),
+      error: isProviderFailure(error)
+        ? "All configured blockchain connections are unavailable"
+        : error.message || String(error),
     });
     return bots.map(serializeBot);
   } finally {

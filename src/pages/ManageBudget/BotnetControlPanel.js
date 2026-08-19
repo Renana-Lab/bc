@@ -40,11 +40,14 @@ import {
   subscribeActiveAuctionRegistry,
 } from "../../real_ethereum/activeAuctionRegistry";
 import {
+  executeWithRpcFailover,
   getConfiguredRpcUrls,
   getFriendlyRpcError,
   getRpcErrorMessage,
   getRpcFailureKind,
   isRpcProviderFailure,
+  markRpcProviderFailure,
+  resetRpcProviderHealth,
 } from "../../real_ethereum/rpcConfig";
 import {
   BOTNET_STATE_EVENT,
@@ -60,6 +63,7 @@ import {
   getActivityUsage,
   getBidDecision as getSharedBidDecision,
 } from "../../botnet/cyclePlanner.mjs";
+import { BOT_SCHEDULER_TICK_EVENT } from "../../botnet/runtimeEvents";
 
 const activeBotCycles = new Set();
 export const PRIVATE_KEY_WALLET = "private-key";
@@ -383,7 +387,14 @@ const saveStoredBots = (bots) => {
   writeJson(LOCAL_BOTS_KEY, ensureSingleMetaMaskAgentBot(bots));
   notifyBotnetStateChanged();
 };
-const loadStoredLogs = () => readJson(LOCAL_LOGS_KEY, []);
+const isLegacyProviderNoise = (entry) =>
+  Boolean(entry?.meta?.provider && entry?.meta?.failureKind) &&
+  /rpc endpoint|rpc capacity|temporarily unreachable|cooling down/i.test(
+    String(entry?.message || ""),
+  );
+
+const loadStoredLogs = () =>
+  readJson(LOCAL_LOGS_KEY, []).filter((entry) => !isLegacyProviderNoise(entry));
 const saveStoredLogs = (logs) => {
   writeJson(LOCAL_LOGS_KEY, logs.slice(0, 120));
   notifyBotnetStateChanged();
@@ -547,11 +558,9 @@ const BotCard = ({
   onDelete,
   onClearError,
 }) => {
-  const [roundOpen, setRoundOpen] = useState(false);
   const [errorOpen, setErrorOpen] = useState(false);
   const strategy = getStrategy(bot);
   const activity = getActivityUsage(strategy.intervalSec, strategy.maxBidsPerCycle);
-  const metrics = bot.lastCycleMetrics;
   const stats = bot.stats || {};
   const agentManaged = isMetaMaskAgentBot(bot);
   const activityTone =
@@ -739,43 +748,6 @@ const BotCard = ({
         )}
       </Box>
 
-      {metrics && (
-        <Box sx={{ borderTop: "1px solid #e4e9f6" }}>
-          <Button
-            fullWidth
-            onClick={() => setRoundOpen((current) => !current)}
-            endIcon={<KeyboardArrowDownRoundedIcon sx={{ transform: roundOpen ? "rotate(180deg)" : "none", transition: "transform 90ms ease" }} />}
-            aria-expanded={roundOpen}
-            sx={{ px: 1.75, py: 0.85, borderRadius: 0, justifyContent: "space-between", color: "#31416e", textTransform: "none" }}
-          >
-            <Box sx={{ display: "flex", alignItems: "baseline", gap: 1, minWidth: 0, textAlign: "left" }}>
-              <Typography variant="caption" sx={{ fontWeight: 800 }}>Latest coordinated round</Typography>
-              {!roundOpen && (
-                <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                  {metrics.durationMs || 0} ms / {metrics.activeAuctions || 0} active / {metrics.bidsSent || 0} sent
-                </Typography>
-              )}
-            </Box>
-          </Button>
-          <Collapse in={roundOpen} timeout={90} unmountOnExit>
-            <Box sx={{ px: 1.75, pb: 1.5, display: "grid", gridTemplateColumns: { xs: "repeat(2, minmax(0, 1fr))", sm: "repeat(4, minmax(0, 1fr))" }, gap: 1.25 }}>
-              <BotMetric label="Duration" value={`${metrics.durationMs || 0} ms`} tone="#64739f" />
-              <BotMetric label="Snapshot age" value={`${metrics.snapshotAgeMs || 0} ms`} tone="#64739f" />
-              <BotMetric label="Active auctions" value={metrics.activeAuctions || 0} tone="#64739f" />
-              <BotMetric label="Reads / batches" value={`${metrics.logicalReads || 0} / ${metrics.rpcBatches || 0}`} tone="#64739f" />
-              <BotMetric label="Candidates" value={metrics.candidatesEvaluated || 0} tone="#64739f" />
-              <BotMetric label="Attempted" value={metrics.bidsAttempted || 0} tone="#64739f" />
-              <BotMetric label="Sent" value={metrics.bidsSent || 0} tone="#64739f" />
-              <BotMetric label="Cache hits" value={metrics.cacheHits || 0} tone="#64739f" />
-              {metrics.skippedReason && (
-                <Typography variant="caption" sx={{ gridColumn: "1 / -1", color: "#59647f", overflowWrap: "anywhere" }}>
-                  {metrics.skippedReason}
-                </Typography>
-              )}
-            </Box>
-          </Collapse>
-        </Box>
-      )}
     </Box>
   );
 };
@@ -1114,11 +1086,14 @@ const sendContractTx = async (method, options) => {
 
 export const getBidDecision = getSharedBidDecision;
 
-const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
+const BotnetControlPanel = ({
+  headless = false,
+  schedulerEnabled = true,
+  externalScheduler = false,
+}) => {
   const activeFactoryAddress = getActiveFactoryAddress();
   const keyFileInputRef = useRef(null);
   const rpcIndexRef = useRef(0);
-  const rpcCooldownUntilRef = useRef({});
   const registryCooldownUntilRef = useRef(0);
   const schedulerTickRunningRef = useRef(false);
   const coordinatorFactoryRef = useRef("");
@@ -1221,42 +1196,11 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
     toast.success("Bot observatory history cleared");
   }, []);
 
-  const getNextRpcUrl = useCallback(() => {
-    if (!RPC_URLS.length) return "";
-
-    const now = Date.now();
-    for (let attempt = 0; attempt < RPC_URLS.length; attempt += 1) {
-      const index = (rpcIndexRef.current + attempt) % RPC_URLS.length;
-      const rpcUrl = RPC_URLS[index];
-      const cooldownUntil = rpcCooldownUntilRef.current[rpcUrl] || 0;
-
-      if (cooldownUntil <= now) {
-        rpcIndexRef.current = (index + 1) % RPC_URLS.length;
-        setRpcNotice("");
-        return rpcUrl;
-      }
-    }
-
-    const soonestCooldown = Math.min(
-      ...RPC_URLS.map((rpcUrl) => rpcCooldownUntilRef.current[rpcUrl] || now)
-    );
-    const seconds = Math.max(1, Math.ceil((soonestCooldown - now) / 1000));
-    setRpcNotice(`All configured RPC providers are cooling down. Retrying in about ${seconds}s.`);
-    return "";
-  }, []);
-
   const coolDownRpcUrl = useCallback(
-    (rpcUrl, error) => {
+    (rpcUrl, error, { surface = false } = {}) => {
       if (!rpcUrl) return;
-      const failureKind = getRpcFailureKind(error);
-      const cooldownMs =
-        failureKind === "unsupported-plan"
-          ? 24 * 60 * 60 * 1000
-          : failureKind === "network"
-            ? 15000
-            : BOT_RPC_RATE_LIMIT_COOLDOWN_MS;
-      const until = Date.now() + cooldownMs;
-      rpcCooldownUntilRef.current[rpcUrl] = until;
+      const health = markRpcProviderFailure(rpcUrl, error);
+      if (!surface) return;
       const message = getFriendlyRpcError(error);
       setRpcNotice(message);
       addLog("warn", message, {
@@ -1267,7 +1211,7 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
             return "configured RPC";
           }
         })(),
-        failureKind,
+        failureKind: health?.kind || getRpcFailureKind(error),
       });
     },
     [addLog]
@@ -1366,7 +1310,7 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
   );
 
   const retryRpcProviders = useCallback(() => {
-    rpcCooldownUntilRef.current = {};
+    resetRpcProviderHealth();
     registryCooldownUntilRef.current = 0;
     setRpcNotice("");
     setError("");
@@ -1396,12 +1340,10 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
         return false;
       }
 
-      const rpcUrl = getNextRpcUrl();
-      if (!rpcUrl) return false;
       const factoryAddress = getActiveFactoryAddress();
       if (!factoryAddress) throw new Error("No active factory contract configured.");
-      const web3 = getCachedWeb3(rpcUrl);
-      const factory = getCachedFactory(web3, rpcUrl, factoryAddress);
+      let rpcUrl = "";
+      let web3 = null;
       const startedAt = Date.now();
       const roundTrace = {
         id: `browser-${startedAt.toString(36)}-${Math.random().toString(16).slice(2, 8)}`,
@@ -1409,13 +1351,7 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
         finishedAt: null,
         status: "running",
         factoryAddress,
-        provider: (() => {
-          try {
-            return new URL(rpcUrl).hostname;
-          } catch (_) {
-            return "configured RPC";
-          }
-        })(),
+        provider: "selecting healthy connection",
         blockNumber: null,
         snapshot: null,
         bots: [],
@@ -1471,7 +1407,7 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
       }
       const nowSec = Math.floor(Date.now() / 1000);
       const contexts = runnableBots.map((bot) => {
-        const account = getCachedAccount(web3, bot.privateKey);
+        const account = getCachedAccount(web3ForKeys, bot.privateKey);
         return { bot, account, strategy: getStrategy(bot) };
       });
       const activeAuctions = sharedSnapshot.activeAuctions || [];
@@ -1515,52 +1451,109 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
       const traceByBot = new Map(roundTrace.bots.map((bot) => [bot.id, bot]));
       recordObservatoryRound({ ...roundTrace, status: "planned" });
 
-      let blockNumber;
-      try {
-        blockNumber = await web3.eth.getBlockNumber();
-        roundTrace.blockNumber = Number(blockNumber);
-      } catch (blockError) {
-        const message = getFriendlyRpcError(blockError);
-        roundTrace.bots.forEach((bot) => {
-          bot.outcome = "read-failed";
-          bot.steps.push({ at: Date.now(), stage: "block", outcome: "error", reason: message });
-        });
-        recordObservatoryRound({ ...roundTrace, finishedAt: Date.now(), status: "read-failed", error: message });
-        if (isRpcProviderFailure(blockError)) coolDownRpcUrl(rpcUrl, blockError);
-        return false;
-      }
-      const readSpecs = [];
-      contexts.forEach(({ bot, account, strategy }) => {
-        if (!strategy.enableBidding) return;
-        const assigned = allocation.assignments[bot.id] || { primary: [], reserve: [] };
-        if (!assigned.primary.length && !assigned.reserve.length) return;
-        readSpecs.push({ type: "budget", botId: bot.id, method: factory.methods.getBudget(account.address) });
-        [...assigned.primary, ...assigned.reserve].forEach((auction) => {
-          readSpecs.push({
-            type: "bid",
-            botId: bot.id,
-            auctionAddress: auction.address,
-            method: getCachedCampaign(web3, rpcUrl, auction.address).methods.getBid(account.address),
-          });
-        });
-      });
-
-      const readResults = [];
+      let blockNumber = null;
+      let readSpecs = [];
+      let readResults = [];
       const batchSize = 25;
       try {
-        for (let offset = 0; offset < readSpecs.length; offset += batchSize) {
-          const chunk = readSpecs.slice(offset, offset + batchSize);
-          readResults.push(...(await executeBatchCalls(web3, chunk.map((item) => item.method), blockNumber)));
-        }
-      } catch (batchError) {
-        const message = getFriendlyRpcError(batchError);
+        const connection = await executeWithRpcFailover(
+          RPC_URLS,
+          async (candidateUrl) => {
+            const candidateWeb3 = getCachedWeb3(candidateUrl);
+            const candidateFactory = getCachedFactory(
+              candidateWeb3,
+              candidateUrl,
+              factoryAddress,
+            );
+            contexts.forEach(({ bot }) => {
+              getCachedAccount(candidateWeb3, bot.privateKey);
+            });
+            const candidateBlock = await candidateWeb3.eth.getBlockNumber();
+            const candidateSpecs = [];
+            contexts.forEach(({ bot, account, strategy }) => {
+              if (!strategy.enableBidding) return;
+              const assigned = allocation.assignments[bot.id] || { primary: [], reserve: [] };
+              if (!assigned.primary.length && !assigned.reserve.length) return;
+              candidateSpecs.push({
+                type: "budget",
+                botId: bot.id,
+                method: candidateFactory.methods.getBudget(account.address),
+              });
+              [...assigned.primary, ...assigned.reserve].forEach((auction) => {
+                candidateSpecs.push({
+                  type: "bid",
+                  botId: bot.id,
+                  auctionAddress: auction.address,
+                  method: getCachedCampaign(
+                    candidateWeb3,
+                    candidateUrl,
+                    auction.address,
+                  ).methods.getBid(account.address),
+                });
+              });
+            });
+
+            const candidateResults = [];
+            for (let offset = 0; offset < candidateSpecs.length; offset += batchSize) {
+              const chunk = candidateSpecs.slice(offset, offset + batchSize);
+              const chunkResults = await executeBatchCalls(
+                candidateWeb3,
+                chunk.map((item) => item.method),
+                candidateBlock,
+              );
+              const providerFailure = chunkResults.find(
+                (result) =>
+                  result?.status === "rejected" &&
+                  isRpcProviderFailure(result.reason),
+              );
+              if (providerFailure) throw providerFailure.reason;
+              candidateResults.push(...chunkResults);
+            }
+
+            return {
+              web3: candidateWeb3,
+              blockNumber: candidateBlock,
+              readSpecs: candidateSpecs,
+              readResults: candidateResults,
+            };
+          },
+          { startIndex: rpcIndexRef.current },
+        );
+
+        rpcUrl = connection.url;
+        web3 = connection.value.web3;
+        blockNumber = connection.value.blockNumber;
+        readSpecs = connection.value.readSpecs;
+        readResults = connection.value.readResults;
+        rpcIndexRef.current = (RPC_URLS.indexOf(rpcUrl) + 1) % Math.max(1, RPC_URLS.length);
+        roundTrace.provider = (() => {
+          try {
+            return new URL(rpcUrl).hostname;
+          } catch (_) {
+            return "configured RPC";
+          }
+        })();
+        roundTrace.blockNumber = Number(blockNumber);
+      } catch (connectionError) {
+        const message = getFriendlyRpcError(connectionError);
         roundTrace.bots.forEach((bot) => {
-          bot.outcome = "read-failed";
-          bot.steps.push({ at: Date.now(), stage: "batch-read", outcome: "error", reason: message });
+          bot.outcome = "deferred";
+          bot.steps.push({
+            at: Date.now(),
+            stage: "connection",
+            outcome: "deferred",
+            reason: "All connections are unavailable; this bot remains running and will retry next cycle",
+          });
         });
-        recordObservatoryRound({ ...roundTrace, finishedAt: Date.now(), status: "read-failed", error: message });
-        if (isRpcProviderFailure(batchError)) coolDownRpcUrl(rpcUrl, batchError);
-        throw batchError;
+        roundTrace.provider = "all connections attempted";
+        recordObservatoryRound({
+          ...roundTrace,
+          finishedAt: Date.now(),
+          status: "connection-deferred",
+          warning: message,
+        });
+        setRpcNotice(message);
+        return false;
       }
 
       const budgets = new Map();
@@ -1841,7 +1834,7 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
       });
       return completedCycles > 0;
     },
-    [addLog, coolDownRpcUrl, getNextRpcUrl, recordObservatoryRound, updateBot]
+    [addLog, coolDownRpcUrl, recordObservatoryRound, updateBot]
   );
 
   useEffect(() => {
@@ -1878,17 +1871,23 @@ const BotnetControlPanel = ({ headless = false, schedulerEnabled = true }) => {
       }
     };
 
-    const timer = window.setInterval(runSchedulerTick, BOT_SCHEDULER_TICK_MS);
-    runSchedulerTick();
+    let timer = null;
+    if (externalScheduler) {
+      window.addEventListener(BOT_SCHEDULER_TICK_EVENT, runSchedulerTick);
+    } else {
+      timer = window.setInterval(runSchedulerTick, BOT_SCHEDULER_TICK_MS);
+      runSchedulerTick();
+    }
 
     return () => {
-      window.clearInterval(timer);
+      if (timer !== null) window.clearInterval(timer);
+      window.removeEventListener(BOT_SCHEDULER_TICK_EVENT, runSchedulerTick);
       if (coordinatorFactoryRef.current) {
         releaseActiveAuctionCoordinatorLease(coordinatorFactoryRef.current);
         coordinatorFactoryRef.current = "";
       }
     };
-  }, [runBotsInBatches, schedulerEnabled]);
+  }, [externalScheduler, runBotsInBatches, schedulerEnabled]);
 
   const runAction = async (key, action, body = {}) => {
     setActionLoading(key);

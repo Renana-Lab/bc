@@ -1820,7 +1820,7 @@ export const downloadHtmlReport = (payload) => {
   <meta charset="utf-8" />
   <title>Auction Admin Report</title>
   <style>
-    body { font-family: "Manrope Variable", "Avenir Next", "Segoe UI Variable", "Segoe UI", sans-serif; color: #07105c; margin: 32px; }
+    body { font-family: "Manrope", "Avenir Next", "Segoe UI Variable", "Segoe UI", sans-serif; color: #07105c; margin: 32px; }
     h1 { margin-bottom: 4px; }
     h2 { margin-top: 32px; }
     .meta { color: #5e638a; margin-bottom: 24px; }

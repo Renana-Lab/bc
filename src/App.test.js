@@ -164,17 +164,20 @@ test(
 );
 
 test(
-  'does not redirect a connected protected route after one transient empty wallet read',
+  'revokes protected content immediately when MetaMask no longer exposes an account',
   async () => {
+    let locked = false;
     const provider = {
       on: jest.fn(),
       removeListener: jest.fn(),
     };
 
     waitForEthereumProvider.mockResolvedValue(provider);
-    getEthereumAccounts
-      .mockResolvedValueOnce(['0x1234567890abcdef1234567890abcdef12345678'])
-      .mockResolvedValue([]);
+    getEthereumAccounts.mockImplementation(() =>
+      Promise.resolve(
+        locked ? [] : ['0x1234567890abcdef1234567890abcdef12345678']
+      )
+    );
 
     render(
       <MemoryRouter
@@ -185,14 +188,14 @@ test(
       </MemoryRouter>
     );
 
+    await waitFor(() => {
+      expect(localStorage.getItem('notConnected')).toBe('false');
+    });
     expect(
-      await screen.findByRole(
-        'heading',
-        { name: /welcome to the blockchain data market platform/i },
-        { timeout: 20000 }
-      )
-    ).toBeInTheDocument();
+      screen.queryByRole('heading', { name: /are you logged in to metamask/i })
+    ).not.toBeInTheDocument();
 
+    locked = true;
     await act(async () => {
       window.dispatchEvent(new Event('focus'));
     });
@@ -202,13 +205,15 @@ test(
     });
 
     expect(
-      screen.queryByRole('heading', { name: /are you logged in to metamask/i })
-    ).not.toBeInTheDocument();
-    expect(
-      screen.getByRole('heading', {
-        name: /welcome to the blockchain data market platform/i,
-      })
+      await screen.findByRole(
+        'heading',
+        { name: /are you logged in to metamask/i },
+        { timeout: 20000 }
+      )
     ).toBeInTheDocument();
+    expect(
+      screen.queryByPlaceholderText(/search auctions/i)
+    ).not.toBeInTheDocument();
   },
   30000
 );

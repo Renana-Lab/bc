@@ -3,8 +3,7 @@ import CampaignFactory from "./build/CampaignFactory.json";
 import Campaign from "./build/Campaign.json";
 import { getActiveFactoryAddress } from "./marketConfig";
 
-const DEFAULT_WS_URL = "wss://sepolia.infura.io/ws/v3/b27d53291ceb44bd864dbf7b0eb55581";
-const WS_URL = process.env.REACT_APP_WS_RPC_URL || DEFAULT_WS_URL;
+const WS_URL = process.env.REACT_APP_WS_RPC_URL || "";
 const LIVE_EVENTS_DISABLED =
   String(process.env.REACT_APP_DISABLE_LIVE_EVENTS || "").toLowerCase() === "true";
 

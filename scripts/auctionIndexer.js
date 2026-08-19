@@ -8,9 +8,10 @@ const factoryJson = require("../src/real_ethereum/build/CampaignFactory.json");
 const { loadFactoryAddress } = require("./factoryAddressLoader");
 
 const DEFAULT_RPC_URLS = [
-  "https://rpc.sepolia.org",
+  "https://sepolia.gateway.tenderly.co",
+  "https://sepolia.rpc.thirdweb.com",
+  "https://ethereum-sepolia-rpc.publicnode.com",
 ];
-const DEFAULT_WS_URL = "wss://sepolia.infura.io/ws/v3/b27d53291ceb44bd864dbf7b0eb55581";
 const PORT = Number(process.env.AUCTION_INDEXER_PORT || 8787);
 const REFRESH_INTERVAL_MS = Number(process.env.AUCTION_INDEXER_REFRESH_MS || 60000);
 const FETCH_CONCURRENCY = Number(process.env.AUCTION_INDEXER_CONCURRENCY || 5);
@@ -22,6 +23,9 @@ const RPC_URLS = [
     .filter(Boolean),
   process.env.RPC_URL,
   process.env.INFURA_KEY ? `https://sepolia.infura.io/v3/${process.env.INFURA_KEY}` : "",
+  process.env.ALCHEMY_API_KEY
+    ? `https://eth-sepolia.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`
+    : "",
   ...DEFAULT_RPC_URLS,
 ].filter((url, index, urls) => url && urls.indexOf(url) === index);
 
@@ -29,11 +33,13 @@ const WS_URL =
   process.env.WS_RPC_URL ||
   process.env.REACT_APP_WS_RPC_URL ||
   (process.env.INFURA_KEY ? `wss://sepolia.infura.io/ws/v3/${process.env.INFURA_KEY}` : "") ||
-  DEFAULT_WS_URL;
+  "";
 const FACTORY_ADDRESS = loadFactoryAddress();
 
 const web3Clients = RPC_URLS.map((url) => ({ url, web3: new Web3(url) }));
-const socketWeb3 = new Web3(new Web3.providers.WebsocketProvider(WS_URL));
+const socketWeb3 = WS_URL
+  ? new Web3(new Web3.providers.WebsocketProvider(WS_URL))
+  : null;
 let nextRpcIndex = 0;
 const auctions = new Map();
 let auctionOrder = [];
@@ -50,7 +56,7 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const getClient = (offset = 0) =>
   web3Clients[(nextRpcIndex + offset) % web3Clients.length];
 
-const isRateLimitError = (error) => {
+const isProviderError = (error) => {
   const message = JSON.stringify(error?.message || error || "").toLowerCase();
   return (
     message.includes("429") ||
@@ -58,22 +64,30 @@ const isRateLimitError = (error) => {
     message.includes("rate limit") ||
     message.includes("usage limit") ||
     message.includes("current plan") ||
-    message.includes("higher limits")
+    message.includes("higher limits") ||
+    message.includes("timeout") ||
+    message.includes("network") ||
+    message.includes("connection") ||
+    message.includes("failed to fetch") ||
+    message.includes("chain is not available") ||
+    message.includes("free plan")
   );
 };
 
-async function withRpcRetry(task, retries = web3Clients.length + 1) {
+async function withRpcRetry(task, retries = web3Clients.length) {
   let lastError;
 
   for (let attempt = 0; attempt < retries; attempt += 1) {
-    const client = getClient(attempt);
+    const client = getClient();
 
     try {
-      return await task(client.web3);
+      const result = await task(client.web3);
+      nextRpcIndex = (nextRpcIndex + 1) % web3Clients.length;
+      return result;
     } catch (error) {
       lastError = error;
 
-      if (!isRateLimitError(error) || attempt === retries - 1) {
+      if (!isProviderError(error) || attempt === retries - 1) {
         throw error;
       }
 
@@ -208,6 +222,7 @@ async function refreshAllAuctions() {
 }
 
 function subscribeToAuction(address) {
+  if (!socketWeb3) return;
   const key = address.toLowerCase();
   if (subscriptions.has(key)) return;
 
@@ -228,6 +243,7 @@ function subscribeToAuction(address) {
 }
 
 function subscribeToFactory() {
+  if (!socketWeb3) return;
   try {
     const factory = new socketWeb3.eth.Contract(factoryJson.abi, FACTORY_ADDRESS);
 

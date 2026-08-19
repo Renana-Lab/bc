@@ -21,7 +21,7 @@ export const MetaMaskProvider = ({ children }) => {
   const [lastConnectionError, setLastConnectionError] = useState("");
 
   const refreshProvider = useCallback(async () => {
-    const nextProvider = await waitForEthereumProvider();
+    const nextProvider = await waitForEthereumProvider({ requireMetaMask: true });
     setProvider(nextProvider);
     setIsMetaMaskInstalled(Boolean(nextProvider));
     return nextProvider;

@@ -42,8 +42,7 @@
   font-weight: 600;
   transition:
     background-color 160ms ease,
-    transform 160ms var(--motion-ease, ease),
-    box-shadow 160ms ease;
+    transform 160ms var(--motion-ease, ease);
   &:hover {
     @media (hover: hover) and (pointer: fine) {
       background-color: #e9e9f6 !important;
@@ -95,8 +94,7 @@
   font-weight: 600 !important;
   transition:
     background-color 160ms ease,
-    transform 160ms var(--motion-ease, ease),
-    box-shadow 160ms ease;
+    transform 160ms var(--motion-ease, ease);
   &:hover {
     @media (hover: hover) and (pointer: fine) {
       background-color: #7b7bc0 !important;
@@ -111,9 +109,7 @@
   height: auto;
   border-radius: 10px;
   margin: 1rem 0;
-  transition:
-    box-shadow 180ms ease,
-    transform 180ms var(--motion-ease, ease);
+  transition: transform 180ms var(--motion-ease, ease);
 }
 
 .video:hover {

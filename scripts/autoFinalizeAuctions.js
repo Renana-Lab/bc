@@ -7,7 +7,9 @@ const factoryJson = require("../src/real_ethereum/build/CampaignFactory.json");
 const { loadFactoryAddresses } = require("./factoryAddressLoader");
 
 const DEFAULT_RPC_URLS = [
-  "https://rpc.sepolia.org",
+  "https://sepolia.gateway.tenderly.co",
+  "https://sepolia.rpc.thirdweb.com",
+  "https://ethereum-sepolia-rpc.publicnode.com",
 ];
 const RPC_URLS = [
   ...(process.env.RPC_URLS || process.env.REACT_APP_RPC_URLS || "")
@@ -16,6 +18,9 @@ const RPC_URLS = [
     .filter(Boolean),
   process.env.RPC_URL,
   process.env.INFURA_KEY ? `https://sepolia.infura.io/v3/${process.env.INFURA_KEY}` : "",
+  process.env.ALCHEMY_API_KEY
+    ? `https://eth-sepolia.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`
+    : "",
   ...DEFAULT_RPC_URLS,
 ].filter((url, index, urls) => url && urls.indexOf(url) === index);
 const PRIVATE_KEY = process.env.PRIVATE_KEY || process.env.AUTO_FINALIZE_PRIVATE_KEY;
@@ -54,7 +59,7 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const getClient = (offset = 0) =>
   web3Clients[(nextRpcIndex + offset) % web3Clients.length];
 
-const isRateLimitError = (error) => {
+const isProviderError = (error) => {
   const message = JSON.stringify(error?.message || error || "").toLowerCase();
   return (
     message.includes("429") ||
@@ -62,22 +67,30 @@ const isRateLimitError = (error) => {
     message.includes("rate limit") ||
     message.includes("usage limit") ||
     message.includes("current plan") ||
-    message.includes("higher limits")
+    message.includes("higher limits") ||
+    message.includes("timeout") ||
+    message.includes("network") ||
+    message.includes("connection") ||
+    message.includes("failed to fetch") ||
+    message.includes("chain is not available") ||
+    message.includes("free plan")
   );
 };
 
-async function withRpcRetry(task, retries = web3Clients.length + 1) {
+async function withRpcRetry(task, retries = web3Clients.length) {
   let lastError;
 
   for (let attempt = 0; attempt < retries; attempt += 1) {
-    const client = getClient(attempt);
+    const client = getClient();
 
     try {
-      return await task(client.web3);
+      const result = await task(client.web3);
+      nextRpcIndex = (nextRpcIndex + 1) % web3Clients.length;
+      return result;
     } catch (error) {
       lastError = error;
 
-      if (!isRateLimitError(error) || attempt === retries - 1) {
+      if (!isProviderError(error) || attempt === retries - 1) {
         throw error;
       }
 

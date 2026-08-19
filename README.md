@@ -98,6 +98,10 @@ Useful variables:
 | `REACT_APP_RPC_URLS` | frontend/scripts | Comma-separated read-only RPC failover list. Use this to avoid public RPC 429s. |
 | `REACT_APP_RPC_URL` | frontend/scripts | Single read-only RPC fallback. |
 | `REACT_APP_RPC_TIMEOUT_MS` | frontend | Optional timeout for read-only RPC calls. |
+| `REACT_APP_RPC_MAX_CONCURRENCY` | frontend | Maximum in-flight requests per HTTP endpoint. Defaults to `1` to prevent bursts. |
+| `REACT_APP_RPC_MIN_INTERVAL_MS` | frontend | Minimum delay between requests sent to the same endpoint. Defaults to `180`. |
+| `REACT_APP_INFURA_KEY` | frontend | Optional domain-restricted Infura key, preferred ahead of public fallbacks. |
+| `REACT_APP_ALCHEMY_API_KEY` | frontend | Optional domain-restricted Alchemy key, preferred ahead of public fallbacks. |
 | `REACT_APP_WS_RPC_URL` | frontend/indexer | Websocket RPC for contract events. |
 | `REACT_APP_AUCTION_API_URL` | frontend | Optional local indexer URL. If absent, the auction list reads directly from chain. |
 | `REACT_APP_PRESENCE_API_URL` | frontend | Serverless live-activity endpoint. Enables online user, admin, bot, auction, and session counts plus report history. |

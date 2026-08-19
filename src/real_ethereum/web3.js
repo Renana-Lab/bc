@@ -1,5 +1,6 @@
 import Web3 from "web3";
 import { getEthereumProvider } from "./ethereumProvider";
+import { getConfiguredRpcUrls } from "./rpcConfig";
 
 let web3;
 const injectedProvider = getEthereumProvider();
@@ -17,7 +18,7 @@ if (injectedProvider) {
     .catch((error) => console.error("Error reading network:", error));
 } else {
   const provider = new Web3.providers.HttpProvider(
-    "https://sepolia.infura.io/v3/6426761d274542bb9652e9a5aff35a0c"
+    getConfiguredRpcUrls()[0],
   );
   web3 = new Web3(provider);
 }

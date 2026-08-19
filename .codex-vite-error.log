@@ -1,0 +1,59 @@
+2:37:25 PM [vite] Internal server error: Failed to resolve import "./botnet/BotnetRuntimeHost.js" from "src/App.js". Does the file exist?
+  Plugin: vite:import-analysis
+  File: C:/Users/Programmers/Desktop/BLOCKCHAIN/bc/src/App.js:13:30
+  9  |  import PageSeo from "./components/Seo.js";
+  10 |  import PresenceCoordinator from "./telemetry/PresenceCoordinator.js";
+  11 |  import BotnetRuntimeHost from "./botnet/BotnetRuntimeHost.js";
+     |                                 ^
+  12 |  const HomePage = lazy(_c = () => import("./pages/Home/HomePage.js"));
+  13 |  _c2 = HomePage;
+      at TransformPluginContext._formatError (file:///C:/Users/Programmers/Desktop/BLOCKCHAIN/bc/node_modules/vite/dist/node/chunks/dep-CHZK6zbr.js:49257:41)
+      at TransformPluginContext.error (file:///C:/Users/Programmers/Desktop/BLOCKCHAIN/bc/node_modules/vite/dist/node/chunks/dep-CHZK6zbr.js:49252:16)
+      at normalizeUrl (file:///C:/Users/Programmers/Desktop/BLOCKCHAIN/bc/node_modules/vite/dist/node/chunks/dep-CHZK6zbr.js:64199:23)
+      at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+      at async file:///C:/Users/Programmers/Desktop/BLOCKCHAIN/bc/node_modules/vite/dist/node/chunks/dep-CHZK6zbr.js:64331:39
+      at async Promise.all (index 9)
+      at async TransformPluginContext.transform (file:///C:/Users/Programmers/Desktop/BLOCKCHAIN/bc/node_modules/vite/dist/node/chunks/dep-CHZK6zbr.js:64258:7)
+      at async PluginContainer.transform (file:///C:/Users/Programmers/Desktop/BLOCKCHAIN/bc/node_modules/vite/dist/node/chunks/dep-CHZK6zbr.js:49098:18)
+      at async loadAndTransform (file:///C:/Users/Programmers/Desktop/BLOCKCHAIN/bc/node_modules/vite/dist/node/chunks/dep-CHZK6zbr.js:51931:27)
+      at async viteTransformMiddleware (file:///C:/Users/Programmers/Desktop/BLOCKCHAIN/bc/node_modules/vite/dist/node/chunks/dep-CHZK6zbr.js:62031:24)
+2:38:24 PM [vite] Pre-transform error: Failed to resolve import "./botnet/BotnetRuntimeHost.js" from "src/App.js". Does the file exist?
+2:38:25 PM [vite] Internal server error: Failed to resolve import "./botnet/BotnetRuntimeHost.js" from "src/App.js". Does the file exist?
+  Plugin: vite:import-analysis
+  File: C:/Users/Programmers/Desktop/BLOCKCHAIN/bc/src/App.js:13:30
+  9  |  import PageSeo from "./components/Seo.js";
+  10 |  import PresenceCoordinator from "./telemetry/PresenceCoordinator.js";
+  11 |  import BotnetRuntimeHost from "./botnet/BotnetRuntimeHost.js";
+     |                                 ^
+  12 |  const HomePage = lazy(_c = () => import("./pages/Home/HomePage.js"));
+  13 |  _c2 = HomePage;
+      at TransformPluginContext._formatError (file:///C:/Users/Programmers/Desktop/BLOCKCHAIN/bc/node_modules/vite/dist/node/chunks/dep-CHZK6zbr.js:49257:41)
+      at TransformPluginContext.error (file:///C:/Users/Programmers/Desktop/BLOCKCHAIN/bc/node_modules/vite/dist/node/chunks/dep-CHZK6zbr.js:49252:16)
+      at normalizeUrl (file:///C:/Users/Programmers/Desktop/BLOCKCHAIN/bc/node_modules/vite/dist/node/chunks/dep-CHZK6zbr.js:64199:23)
+      at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+      at async file:///C:/Users/Programmers/Desktop/BLOCKCHAIN/bc/node_modules/vite/dist/node/chunks/dep-CHZK6zbr.js:64331:39
+      at async Promise.all (index 9)
+      at async TransformPluginContext.transform (file:///C:/Users/Programmers/Desktop/BLOCKCHAIN/bc/node_modules/vite/dist/node/chunks/dep-CHZK6zbr.js:64258:7)
+      at async PluginContainer.transform (file:///C:/Users/Programmers/Desktop/BLOCKCHAIN/bc/node_modules/vite/dist/node/chunks/dep-CHZK6zbr.js:49098:18)
+      at async loadAndTransform (file:///C:/Users/Programmers/Desktop/BLOCKCHAIN/bc/node_modules/vite/dist/node/chunks/dep-CHZK6zbr.js:51931:27)
+      at async viteTransformMiddleware (file:///C:/Users/Programmers/Desktop/BLOCKCHAIN/bc/node_modules/vite/dist/node/chunks/dep-CHZK6zbr.js:62031:24)
+2:38:26 PM [vite] Pre-transform error: Failed to resolve import "./botnet/BotnetRuntimeHost.js" from "src/App.js". Does the file exist?
+2:38:27 PM [vite] Internal server error: Failed to resolve import "./botnet/BotnetRuntimeHost.js" from "src/App.js". Does the file exist?
+  Plugin: vite:import-analysis
+  File: C:/Users/Programmers/Desktop/BLOCKCHAIN/bc/src/App.js:13:30
+  9  |  import PageSeo from "./components/Seo.js";
+  10 |  import PresenceCoordinator from "./telemetry/PresenceCoordinator.js";
+  11 |  import BotnetRuntimeHost from "./botnet/BotnetRuntimeHost.js";
+     |                                 ^
+  12 |  const HomePage = lazy(_c = () => import("./pages/Home/HomePage.js"));
+  13 |  _c2 = HomePage;
+      at TransformPluginContext._formatError (file:///C:/Users/Programmers/Desktop/BLOCKCHAIN/bc/node_modules/vite/dist/node/chunks/dep-CHZK6zbr.js:49257:41)
+      at TransformPluginContext.error (file:///C:/Users/Programmers/Desktop/BLOCKCHAIN/bc/node_modules/vite/dist/node/chunks/dep-CHZK6zbr.js:49252:16)
+      at normalizeUrl (file:///C:/Users/Programmers/Desktop/BLOCKCHAIN/bc/node_modules/vite/dist/node/chunks/dep-CHZK6zbr.js:64199:23)
+      at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+      at async file:///C:/Users/Programmers/Desktop/BLOCKCHAIN/bc/node_modules/vite/dist/node/chunks/dep-CHZK6zbr.js:64331:39
+      at async Promise.all (index 9)
+      at async TransformPluginContext.transform (file:///C:/Users/Programmers/Desktop/BLOCKCHAIN/bc/node_modules/vite/dist/node/chunks/dep-CHZK6zbr.js:64258:7)
+      at async PluginContainer.transform (file:///C:/Users/Programmers/Desktop/BLOCKCHAIN/bc/node_modules/vite/dist/node/chunks/dep-CHZK6zbr.js:49098:18)
+      at async loadAndTransform (file:///C:/Users/Programmers/Desktop/BLOCKCHAIN/bc/node_modules/vite/dist/node/chunks/dep-CHZK6zbr.js:51931:27)
+      at async viteTransformMiddleware (file:///C:/Users/Programmers/Desktop/BLOCKCHAIN/bc/node_modules/vite/dist/node/chunks/dep-CHZK6zbr.js:62031:24)

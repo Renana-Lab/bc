@@ -4,8 +4,13 @@ import Campaign from "./build/Campaign.json";
 import { getActiveFactoryAddress } from "./marketConfig";
 import { getEthereumProvider } from "./ethereumProvider";
 import {
+  createRpcPoolError,
   getConfiguredRpcUrls,
+  getHealthyRpcUrls,
   isRpcProviderFailure,
+  markRpcProviderFailure,
+  markRpcProviderSuccess,
+  scheduleRpcRequest,
 } from "./rpcConfig";
 
 const HTTP_TIMEOUT_MS = Number(process.env.REACT_APP_RPC_TIMEOUT_MS || 9000);
@@ -18,18 +23,18 @@ const DEFAULT_ALLOW_INJECTED_FALLBACK =
 
 const RPC_URLS = getConfiguredRpcUrls();
 
-const RETRY_DELAY_MS = 2500;
+const RETRY_DELAY_MS = 80;
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const readOnlyWeb3s = RPC_URLS.map(
-  (url) =>
-    new Web3(
+const readOnlyWeb3s = RPC_URLS.map((url) => ({
+  url,
+  web3: new Web3(
       new Web3.providers.HttpProvider(url, {
         timeout: HTTP_TIMEOUT_MS,
       })
-    )
-);
+    ),
+}));
 
 let nextProviderIndex = 0;
 let injectedProviderRef = null;
@@ -62,12 +67,20 @@ const getProviderSequence = (
     providers.push(injectedProvider);
   }
 
-  readOnlyWeb3s.forEach((_web3Instance, offset) => {
+  const healthyUrls = new Set(getHealthyRpcUrls(RPC_URLS));
+  const availableProviders = readOnlyWeb3s.filter(({ url }) => healthyUrls.has(url));
+  const providerOffset = availableProviders.length
+    ? nextProviderIndex % availableProviders.length
+    : 0;
+  availableProviders.forEach((_provider, offset) => {
     providers.push({
       injected: false,
-      web3: readOnlyWeb3s[(nextProviderIndex + offset) % readOnlyWeb3s.length],
+      ...availableProviders[(providerOffset + offset) % availableProviders.length],
     });
   });
+  if (availableProviders.length) {
+    nextProviderIndex = (providerOffset + 1) % availableProviders.length;
+  }
 
   if (injectedProvider && !preferInjected && allowInjectedFallback) {
     providers.push(injectedProvider);
@@ -77,12 +90,17 @@ const getProviderSequence = (
 };
 
 const getWeb3 = () =>
-  getProviderSequence(
+  (getProviderSequence(
     DEFAULT_PREFER_INJECTED_READS,
     DEFAULT_ALLOW_INJECTED_FALLBACK
-  )[0].web3;
+  )[0] || readOnlyWeb3s[0]).web3;
 
 const normalizeAddress = (address) => String(address || "").toLowerCase();
+
+const executeProviderRequest = (provider, operation) =>
+  provider.injected
+    ? operation()
+    : scheduleRpcRequest(provider.url, operation);
 
 const getContractCache = (web3Instance) => {
   if (!contractCacheByWeb3.has(web3Instance)) {
@@ -137,10 +155,12 @@ export const campaignReadOnly = (address) => {
 
 export const readOnlyCall = async (createCall, retries, options = {}) => {
   let lastError;
+  const providerFailures = [];
   const providers = getProviderSequence(
     options.preferInjected ?? DEFAULT_PREFER_INJECTED_READS,
     options.allowInjectedFallback ?? DEFAULT_ALLOW_INJECTED_FALLBACK
   );
+  if (!providers.length) throw createRpcPoolError([], RPC_URLS);
   const maxAttempts = retries ?? providers.length;
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
@@ -148,15 +168,30 @@ export const readOnlyCall = async (createCall, retries, options = {}) => {
     const web3Instance = provider.web3;
 
     try {
-      return await createCall({
-        factory: createFactory(web3Instance, options.factoryAddress),
-        campaign: (address) => createCampaign(web3Instance, address),
-      }).call();
+      const startedAt = Date.now();
+      const value = await executeProviderRequest(provider, () =>
+        createCall({
+          factory: createFactory(web3Instance, options.factoryAddress),
+          campaign: (address) => createCampaign(web3Instance, address),
+        }).call(),
+      );
+      if (!provider.injected) {
+        markRpcProviderSuccess(provider.url, Date.now() - startedAt);
+      }
+      return value;
     } catch (error) {
       lastError = error;
       const shouldTryNextProvider = provider.injected || isRpcProviderFailure(error);
 
+      if (!provider.injected && isRpcProviderFailure(error)) {
+        markRpcProviderFailure(provider.url, error);
+        providerFailures.push({ url: provider.url, error });
+      }
+
       if (!shouldTryNextProvider || attempt === maxAttempts - 1) {
+        if (isRpcProviderFailure(error) && providerFailures.length) {
+          throw createRpcPoolError(providerFailures, RPC_URLS);
+        }
         throw error;
       }
 
@@ -173,25 +208,43 @@ export const readOnlyCall = async (createCall, retries, options = {}) => {
 
 export const readOnlyExecute = async (operation, retries, options = {}) => {
   let lastError;
+  const providerFailures = [];
   const providers = getProviderSequence(
     options.preferInjected ?? DEFAULT_PREFER_INJECTED_READS,
     options.allowInjectedFallback ?? DEFAULT_ALLOW_INJECTED_FALLBACK
   );
+  if (!providers.length) throw createRpcPoolError([], RPC_URLS);
   const maxAttempts = retries ?? providers.length;
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const provider = providers[attempt % providers.length];
     const web3Instance = provider.web3;
     try {
-      return await operation({
-        web3: web3Instance,
-        factory: createFactory(web3Instance, options.factoryAddress),
-        campaign: (address) => createCampaign(web3Instance, address),
-      });
+      const startedAt = Date.now();
+      const value = await executeProviderRequest(provider, () =>
+        operation({
+          web3: web3Instance,
+          factory: createFactory(web3Instance, options.factoryAddress),
+          campaign: (address) => createCampaign(web3Instance, address),
+        }),
+      );
+      if (!provider.injected) {
+        markRpcProviderSuccess(provider.url, Date.now() - startedAt);
+      }
+      return value;
     } catch (error) {
       lastError = error;
       const shouldTryNextProvider = provider.injected || isRpcProviderFailure(error);
-      if (!shouldTryNextProvider || attempt === maxAttempts - 1) throw error;
+      if (!provider.injected && isRpcProviderFailure(error)) {
+        markRpcProviderFailure(provider.url, error);
+        providerFailures.push({ url: provider.url, error });
+      }
+      if (!shouldTryNextProvider || attempt === maxAttempts - 1) {
+        if (isRpcProviderFailure(error) && providerFailures.length) {
+          throw createRpcPoolError(providerFailures, RPC_URLS);
+        }
+        throw error;
+      }
       if (!provider.injected) {
         nextProviderIndex = (nextProviderIndex + 1) % readOnlyWeb3s.length;
       }
@@ -208,10 +261,12 @@ export const readOnlyBatchCall = async (
   options = {}
 ) => {
   let lastError;
+  const providerFailures = [];
   const providers = getProviderSequence(
     options.preferInjected ?? DEFAULT_PREFER_INJECTED_READS,
     options.allowInjectedFallback ?? DEFAULT_ALLOW_INJECTED_FALLBACK
   );
+  if (!providers.length) throw createRpcPoolError([], RPC_URLS);
   const maxAttempts = retries ?? providers.length;
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
@@ -226,42 +281,46 @@ export const readOnlyBatchCall = async (
 
       if (!calls.length) return [];
 
-      const results = await new Promise((resolve, reject) => {
-        const batch = new web3Instance.BatchRequest();
-        const responses = new Array(calls.length);
-        let remaining = calls.length;
+      const startedAt = Date.now();
+      const results = await executeProviderRequest(
+        provider,
+        () => new Promise((resolve, reject) => {
+          const batch = new web3Instance.BatchRequest();
+          const responses = new Array(calls.length);
+          let remaining = calls.length;
 
-        calls.forEach((call, index) => {
-          const onResponse = (error, result) => {
-            responses[index] = error
-              ? { status: "rejected", reason: error }
-              : { status: "fulfilled", value: result };
-            remaining -= 1;
+          calls.forEach((call, index) => {
+            const onResponse = (error, result) => {
+              responses[index] = error
+                ? { status: "rejected", reason: error }
+                : { status: "fulfilled", value: result };
+              remaining -= 1;
 
-            if (remaining === 0) {
-              resolve(responses);
+              if (remaining === 0) {
+                resolve(responses);
+              }
+            };
+
+            if (typeof call?.call?.request === "function") {
+              batch.add(call.call.request({}, onResponse));
+              return;
             }
-          };
 
-          if (typeof call?.call?.request === "function") {
-            batch.add(call.call.request({}, onResponse));
-            return;
+            if (typeof call?.request === "function") {
+              batch.add(call.request(onResponse));
+              return;
+            }
+
+            onResponse(new TypeError("Unsupported batch call object"));
+          });
+
+          try {
+            batch.execute();
+          } catch (error) {
+            reject(error);
           }
-
-          if (typeof call?.request === "function") {
-            batch.add(call.request(onResponse));
-            return;
-          }
-
-          onResponse(new TypeError("Unsupported batch call object"));
-        });
-
-        try {
-          batch.execute();
-        } catch (error) {
-          reject(error);
-        }
-      });
+        }),
+      );
 
       const rateLimited = results.some(
         (result) =>
@@ -271,7 +330,7 @@ export const readOnlyBatchCall = async (
         provider.injected &&
         results.some((result) => result?.status === "rejected");
 
-      if ((rateLimited || hasInjectedProviderFailure) && attempt < maxAttempts - 1) {
+      if (rateLimited || hasInjectedProviderFailure) {
         throw (
           results.find(
             (result) =>
@@ -281,12 +340,23 @@ export const readOnlyBatchCall = async (
         );
       }
 
+      if (!provider.injected) {
+        markRpcProviderSuccess(provider.url, Date.now() - startedAt);
+      }
       return results;
     } catch (error) {
       lastError = error;
       const shouldTryNextProvider = provider.injected || isRpcProviderFailure(error);
 
+      if (!provider.injected && isRpcProviderFailure(error)) {
+        markRpcProviderFailure(provider.url, error);
+        providerFailures.push({ url: provider.url, error });
+      }
+
       if (!shouldTryNextProvider || attempt === maxAttempts - 1) {
+        if (isRpcProviderFailure(error) && providerFailures.length) {
+          throw createRpcPoolError(providerFailures, RPC_URLS);
+        }
         throw error;
       }
 

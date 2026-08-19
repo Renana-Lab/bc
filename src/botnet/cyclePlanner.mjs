@@ -125,11 +125,15 @@ export const allocateCycleCandidates = ({
       if (kind === "reserve" && slotIndex >= limit * Math.max(0, reservePerSlot)) continue;
 
       const botAuctions = rotate(orderedAuctions, botIndex + slotIndex);
-      const candidate = botAuctions.find((auction) => {
+      let candidate = null;
+      for (const auction of botAuctions) {
         const key = normalizeAddress(auction.address);
         candidatesEvaluated += 1;
-        return key && !reserved.has(key) && isStaticallyEligible(auction, bot, nowSec);
-      });
+        if (key && !reserved.has(key) && isStaticallyEligible(auction, bot, nowSec)) {
+          candidate = auction;
+          break;
+        }
+      }
       if (!candidate) continue;
 
       reserved.add(normalizeAddress(candidate.address));

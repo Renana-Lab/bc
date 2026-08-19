@@ -9,8 +9,9 @@ import {
 import { MetaMaskProvider, useMetaMask } from "./Context/Context.js";
 import { Toaster } from "react-hot-toast";
 import PageSeo from "./components/Seo.js";
-import SitePresence from "./telemetry/SitePresence.js";
-import GlobalBotPresence from "./telemetry/GlobalBotPresence.js";
+import PresenceCoordinator from "./telemetry/PresenceCoordinator.js";
+import BotnetRuntimeHost from "./botnet/BotnetRuntimeHost.js";
+import { setWalletSessionAccount } from "./telemetry/walletSession.js";
 
 const HomePage = lazy(() => import("./pages/Home/HomePage.js"));
 const NewAuctionPage = lazy(() => import("./pages/NewAuction/NewAuctionPage.js"));
@@ -21,10 +22,6 @@ const MetamaskTutorialPage = lazy(() =>
 const MetamaskGuidePage = lazy(() => import("./pages/MetamaskGuide/MetamaskGuidePage.js"));
 const ManageBudgetPage = lazy(() => import("./pages/ManageBudget/ManageBudgetPage.js"));
 const ShowAuctionPage = lazy(() => import("./pages/ShowAuction/ShowAuctionPage.js"));
-const BotnetRuntime = lazy(() =>
-  import("./pages/ManageBudget/BotnetControlPanel.js")
-);
-
 const AppLoadingFallback = ({
   copy = "Preparing the workspace",
   status = "Loading app modules",
@@ -160,9 +157,7 @@ const RequireWallet = ({ children }) => {
   const { provider, checkIfConnected } = useMetaMask();
   const location = useLocation();
   const [walletStatus, setWalletStatus] = useState("checking");
-  const [connectedAccount, setConnectedAccount] = useState("");
   const walletStatusRef = useRef("checking");
-  const disconnectConfirmTimerRef = useRef(null);
 
   const setGuardStatus = (status) => {
     walletStatusRef.current = status;
@@ -172,49 +167,22 @@ const RequireWallet = ({ children }) => {
   useEffect(() => {
     let cancelled = false;
     let verificationId = 0;
-    const DISCONNECT_CONFIRM_MS = 1800;
+    let verificationTimerId = null;
+    const WALLET_VERIFICATION_INTERVAL_MS = 1000;
 
-    const clearDisconnectConfirm = () => {
-      if (disconnectConfirmTimerRef.current) {
-        window.clearTimeout(disconnectConfirmTimerRef.current);
-        disconnectConfirmTimerRef.current = null;
-      }
-    };
-
-    const applyAccounts = (accounts, { confirmedDisconnect = false } = {}) => {
+    const applyAccounts = (accounts) => {
       if (cancelled) return;
       const connected = Boolean(accounts?.length);
 
       if (connected) {
-        clearDisconnectConfirm();
         localStorage.setItem("notConnected", "false");
-        setConnectedAccount(accounts[0]);
+        setWalletSessionAccount(accounts[0]);
         setGuardStatus("connected");
         return;
       }
 
-      if (
-        walletStatusRef.current === "connected" &&
-        !confirmedDisconnect
-      ) {
-        clearDisconnectConfirm();
-        disconnectConfirmTimerRef.current = window.setTimeout(async () => {
-          try {
-            const latestAccounts = await checkIfConnected();
-            if (cancelled) return;
-            applyAccounts(latestAccounts, { confirmedDisconnect: true });
-          } catch (error) {
-            if (cancelled) return;
-            console.error("Wallet disconnect confirmation failed:", error);
-            applyAccounts([], { confirmedDisconnect: true });
-          }
-        }, DISCONNECT_CONFIRM_MS);
-        return;
-      }
-
-      clearDisconnectConfirm();
       localStorage.setItem("notConnected", "true");
-      setConnectedAccount("");
+      setWalletSessionAccount("");
       setGuardStatus("disconnected");
     };
 
@@ -237,8 +205,9 @@ const RequireWallet = ({ children }) => {
     };
 
     const handleAccountsChanged = (accounts) => applyAccounts(accounts);
-    const handleDisconnect = () => applyAccounts([], { confirmedDisconnect: true });
+    const handleDisconnect = () => applyAccounts([]);
     const handleFocus = () => verifyConnection();
+    const handlePageShow = () => verifyConnection();
     const handleVisibility = () => {
       if (!document.hidden) {
         verifyConnection();
@@ -246,18 +215,25 @@ const RequireWallet = ({ children }) => {
     };
 
     verifyConnection();
+    verificationTimerId = window.setInterval(() => {
+      if (!document.hidden) {
+        verifyConnection();
+      }
+    }, WALLET_VERIFICATION_INTERVAL_MS);
 
     provider?.on?.("accountsChanged", handleAccountsChanged);
     provider?.on?.("disconnect", handleDisconnect);
     window.addEventListener("focus", handleFocus);
+    window.addEventListener("pageshow", handlePageShow);
     document.addEventListener("visibilitychange", handleVisibility);
 
     return () => {
       cancelled = true;
-      clearDisconnectConfirm();
+      window.clearInterval(verificationTimerId);
       provider?.removeListener?.("accountsChanged", handleAccountsChanged);
       provider?.removeListener?.("disconnect", handleDisconnect);
       window.removeEventListener("focus", handleFocus);
+      window.removeEventListener("pageshow", handlePageShow);
       document.removeEventListener("visibilitychange", handleVisibility);
     };
   }, [checkIfConnected, location.pathname, provider]);
@@ -281,7 +257,7 @@ const RequireWallet = ({ children }) => {
     );
   }
 
-  return <SitePresence account={connectedAccount}>{children}</SitePresence>;
+  return children;
 };
 
 function App() {
@@ -304,10 +280,8 @@ function App() {
 
   return (
     <MetaMaskProvider>
-      <Suspense fallback={null}>
-        <BotnetRuntime headless />
-      </Suspense>
-      <GlobalBotPresence route={`${location.pathname}${location.search}`} />
+      <BotnetRuntimeHost />
+      <PresenceCoordinator />
       {isMobile ? (
         <>
           <style>

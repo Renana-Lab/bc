@@ -41,6 +41,7 @@ import {
 import { publishActiveAuctions } from "../../real_ethereum/activeAuctionRegistry";
 import Layout from "../../components/Layout";
 import { preserveAuctionUserState } from "./auctionVisualState";
+import { AuctionCountdown, LastUpdatedLabel } from "./AuctionLiveValues";
 import styles from "./auctions.module.scss";
 import picSrc from "./Illustration_Start.png";
 
@@ -50,8 +51,6 @@ const BATCH_READ_SIZE = 10;
 const BATCH_READ_CONCURRENCY = 1;
 const POLL_INTERVAL_MS = 15000;
 const MAX_LIVE_BID_SUBSCRIPTIONS = 6;
-const STATUS_TICK_ACTIVE_MS = 1000;
-const STATUS_TICK_IDLE_MS = 15000;
 const EVENT_REFRESH_DELAY_MS = 900;
 const CACHE_TTL_MS = 15000;
 const DEPLOYED_CAMPAIGNS_TTL_MS = 60000;
@@ -299,6 +298,135 @@ const LoadingAuctionLabel = () => (
     </span>
   </span>
 );
+
+const getAuctionDate = (endTime) => {
+  const timestamp = Number(endTime);
+  if (!timestamp) return "";
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleDateString([], {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+};
+
+const getAuctionTime = (endTime) => {
+  const timestamp = Number(endTime);
+  if (!timestamp) return "";
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+};
+
+const addressMatches = (left, right) =>
+  Boolean(left && right) && String(left).toLowerCase() === String(right).toLowerCase();
+
+const AuctionTableRow = React.memo(function AuctionTableRow({
+  auction,
+  currentUserAddress,
+  boundaryClock,
+  onOpen,
+}) {
+  const auctionOpen = Number(auction.endTime) > boundaryClock;
+  const userWon = !auctionOpen && addressMatches(auction.highestBidder, currentUserAddress);
+  const userParticipated = Boolean(
+    auction?.addresses?.some((address) => addressMatches(address, currentUserAddress)),
+  );
+  const userIsManager = addressMatches(auction.manager, currentUserAddress);
+  const isHighestBidder = addressMatches(auction.highestBidder, currentUserAddress);
+  const userFontColor = isHighestBidder && auctionOpen
+    ? "#11a811ff"
+    : userParticipated && auctionOpen && !userIsManager
+      ? "#da0c0cff"
+      : "#0D0D4E";
+  const statusFontColor = userFontColor === "#0D0D4E" && auctionOpen
+    ? "#D07030D0"
+    : userFontColor;
+
+  let paymentStatus = "";
+  if (!auction.isReadPlaceholder) {
+    if (userParticipated && !userWon && !auctionOpen) {
+      paymentStatus = auction.isRefunded ? "Refunded" : "Awaiting Refund";
+    } else if (userWon) {
+      paymentStatus = "You were charged";
+    } else if (userIsManager && auction.approversCount > 0 && !auctionOpen) {
+      paymentStatus = auction.closed ? "You were paid" : "Payment pending";
+    }
+  }
+
+  const backgroundColor = userWon
+    ? "#90EE90"
+    : auctionOpen
+      ? "#BBDEFB"
+      : auction.isRefunded
+        ? "#FFD700"
+        : "#E9E9F6";
+  const hoverColor = userWon
+    ? "#77DD77"
+    : auctionOpen
+      ? "#A3CFFA"
+      : auction.isRefunded
+        ? "#FFC107"
+        : "#D0D0F0";
+  const fontSx = { color: userFontColor };
+
+  return (
+    <TableRow
+      onClick={() => onOpen(auction.address)}
+      sx={{
+        backgroundColor,
+        marginBottom: "1rem",
+        transition: "background-color 65ms ease, box-shadow 85ms ease",
+        "&:hover": { backgroundColor: hoverColor, cursor: "pointer" },
+      }}
+    >
+      <TableCell sx={fontSx} align="center">
+        {auction.isReadPlaceholder ? <LoadingAuctionLabel /> : auction.dataDescription}
+      </TableCell>
+      <TableCell align="center" sx={fontSx}>
+        <span className={styles.dateCell}>
+          <span>{getAuctionDate(auction.endTime)}</span>
+          <small>{getAuctionTime(auction.endTime)}</small>
+        </span>
+      </TableCell>
+      <TableCell align="center" sx={{ color: statusFontColor }} style={{ fontWeight: "bold" }}>
+        <AuctionCountdown endTime={auction.endTime} />
+      </TableCell>
+      <TableCell align="center" sx={fontSx}>
+        {auction.isReadPlaceholder ? "" : auction.highestBid}
+      </TableCell>
+      <TableCell align="center" sx={fontSx}>
+        {auction.isReadPlaceholder ? "" : auction.approversCount}
+      </TableCell>
+      <TableCell sx={fontSx} align="center">{paymentStatus}</TableCell>
+      <TableCell align="center">
+        <Button
+          variant="contained"
+          className={userWon ? styles.viewDataButton : ""}
+          style={{
+            backgroundColor: userWon ? undefined : auction.isRefunded ? "#FFD700" : "#9090D0",
+            color: userWon ? undefined : "white",
+            borderRadius: "20px",
+            padding: "6px 20px",
+            textTransform: "uppercase",
+            fontSize: "0.875rem",
+            width: "max-content",
+          }}
+          onClick={(event) => {
+            event.stopPropagation();
+            onOpen(auction.address);
+          }}
+        >
+          {userWon ? "View Data" : "View Auction"}
+        </Button>
+      </TableCell>
+    </TableRow>
+  );
+});
 
 const mergeReadAuctionsWithCache = (
   visibleAuctions,
@@ -1051,7 +1179,7 @@ function AuctionsListPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [sortMode, setSortMode] = useState("normal");
   const deferredSearchQuery = useDeferredValue(searchQuery);
-  const [now, setNow] = useState(Date.now());
+  const [boundaryClock, setBoundaryClock] = useState(Date.now());
   const [lastUpdated, setLastUpdated] = useState(
     auctionListCache.updatedAt || null,
   );
@@ -1081,18 +1209,6 @@ function AuctionsListPage() {
   );
   const currentUserAddress = connectedAccount;
   const searchIsActive = Boolean(searchQuery.trim());
-  const statusTickIntervalMs = useMemo(() => {
-    const referenceTime = Date.now();
-    const hasActiveAuction = auctionsList.some(
-      (auction) =>
-        !auction.isReadPlaceholder &&
-        !auction.closed &&
-        Number(auction.endTime) > referenceTime,
-    );
-
-    return hasActiveAuction ? STATUS_TICK_ACTIVE_MS : STATUS_TICK_IDLE_MS;
-  }, [auctionsList]);
-
   const loadRemainingBudget = useCallback(async (account) => {
     const factoryAddressForRequest = activeFactoryAddressRef.current;
 
@@ -1329,35 +1445,20 @@ function AuctionsListPage() {
   }, []);
 
   useEffect(() => {
-    let interval;
-    let alignmentTimer;
-    const tick = () => {
-      if (!document.hidden) setNow(Date.now());
-    };
+    const currentTime = Date.now();
+    const nextBoundary = auctionsList.reduce((nearest, auction) => {
+      const endTime = Number(auction.endTime);
+      if (auction.isReadPlaceholder || endTime <= currentTime) return nearest;
+      return nearest === null || endTime < nearest ? endTime : nearest;
+    }, null);
 
-    if (statusTickIntervalMs === STATUS_TICK_ACTIVE_MS) {
-      const delayToNextSecond =
-        STATUS_TICK_ACTIVE_MS - (Date.now() % STATUS_TICK_ACTIVE_MS);
-      alignmentTimer = window.setTimeout(() => {
-        tick();
-        interval = window.setInterval(tick, statusTickIntervalMs);
-      }, delayToNextSecond);
-    } else {
-      interval = window.setInterval(tick, statusTickIntervalMs);
-    }
-
-    const handleVisibilityChange = () => {
-      if (!document.hidden) setNow(Date.now());
-    };
-
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-
-    return () => {
-      window.clearInterval(interval);
-      window.clearTimeout(alignmentTimer);
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-    };
-  }, [statusTickIntervalMs]);
+    if (nextBoundary === null) return undefined;
+    const timer = window.setTimeout(
+      () => setBoundaryClock(Date.now()),
+      Math.max(25, nextBoundary - currentTime + 25),
+    );
+    return () => window.clearTimeout(timer);
+  }, [auctionsList, boundaryClock]);
 
   useEffect(() => {
     if (!didMountVisibleCountRef.current) {
@@ -1545,150 +1646,6 @@ function AuctionsListPage() {
     };
   }, [bidSubscriptionKey, scheduleEventRefresh]);
 
-  const getTimeLeft = (endTime) => {
-    if (!Number(endTime)) return "";
-
-    const millisecondsLeft = Number(endTime) - now;
-    if (millisecondsLeft <= 0) return "Closed";
-
-    const totalSeconds = Math.max(0, Math.floor(millisecondsLeft / 1000));
-    const days = Math.floor(totalSeconds / 86400);
-    const hours = Math.floor((totalSeconds % 86400) / 3600);
-    const minutes = Math.floor((totalSeconds % 3600) / 60);
-    const seconds = totalSeconds % 60;
-    const pad = (value) => String(value).padStart(2, "0");
-
-    if (days > 0) {
-      return `${days}d ${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
-    }
-
-    return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
-  };
-
-  const getAuctionDate = (endTime) => {
-    const timestamp = Number(endTime);
-    if (!timestamp) return "";
-
-    const date = new Date(timestamp);
-
-    if (Number.isNaN(date.getTime())) return "";
-
-    return date.toLocaleDateString([], {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-    });
-  };
-
-  const getAuctionTime = (endTime) => {
-    const timestamp = Number(endTime);
-    if (!timestamp) return "";
-
-    const date = new Date(timestamp);
-
-    if (Number.isNaN(date.getTime())) return "";
-
-    return date.toLocaleTimeString([], {
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  };
-
-  const getLastUpdatedText = () => {
-    if (!lastUpdated) return "Waiting for first sync";
-
-    const secondsAgo = Math.max(0, Math.floor((now - Number(lastUpdated)) / 1000));
-
-    if (secondsAgo < 5) return "Updated now";
-    if (secondsAgo < 60) return `Updated ${secondsAgo}s ago`;
-
-    const minutesAgo = Math.floor(secondsAgo / 60);
-    return `Updated ${minutesAgo}m ago`;
-  };
-
-  const isAuctionOpen = (endTime) => {
-    return Number(endTime) > now;
-  };
-
-  const isHighestBidder = (auction, currentUserAddress) => {
-    return auction.highestBidder?.toLowerCase() === currentUserAddress;
-  };
-
-  const hasUserWonAuction = (auction, currentUserAddress) => {
-    const auctionEnded = Number(auction.endTime) < now;
-    const userIsHighestBidder = isHighestBidder(auction, currentUserAddress);
-    return auctionEnded && userIsHighestBidder;
-  };
-
-  const isUserInAuction = (auction, currentUserAddress) => {
-    return !!auction?.addresses?.some(
-      (address) => address.toLowerCase() === currentUserAddress,
-    );
-  };
-
-  const isUserManager = (auction, currentUserAddress) => {
-    return (
-      Boolean(currentUserAddress) &&
-      currentUserAddress === auction.manager?.toLowerCase?.()
-    );
-  };
-
-  const getRowStyles = (hasWon, isOpen, isRefunded) => ({
-    backgroundColor: hasWon
-      ? "#90EE90"
-      : isOpen
-        ? "#BBDEFB"
-        : isRefunded
-          ? "#FFD700"
-          : "#E9E9F6",
-    marginBottom: "1rem",
-    transition: "background-color 65ms ease, box-shadow 85ms ease",
-    "&:hover": {
-      backgroundColor: hasWon
-        ? "#77DD77"
-        : isOpen
-          ? "#A3CFFA"
-          : isRefunded
-            ? "#FFC107"
-            : "#D0D0F0",
-      cursor: "pointer",
-    },
-  });
-
-  const getFontStyles = (auction, currentAddress, isOpen) => ({
-    color:
-      isHighestBidder(auction, currentAddress) && isAuctionOpen(auction.endTime)
-        ? "#11a811ff"
-        : isUserInAuction(auction, currentAddress) &&
-            isAuctionOpen(auction.endTime) &&
-            !isUserManager(auction, currentAddress)
-          ? "#da0c0cff"
-          : isOpen
-            ? "#D07030D0"
-            : "#0D0D4E",
-  });
-
-  const getRefundStatus = (auction, userParticipated, userWon, auctionOpen) => {
-    if (auction.isReadPlaceholder) return "";
-
-    const isManager = isUserManager(auction, currentUserAddress);
-
-    if (userParticipated && !userWon && !auctionOpen) {
-      return auction.isRefunded ? "Refunded" : "Awaiting Refund";
-    }
-
-    if (userWon) {
-      return auctionOpen ? "" : "You were charged";
-    }
-
-    if (isManager && auction.approversCount > 0) {
-      if (auctionOpen) return "";
-      return auction.closed ? "You were paid" : "Payment pending";
-    }
-
-    return "";
-  };
-
   const auctionSearchIndex = useMemo(() => {
     const rows = [];
     const tokenMap = new Map();
@@ -1700,7 +1657,7 @@ function AuctionsListPage() {
         auction.dataDescription,
         auction.dataForSell,
         getAuctionDate(auction.endTime),
-        Number(auction.endTime) > Date.now() ? "open active" : "closed ended",
+        Number(auction.endTime) > boundaryClock ? "open active" : "closed ended",
         auction.closed ? "closed ended" : "open active",
       ];
       const addressFields = [
@@ -1743,7 +1700,7 @@ function AuctionsListPage() {
     });
 
     return { rows, tokenMap, numberMap, exactAddressMap };
-  }, [auctionsList]);
+  }, [auctionsList, boundaryClock]);
 
   const searchedAuctions = useMemo(() => {
     const query = getSearchKind(deferredSearchQuery);
@@ -1796,7 +1753,7 @@ function AuctionsListPage() {
       .map(({ auction }) => auction);
   }, [auctionSearchIndex, auctionsList, deferredSearchQuery]);
 
-  const sortClock = sortMode === "ending" ? now : 0;
+  const sortClock = sortMode === "ending" ? boundaryClock : 0;
   const sortedAuctions = useMemo(() => {
     if (sortMode === "normal") return searchedAuctions;
 
@@ -1849,10 +1806,9 @@ function AuctionsListPage() {
     });
   };
 
-  const handleRowClick = (address, e) => {
-    e.stopPropagation();
+  const handleOpenAuction = useCallback((address) => {
     navigate(`/auction/${address}`, { state: { remainingBudget } });
-  };
+  }, [navigate, remainingBudget]);
 
   return (
     <Layout>
@@ -1988,7 +1944,7 @@ function AuctionsListPage() {
               <span className={networkSlow ? styles.networkWarning : ""}>
                 {networkSlow
                   ? "Network slow: showing saved data"
-                  : getLastUpdatedText()}
+                  : <LastUpdatedLabel updatedAt={lastUpdated} />}
               </span>
             </div>
             <Table aria-label="auctions table" className={styles.auctionsTable}>
@@ -2014,108 +1970,15 @@ function AuctionsListPage() {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {displayedAuctions.map((auction, index) => {
-                  const userWon = hasUserWonAuction(
-                    auction,
-                    currentUserAddress,
-                  );
-                  const userParticipated = isUserInAuction(
-                    auction,
-                    currentUserAddress,
-                  );
-                  const auctionOpen = isAuctionOpen(auction.endTime);
-
-                  return (
-                    <TableRow
-                      key={auction.address}
-                      onClick={() =>
-                        navigate(`/auction/${auction.address}`, {
-                          state: { remainingBudget },
-                        })
-                      }
-                      sx={getRowStyles(
-                        userWon,
-                        auctionOpen,
-                        auction.isRefunded,
-                      )}
-                    >
-                      <TableCell
-                        sx={getFontStyles(auction, currentUserAddress)}
-                        align="center"
-                      >
-                        {auction.isReadPlaceholder ? (
-                          <LoadingAuctionLabel />
-                        ) : (
-                          auction.dataDescription
-                        )}
-                      </TableCell>
-                      <TableCell
-                        align="center"
-                        sx={getFontStyles(auction, currentUserAddress)}
-                      >
-                        <span className={styles.dateCell}>
-                          <span>{getAuctionDate(auction.endTime)}</span>
-                          <small>{getAuctionTime(auction.endTime)}</small>
-                        </span>
-                      </TableCell>
-
-                      <TableCell
-                        align="center"
-                        sx={getFontStyles(auction, currentUserAddress, true)}
-                        style={{ fontWeight: "bold" }}
-                      >
-                        {getTimeLeft(auction.endTime)}
-                      </TableCell>
-                      <TableCell
-                        align="center"
-                        sx={getFontStyles(auction, currentUserAddress)}
-                      >
-                        {auction.isReadPlaceholder ? "" : auction.highestBid}
-                      </TableCell>
-                      <TableCell
-                        align="center"
-                        sx={getFontStyles(auction, currentUserAddress)}
-                      >
-                        {auction.isReadPlaceholder
-                          ? ""
-                          : auction.approversCount}
-                      </TableCell>
-                      <TableCell
-                        sx={getFontStyles(auction, currentUserAddress)}
-                        align="center"
-                      >
-                        {getRefundStatus(
-                          auction,
-                          userParticipated,
-                          userWon,
-                          auctionOpen,
-                        )}
-                      </TableCell>
-                      <TableCell align="center">
-                        <Button
-                          variant="contained"
-                          className={userWon ? styles.viewDataButton : ""}
-                          style={{
-                            backgroundColor: userWon
-                              ? undefined
-                              : auction.isRefunded
-                                ? "#FFD700"
-                                : "#9090D0",
-                            color: userWon ? undefined : "white",
-                            borderRadius: "20px",
-                            padding: "6px 20px",
-                            textTransform: "uppercase",
-                            fontSize: "0.875rem",
-                            width: "max-content",
-                          }}
-                          onClick={(e) => handleRowClick(auction.address, e)}
-                        >
-                          {userWon ? "View Data" : "View Auction"}
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
+                {displayedAuctions.map((auction) => (
+                  <AuctionTableRow
+                    key={auction.address}
+                    auction={auction}
+                    currentUserAddress={currentUserAddress}
+                    boundaryClock={boundaryClock}
+                    onOpen={handleOpenAuction}
+                  />
+                ))}
               </TableBody>
             </Table>
             {viewIsFiltered && !sortedAuctions.length && (

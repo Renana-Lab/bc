@@ -33,9 +33,7 @@ $border-radius: 2rem;
   background:
     linear-gradient(145deg, #ffffff 0%, #ffffff 58%, #f7f9ff 100%);
   animation: softScaleIn 260ms var(--motion-ease, ease) both;
-  transition:
-    box-shadow 180ms ease,
-    transform 180ms var(--motion-ease, ease);
+  transition: transform 180ms var(--motion-ease, ease);
 
   &::before {
     content: "";
@@ -154,7 +152,7 @@ $border-radius: 2rem;
   height: 0.42rem;
   border-radius: 999px;
   background: #28b461;
-  box-shadow: 0 0 0 0 rgba(40, 180, 97, 0.26);
+  box-shadow: 0 0 0 2px rgba(40, 180, 97, 0.1);
   animation: countdownPulse 1400ms ease-out infinite;
 }
 
@@ -322,12 +320,14 @@ $border-radius: 2rem;
 }
 
 @keyframes countdownPulse {
-  0% {
-    box-shadow: 0 0 0 0 rgba(40, 180, 97, 0.24);
+  0%,
+  100% {
+    opacity: 0.64;
+    transform: scale(0.88);
   }
 
-  70%,
-  100% {
-    box-shadow: 0 0 0 0.38rem rgba(40, 180, 97, 0);
+  50% {
+    opacity: 1;
+    transform: scale(1);
   }
 }

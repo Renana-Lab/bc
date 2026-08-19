@@ -14,13 +14,10 @@
 .metamaskimg {
   border-radius: 2rem;
   animation: softScaleIn 280ms var(--motion-ease, ease) both;
-  transition:
-    transform 220ms var(--motion-ease, ease),
-    filter 180ms ease;
+  transition: transform 220ms var(--motion-ease, ease);
 }
 .metamaskimg:hover {
   @media (hover: hover) and (pointer: fine) {
-    filter: brightness(1.03);
     transform: translateY(-3px) scale(1.01);
   }
 }
@@ -71,9 +68,7 @@
   margin: 0 auto;
   color: white;
   animation: softScaleIn 280ms var(--motion-ease, ease) both;
-  transition:
-    box-shadow 180ms ease,
-    transform 180ms var(--motion-ease, ease);
+  transition: transform 180ms var(--motion-ease, ease);
 }
 
 .metamaskVideo:hover {

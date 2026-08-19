@@ -3,6 +3,22 @@
   <head>
     <meta charset="utf-8" />
     <link rel="icon" href="/favicon.ico" />
+    <link
+      rel="preload"
+      href="/fonts/manrope-variable-latin.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+    <style>
+      @font-face {
+        font-family: "Manrope";
+        font-style: normal;
+        font-display: swap;
+        font-weight: 200 800;
+        src: url("/fonts/manrope-variable-latin.woff2") format("woff2-variations");
+      }
+    </style>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#103090" />
     <meta name="color-scheme" content="light" />

@@ -1,16 +1,18 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import '@fontsource-variable/manrope';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import './index.css';
 import { APPWithRouter } from './App';  // Import both default and named export
 import reportWebVitals from './reportWebVitals';
 import { BrowserRouter } from 'react-router-dom';
+import { initializeMotionProfile } from './performance/motionProfile';
+
+initializeMotionProfile();
 
 const appTheme = createTheme({
   typography: {
     fontFamily:
-      '"Manrope Variable", "Avenir Next", "Segoe UI Variable", "Segoe UI", sans-serif',
+      '"Manrope", "Avenir Next", "Segoe UI Variable", "Segoe UI", sans-serif',
   },
 });
 

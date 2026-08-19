@@ -1,7 +1,7 @@
 :root {
-  --app-font-family: 'Manrope Variable', 'Avenir Next', 'Segoe UI Variable',
+  --app-font-family: 'Manrope', 'Avenir Next', 'Segoe UI Variable',
     'Segoe UI', sans-serif;
-  --motion-fast: 100ms;
+  --motion-fast: 85ms;
   --motion-base: 170ms;
   --motion-slow: 260ms;
   --motion-ease: cubic-bezier(0.22, 1, 0.36, 1);
@@ -70,31 +70,14 @@ code {
 }
 
 .route-transition-shell {
-  animation: routePolish 210ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: routePolish 185ms cubic-bezier(0.16, 1, 0.3, 1) both;
   transform-origin: 50% 18%;
-  will-change: opacity, transform;
-}
-
-.MuiPaper-root:not(.MuiMenu-paper):not(.MuiPopover-paper):not(.MuiDialog-paper):not(.MuiDrawer-paper) {
-  animation: surfacePolish 195ms cubic-bezier(0.16, 1, 0.3, 1) both;
-  transform-origin: 50% 16%;
 }
 
 @keyframes routePolish {
   from {
     opacity: 0.78;
     transform: scale(0.994);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
-@keyframes surfacePolish {
-  from {
-    opacity: 0.86;
-    transform: scale(0.997);
   }
   to {
     opacity: 1;
@@ -111,7 +94,6 @@ code {
   -webkit-backdrop-filter: none;
   transition:
     transform var(--motion-fast) var(--motion-ease),
-    box-shadow var(--motion-fast) ease,
     background-color var(--motion-fast) ease,
     border-color var(--motion-fast) ease,
     opacity var(--motion-fast) ease !important;
@@ -209,7 +191,6 @@ code {
 .MuiOutlinedInput-root {
   transition:
     background-color var(--motion-fast) ease,
-    box-shadow var(--motion-fast) ease,
     transform var(--motion-fast) var(--motion-ease);
 }
 
@@ -244,6 +225,30 @@ code {
     scroll-behavior: auto !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+html[data-motion-profile="balanced"] {
+  --motion-fast: 75ms;
+  --motion-base: 145ms;
+  --motion-slow: 210ms;
+}
+
+html[data-motion-profile="balanced"] .MuiButton-root::after,
+html[data-motion-profile="balanced"] .MuiPaper-root::after {
+  animation: none !important;
+}
+
+html[data-motion-profile="balanced"] .route-transition-shell {
+  animation-duration: 160ms;
+}
+
+html[data-motion-profile="reduced"] *,
+html[data-motion-profile="reduced"] *::before,
+html[data-motion-profile="reduced"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  scroll-behavior: auto !important;
+  transition-duration: 0.01ms !important;
 }
 
 @media (update: slow) {

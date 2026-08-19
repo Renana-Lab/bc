@@ -39,14 +39,11 @@
     height: auto;
     width: clamp(280px, 40vw, 400px);
     border-radius: 12px;
-    transition:
-      transform 220ms var(--motion-ease, ease),
-      filter 180ms ease;
+    transition: transform 220ms var(--motion-ease, ease);
   }
 
   .metamaskimg:hover {
     @media (hover: hover) and (pointer: fine) {
-      filter: brightness(1.03);
       transform: translateY(-3px) scale(1.01);
     }
   }
@@ -111,8 +108,7 @@
     text-transform: uppercase;
     transition:
       background-color 160ms ease,
-      transform 160ms var(--motion-ease, ease),
-      box-shadow 160ms ease;
+      transform 160ms var(--motion-ease, ease);
 
     &::after {
       content: "";
@@ -156,8 +152,7 @@
     border: 1px solid #002884;
     transition:
       background-color 160ms ease,
-      transform 160ms var(--motion-ease, ease),
-      box-shadow 160ms ease;
+      transform 160ms var(--motion-ease, ease);
   
     a {
       color: #002884;
