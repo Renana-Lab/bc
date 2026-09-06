@@ -1643,7 +1643,7 @@ const BotnetControlPanel = ({
                 botTrace?.steps.push({ at: Date.now(), stage: "write", auction: candidate.address, outcome: "cancelled", reason: "Stopped before the queued write was submitted" });
                 break;
               }
-              budget -= decision.amountWei;
+              budget -= decision.budgetCostWei;
               sent += 1;
               if (botTrace) botTrace.budgetWei = budget.toString();
               botTrace?.steps.push({

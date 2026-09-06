@@ -1,10 +1,11 @@
 /* eslint-env es2020 */
-import { readOnlyCall } from "../../real_ethereum/readOnly";
+import { readOnlyCall, readOnlyExecute } from "../../real_ethereum/readOnly";
 
 export const REPORT_CONCURRENCY = 3;
 const BIDDER_STATUS_CONCURRENCY = 4;
 const READ_OPTIONS = { preferInjected: false, allowInjectedFallback: false };
 const SEPOLIA_ADDRESS_URL = "https://sepolia.etherscan.io/address/";
+const SEPOLIA_TRANSACTION_URL = "https://sepolia.etherscan.io/tx/";
 const BUDGET_AT_BID_UNAVAILABLE =
   "Unavailable in current contract";
 const BUDGET_AT_BID_EXPLANATION =
@@ -312,6 +313,7 @@ const normalizeTransactions = (rawTransactions, highestBid, highestBidder) => {
         tx.previousHighestBid !== undefined
           ? String(tx.previousHighestBid || 0)
           : "",
+      transactionHash: tx.transactionHash || "",
     };
   });
   const byTime = [...normalized].sort((a, b) =>
@@ -340,6 +342,10 @@ const normalizeTransactions = (rawTransactions, highestBid, highestBidder) => {
     budgetSnapshotSource: tx.budgetSnapshotSource,
     previousHighestBidder: tx.previousHighestBidder,
     previousHighestBidWei: tx.previousHighestBidWei,
+    transactionHash: tx.transactionHash,
+    transactionEtherscanUrl: tx.transactionHash
+      ? `${SEPOLIA_TRANSACTION_URL}${tx.transactionHash}`
+      : "",
     timeSeconds: tx.time.toString(),
     time: toDateTime(tx.time),
     isoTime: toIsoDateTime(tx.time),
@@ -371,23 +377,43 @@ export const readAuctionOption = async (address, index) => {
 };
 
 const readAuctionTransactions = async (address) => {
-  const ledgerResult = await readOnlyCall(
+  const [ledgerResult, rawEventResult] = await Promise.all([readOnlyCall(
     ({ campaign }) => campaign(address).methods.getBidLedger(),
     undefined,
     READ_OPTIONS
   )
     .then((rows) => ({ supported: true, rows }))
-    .catch(() => ({ supported: false, rows: [] }));
+    .catch(() => ({ supported: false, rows: [] })),
+  readOnlyExecute(
+    ({ campaign }) => campaign(address).getPastEvents("BidRecorded", {
+      fromBlock: 0,
+      toBlock: "latest",
+    }),
+    undefined,
+    READ_OPTIONS
+  ).catch(() => []),
+  ]);
+  const eventResult = [...rawEventResult].sort((left, right) =>
+    Number(left.blockNumber || 0) - Number(right.blockNumber || 0) ||
+    Number(left.logIndex || 0) - Number(right.logIndex || 0)
+  );
 
   if (ledgerResult.supported) {
-    return ledgerResult.rows || [];
+    return (ledgerResult.rows || []).map((row, index) => ({
+      ...row,
+      transactionHash: eventResult[index]?.transactionHash || "",
+    }));
   }
 
-  return readOnlyCall(
+  const legacyRows = await readOnlyCall(
     ({ campaign }) => campaign(address).methods.getTransactions(),
     undefined,
     READ_OPTIONS
   ).catch(() => []);
+  return legacyRows.map((row, index) => ({
+    ...row,
+    transactionHash: eventResult[index]?.transactionHash || "",
+  }));
 };
 
 export const readAuctionReport = async (
@@ -1367,7 +1393,64 @@ const buildReportAnalysis = (reports, errors, options = {}) => {
 };
 
 const buildCoreReportTables = (reports, errors, generatedAt, options = {}) => {
+  const experimentManifest = options.experimentManifest || null;
+  const participantByAddress = new Map(
+    (experimentManifest?.participants || []).map((participant) => [
+      String(participant.address || "").toLowerCase(),
+      participant,
+    ])
+  );
+  const experimentAuctionByAddress = new Map(
+    (experimentManifest?.auctionSpecs || [])
+      .filter((auction) => auction.address || auction.auctionAddress)
+      .map((auction) => [
+        String(auction.address || auction.auctionAddress).toLowerCase(),
+        auction,
+      ])
+  );
+  const experimentBidEvidence = new Map(
+    (options.experimentEvents || [])
+      .filter((event) => event.type === "bid-mined")
+      .map((event) => [
+        [event.auctionAddress, event.walletAddress, event.cumulativeBidWei]
+          .map((value) => String(value || "").toLowerCase())
+          .join(":"),
+        event,
+      ])
+  );
+  const transactionEvidence = (auctionAddress, tx) => {
+    const event = experimentBidEvidence.get(
+      [auctionAddress, tx.bidder, tx.contractCumulativeBidWei || tx.cumulativeBidWei]
+        .map((value) => String(value || "").toLowerCase())
+        .join(":")
+    );
+    const transactionHash = tx.transactionHash || event?.transactionHash || "";
+    return {
+      transactionHash,
+      etherscanUrl: transactionHash
+        ? `${SEPOLIA_TRANSACTION_URL}${transactionHash}`
+        : "",
+    };
+  };
+  const actorFields = (address) => {
+    const participant = participantByAddress.get(String(address || "").toLowerCase());
+    return {
+      "Experiment ID": participant ? experimentManifest?.experimentId || "" : "",
+      Cohort: participant?.role || "",
+      Archetype: participant?.archetype || "",
+      "Actor ID": participant?.actorId || "",
+      Observer: participant?.observer ? "Yes" : participant ? "No" : "",
+    };
+  };
+  const auctionExperimentFields = (address) => {
+    const auction = experimentAuctionByAddress.get(String(address || "").toLowerCase());
+    return {
+      "Experiment Auction ID": auction?.id || "",
+      "Experiment ID": auction ? experimentManifest?.experimentId || "" : "",
+    };
+  };
   const summaryRows = reports.map(({ auction, ended, transactions }) => ({
+    ...auctionExperimentFields(auction.address),
     "Auction #": auction.index,
     "Auction Address": auction.address,
     "Etherscan URL": `${SEPOLIA_ADDRESS_URL}${auction.address}`,
@@ -1414,6 +1497,7 @@ const buildCoreReportTables = (reports, errors, generatedAt, options = {}) => {
       return [
         {
           ...auctionFields,
+          ...auctionExperimentFields(auction.address),
           "Row Type": "No bids",
           "Bid #": 0,
           "Bidder Address": "No bidder",
@@ -1435,10 +1519,14 @@ const buildCoreReportTables = (reports, errors, generatedAt, options = {}) => {
 
     return transactions.map((tx, txIndex) => ({
       ...auctionFields,
+      ...auctionExperimentFields(auction.address),
+      ...actorFields(tx.bidder),
       "Row Type": "Bid",
       "Bid #": txIndex + 1,
       "Bidder Address": tx.bidder,
       "Bidder Etherscan URL": `${SEPOLIA_ADDRESS_URL}${tx.bidder}`,
+      "Transaction Hash": transactionEvidence(auction.address, tx).transactionHash,
+      "Transaction Etherscan URL": transactionEvidence(auction.address, tx).etherscanUrl,
       "Transaction Amount (wei)": tx.transactionAmountWei,
       "Cumulative Bid (wei)": tx.cumulativeBidWei,
       "Contract Cumulative Bid (wei)": tx.contractCumulativeBidWei,
@@ -1455,6 +1543,7 @@ const buildCoreReportTables = (reports, errors, generatedAt, options = {}) => {
   });
   const timelineRows = [
     ...reports.map(({ auction }) => ({
+      ...auctionExperimentFields(auction.address),
       "Time ISO": toIsoDateTime(auction.endTime),
       Time: toDateTime(auction.endTime),
       "Event Type": "Auction End Time",
@@ -1472,6 +1561,8 @@ const buildCoreReportTables = (reports, errors, generatedAt, options = {}) => {
     })),
     ...reports.flatMap(({ auction, transactions }) =>
       transactions.map((tx) => ({
+        ...auctionExperimentFields(auction.address),
+        ...actorFields(tx.bidder),
         "Time ISO": tx.isoTime,
         Time: tx.time,
         "Event Type": "Bid",
@@ -1481,6 +1572,8 @@ const buildCoreReportTables = (reports, errors, generatedAt, options = {}) => {
         Description: auction.dataDescription,
         Actor: tx.bidder,
         "Actor Etherscan URL": `${SEPOLIA_ADDRESS_URL}${tx.bidder}`,
+        "Transaction Hash": transactionEvidence(auction.address, tx).transactionHash,
+        "Transaction Etherscan URL": transactionEvidence(auction.address, tx).etherscanUrl,
         "Amount (wei)": tx.transactionAmountWei,
         "Cumulative Bid (wei)": tx.cumulativeBidWei,
         "Budget At Bid Moment (wei)": tx.budgetBeforeBidWei,
@@ -1491,6 +1584,7 @@ const buildCoreReportTables = (reports, errors, generatedAt, options = {}) => {
     ...reports
       .filter(({ transactions }) => !transactions.length)
       .map(({ auction }) => ({
+        ...auctionExperimentFields(auction.address),
         "Time ISO": toIsoDateTime(auction.endTime),
         Time: toDateTime(auction.endTime),
         "Event Type": "No Bid Activity",
@@ -1692,6 +1786,16 @@ export const buildReportSheets = (reports, errors, options = {}) => {
         name: "Auction List History",
         rows: options.listStateRows || [],
       },
+      {
+        key: "experiment",
+        name: "Experiment Protocol",
+        rows: options.experimentRows || [],
+      },
+      {
+        key: "experiment",
+        name: "Experiment Evidence",
+        rows: options.experimentEventRows || [],
+      },
     ],
     options
   ).map(({ name, rows }) => ({ name, rows }));
@@ -1711,6 +1815,12 @@ export const buildReportPayload = (reports, errors, options = {}) => {
       : {}),
     ...(includeSection("listState")
       ? { listStateRows: options.listStateRows || [] }
+      : {}),
+    ...(includeSection("experiment")
+      ? {
+          experimentRows: options.experimentRows || [],
+          experimentEventRows: options.experimentEventRows || [],
+        }
       : {}),
     analysis: {
       ...(includeSection("readme")
@@ -1735,6 +1845,9 @@ export const buildReportPayload = (reports, errors, options = {}) => {
   const payloadOptions = { ...options };
   delete payloadOptions.activityRows;
   delete payloadOptions.listStateRows;
+  delete payloadOptions.experimentRows;
+  delete payloadOptions.experimentEventRows;
+  delete payloadOptions.experimentEvents;
 
   reports.forEach(({ auction, transactions }) => {
     totalHighestBid += toBigIntSafe(auction.highestBid);

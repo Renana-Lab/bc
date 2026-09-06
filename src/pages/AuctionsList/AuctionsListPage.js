@@ -35,10 +35,9 @@ import {
 } from "../../real_ethereum/marketConfig";
 import {
   getEthereumAccounts,
-  getEthereumProvider,
-  waitForEthereumProvider,
 } from "../../real_ethereum/ethereumProvider";
 import { publishActiveAuctions } from "../../real_ethereum/activeAuctionRegistry";
+import { getWalletSessionAccount, subscribeToWalletSession } from "../../telemetry/walletSession";
 import Layout from "../../components/Layout";
 import { preserveAuctionUserState } from "./auctionVisualState";
 import { AuctionCountdown, LastUpdatedLabel } from "./AuctionLiveValues";
@@ -1184,7 +1183,7 @@ function AuctionsListPage() {
     auctionListCache.updatedAt || null,
   );
   const [connectedAccount, setConnectedAccount] = useState(
-    window.ethereum?.selectedAddress?.toLowerCase() || "",
+    getWalletSessionAccount(),
   );
   const [visibleAuctionCount, setVisibleAuctionCount] =
     useState(AUCTIONS_PAGE_SIZE);
@@ -1300,7 +1299,7 @@ function AuctionsListPage() {
       }
     }
 
-    const currentUserAddress = window.ethereum?.selectedAddress?.toLowerCase();
+    const currentUserAddress = getWalletSessionAccount();
     const requestKey = [
       AUCTIONS_API_URL || "chain",
       normalizedRequestFactory,
@@ -1470,36 +1469,13 @@ function AuctionsListPage() {
   }, [visibleAuctionCount]);
 
   useEffect(() => {
-    let provider;
-    let cancelled = false;
-
-    const setAccount = (accounts) => {
-      const currentProvider = provider || getEthereumProvider();
-      const nextAccount =
-        accounts?.[0]?.toLowerCase() ||
-        currentProvider?.selectedAddress?.toLowerCase() ||
-        null;
-      setConnectedAccount(nextAccount || "");
-      if (nextAccount) {
-        loadRemainingBudget(nextAccount);
-      }
+    const setAccount = () => {
+      const account = getWalletSessionAccount();
+      setConnectedAccount(account);
+      if (account) loadRemainingBudget(account);
     };
-
-    waitForEthereumProvider()
-      .then((detectedProvider) => {
-        if (cancelled) return;
-        provider = detectedProvider;
-        if (!provider) {
-          navigate("/");
-          return;
-        }
-
-        getEthereumAccounts()
-          .then(setAccount)
-          .catch((error) => console.error("Error reading accounts:", error));
-        provider.on?.("accountsChanged", setAccount);
-      })
-      .catch((error) => console.error("Error detecting wallet:", error));
+    setAccount();
+    const unsubscribe = subscribeToWalletSession(setAccount);
 
     fetchAuctionsListRef.current?.();
 
@@ -1516,10 +1492,9 @@ function AuctionsListPage() {
     document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
-      cancelled = true;
       clearInterval(interval);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
-      provider?.removeListener?.("accountsChanged", setAccount);
+      unsubscribe();
     };
   }, [navigate, loadRemainingBudget]);
 

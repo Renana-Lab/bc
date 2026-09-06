@@ -118,6 +118,20 @@ describe("bot command center stress cases", () => {
     ).toMatchObject({ bid: true, amountWei: 30n, targetBid: 510n });
   });
 
+  test("charges a returning outbid wallet against the full cumulative target", () => {
+    const returning = { ...auction, approversCount: 2, highestBid: 500n, myBid: 480n };
+    expect(getBidDecision(returning, 509n, strategy)).toMatchObject({
+      bid: false,
+      reason: "Insufficient budget",
+    });
+    expect(getBidDecision(returning, 510n, strategy)).toMatchObject({
+      bid: true,
+      amountWei: 30n,
+      targetBid: 510n,
+      budgetCostWei: 510n,
+    });
+  });
+
   test.each([
     [{ ...auction, isActive: false }, 2000n, /closed/i],
     [{ ...auction, isManager: true }, 2000n, /seller/i],

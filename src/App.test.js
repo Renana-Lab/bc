@@ -1,219 +1,74 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
-import App from './App';
-import {
-  getEthereumAccounts,
-  getMetaMaskErrorMessage,
-  getMetaMaskProvider,
-  getEthereumProvider,
-  requestEthereumAccounts,
-  waitForEthereumProvider,
-} from './real_ethereum/ethereumProvider';
+import React from "react";
+import { act, render, screen, waitFor, cleanup } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
+import App from "./App";
+import { getWalletAccess } from "./real_ethereum/walletAccess";
 
-jest.mock('./real_ethereum/ethereumProvider', () => ({
-  getEthereumAccounts: jest.fn(),
-  getMetaMaskErrorMessage: jest.fn(),
-  getMetaMaskProvider: jest.fn(),
-  getEthereumProvider: jest.fn(),
-  requestEthereumAccounts: jest.fn(),
-  waitForEthereumProvider: jest.fn(),
-}));
-
-jest.mock('./real_ethereum/socketFactory', () => {
-  const createSubscription = () => ({
-    on: jest.fn().mockReturnThis(),
-    unsubscribe: jest.fn(),
-  });
-  const events = new Proxy(
-    {},
-    {
-      get: () => () => createSubscription(),
-    }
-  );
-
-  return {
-    campaignSocket: jest.fn(() => ({ events })),
-    factorySocket: { events },
-    shouldLimitLiveEventLoad: jest.fn(() => true),
-    web3Socket: {},
-  };
-});
-
+jest.mock("./botnet/BotnetRuntimeHost", () => () => null);
+jest.mock("./telemetry/PresenceCoordinator", () => () => null);
+jest.mock("./components/Seo", () => ({ children }) => children);
+jest.mock("./pages/Home/HomePage.js", () => () => <h1>Welcome</h1>);
+jest.mock("./pages/MetamaskLogin/MetamaskTutorialPage.js", () => () => <h1>Connect MetaMask</h1>);
+jest.mock("./pages/MetamaskGuide/MetamaskGuidePage.js", () => () => <h1>Wallet guide</h1>);
+jest.mock("./pages/AuctionsList/AuctionsListPage.js", () => () => <input aria-label="Protected auction search" />);
+jest.mock("./pages/NewAuction/NewAuctionPage.js", () => () => <h1>Protected create</h1>);
+jest.mock("./pages/ShowAuction/ShowAuctionPage.js", () => () => <h1>Protected detail</h1>);
+jest.mock("./pages/ManageBudget/ManageBudgetPage.js", () => () => <h1>Protected admin</h1>);
+const address = "0x1234567890abcdef1234567890abcdef12345678";
+let provider;
 beforeEach(() => {
-  getEthereumAccounts.mockResolvedValue([]);
-  getMetaMaskErrorMessage.mockReturnValue('MetaMask is unavailable.');
-  getMetaMaskProvider.mockReturnValue(null);
-  getEthereumProvider.mockReturnValue(null);
-  requestEthereumAccounts.mockResolvedValue([]);
-  waitForEthereumProvider.mockResolvedValue(null);
-
-  window.matchMedia = jest.fn().mockImplementation((query) => ({
-    matches: false,
-    media: query,
-    onchange: null,
-    addEventListener: jest.fn(),
-    removeEventListener: jest.fn(),
-  }));
+  Object.defineProperty(document, "hidden", { configurable: true, value: false });
+  window.matchMedia = jest.fn(() => ({ matches: false, addEventListener: jest.fn(), removeEventListener: jest.fn() }));
+  provider = { isMetaMask: true, _metamask: { isUnlocked: jest.fn().mockResolvedValue(true) },
+    request: jest.fn().mockResolvedValue([address]), handlers: {},
+    on: (name, fn) => { provider.handlers[name] = fn; },
+    removeListener: (name, fn) => { if (provider.handlers[name] === fn) delete provider.handlers[name]; },
+  };
+  delete window.ethereum;
 });
-
-test('renders the marketplace loading shell', () => {
-  render(
-    <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-      <App />
-    </MemoryRouter>
-  );
-
-  expect(
-    screen.getByRole('status', { name: /loading blockchain data market/i })
-  ).toBeInTheDocument();
-  expect(screen.getByText(/preparing the workspace/i)).toBeInTheDocument();
+afterEach(() => { cleanup(); delete window.ethereum; });
+const open = (path) => render(<React.StrictMode><MemoryRouter initialEntries={[path]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}><App /></MemoryRouter></React.StrictMode>);
+test.each(["/auctions-list", "/open-auction", "/auction/0x123", "/manage-budget"])("direct link %s never renders without a wallet", async (path) => {
+  const view = open(path);
+  expect(view.container.textContent).not.toMatch(/Protected/);
+  await screen.findByText("Connect MetaMask");
+  expect(view.container.textContent).not.toMatch(/Protected/);
 });
-
-test('redirects unknown routes to the marketplace entry screen', async () => {
-  render(
-    <MemoryRouter
-      initialEntries={['/definitely-missing']}
-      future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
-    >
-      <App />
-    </MemoryRouter>
-  );
-
-  expect(
-    await screen.findByRole(
-      'heading',
-      { name: /welcome to our data marketplace/i },
-      { timeout: 20000 }
-    )
-  ).toBeInTheDocument();
+test("locked wallet with cached accounts is denied", async () => {
+  window.ethereum = provider; provider._metamask.isUnlocked.mockResolvedValue(false);
+  open("/auctions-list"); await screen.findByText("Connect MetaMask");
+  expect(screen.queryByLabelText("Protected auction search")).toBeNull();
 });
-
-test(
-  'redirects disconnected users away from protected auction routes',
-  async () => {
-    render(
-      <MemoryRouter
-        initialEntries={['/auctions-list']}
-        future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
-      >
-        <App />
-      </MemoryRouter>
-    );
-
-    expect(
-      await screen.findByRole(
-        'heading',
-        { name: /are you logged in to metamask/i },
-        { timeout: 20000 }
-      )
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByPlaceholderText(/search auctions/i)
-    ).not.toBeInTheDocument();
-  },
-  30000
-);
-
-test(
-  'keeps protected content hidden while wallet access is being verified',
-  async () => {
-    let resolveAccounts;
-    getEthereumAccounts.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          resolveAccounts = resolve;
-        })
-    );
-
-    render(
-      <MemoryRouter
-        initialEntries={['/auctions-list']}
-        future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
-      >
-        <App />
-      </MemoryRouter>
-    );
-
-    expect(
-      await screen.findByText(/verifying your metamask connection/i)
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByPlaceholderText(/search auctions/i)
-    ).not.toBeInTheDocument();
-
-    await waitFor(() => {
-      expect(resolveAccounts).toEqual(expect.any(Function));
-    });
-
-    await act(async () => {
-      resolveAccounts([]);
-    });
-
-    expect(
-      await screen.findByRole(
-        'heading',
-        { name: /are you logged in to metamask/i },
-        { timeout: 20000 }
-      )
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByPlaceholderText(/search auctions/i)
-    ).not.toBeInTheDocument();
-  },
-  30000
-);
-
-test(
-  'revokes protected content immediately when MetaMask no longer exposes an account',
-  async () => {
-    let locked = false;
-    const provider = {
-      on: jest.fn(),
-      removeListener: jest.fn(),
-    };
-
-    waitForEthereumProvider.mockResolvedValue(provider);
-    getEthereumAccounts.mockImplementation(() =>
-      Promise.resolve(
-        locked ? [] : ['0x1234567890abcdef1234567890abcdef12345678']
-      )
-    );
-
-    render(
-      <MemoryRouter
-        initialEntries={['/auctions-list']}
-        future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
-      >
-        <App />
-      </MemoryRouter>
-    );
-
-    await waitFor(() => {
-      expect(localStorage.getItem('notConnected')).toBe('false');
-    });
-    expect(
-      screen.queryByRole('heading', { name: /are you logged in to metamask/i })
-    ).not.toBeInTheDocument();
-
-    locked = true;
-    await act(async () => {
-      window.dispatchEvent(new Event('focus'));
-    });
-
-    await waitFor(() => {
-      expect(getEthereumAccounts.mock.calls.length).toBeGreaterThanOrEqual(2);
-    });
-
-    expect(
-      await screen.findByRole(
-        'heading',
-        { name: /are you logged in to metamask/i },
-        { timeout: 20000 }
-      )
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByPlaceholderText(/search auctions/i)
-    ).not.toBeInTheDocument();
-  },
-  30000
-);
+test("content never mounts while the account request is pending", async () => {
+  window.ethereum = provider; provider.request.mockImplementation(() => new Promise(() => {}));
+  open("/auctions-list");
+  await screen.findByText("Verifying your MetaMask connection");
+  expect(screen.queryByLabelText("Protected auction search")).toBeNull();
+});
+test("disconnect followed by an old success cannot restore the page", async () => {
+  window.ethereum = provider; let resolve;
+  provider.request.mockImplementation(() => new Promise((r) => { resolve = r; }));
+  open("/auctions-list");
+  await waitFor(() => expect(resolve).toBeDefined());
+  await act(async () => { provider.handlers.disconnect(); resolve([address]); });
+  await screen.findByText("Connect MetaMask");
+  expect(screen.queryByLabelText("Protected auction search")).toBeNull();
+});
+test("focus revalidation preserves form DOM and input", async () => {
+  window.ethereum = provider; open("/auctions-list");
+  const field = await screen.findByLabelText("Protected auction search"); field.value = "keep my work";
+  await act(async () => { window.dispatchEvent(new Event("focus")); });
+  await waitFor(() => expect(getWalletAccess().status).toBe("connected"));
+  expect(screen.getByLabelText("Protected auction search")).toBe(field);
+  expect(field.value).toBe("keep my work");
+});
+test("lock event removes the protected content", async () => {
+  window.ethereum = provider; open("/auctions-list"); await screen.findByLabelText("Protected auction search");
+  provider._metamask.isUnlocked.mockResolvedValue(false);
+  await act(async () => { provider.handlers.accountsChanged([]); });
+  await screen.findByText("Connect MetaMask");
+  expect(screen.queryByLabelText("Protected auction search")).toBeNull();
+});
+test.each([["/", "Welcome"], ["/metamask-guide", "Wallet guide"]])("public route %s stays accessible", async (path, title) => {
+  open(path); await screen.findByText(title);
+});

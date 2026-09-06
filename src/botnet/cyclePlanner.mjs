@@ -54,16 +54,20 @@ export const getBidDecision = (auction, budget, strategy) => {
   const emptyAuction = Number(auction.approversCount || 0) === 0 && highestBid === 0n;
   const targetBid = emptyAuction ? minimumContribution : highestBid + outbidBy;
   const incrementalValue = myBid > 0n ? targetBid - myBid : targetBid;
+  // The campaign sends only the increment as ETH, but when a previously
+  // outbid wallet returns the factory charges its full new cumulative bid
+  // from the restored budget. A current winner is charged only the increment.
+  const budgetCostWei = auction.isWinner ? incrementalValue : targetBid;
 
   if (targetBid > maxBid) return { bid: false, reason: "Target bid exceeds max bid" };
   if (incrementalValue <= 0n) {
     return { bid: false, reason: "Existing bid already covers target" };
   }
-  if (incrementalValue > availableBudget) {
+  if (budgetCostWei > availableBudget) {
     return { bid: false, reason: "Insufficient budget" };
   }
 
-  return { bid: true, amountWei: incrementalValue, targetBid };
+  return { bid: true, amountWei: incrementalValue, targetBid, budgetCostWei };
 };
 
 const isStaticallyEligible = (auction, bot, nowSec) => {

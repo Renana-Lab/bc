@@ -11,7 +11,6 @@ import { Toaster } from "react-hot-toast";
 import PageSeo from "./components/Seo.js";
 import PresenceCoordinator from "./telemetry/PresenceCoordinator.js";
 import BotnetRuntimeHost from "./botnet/BotnetRuntimeHost.js";
-import { setWalletSessionAccount } from "./telemetry/walletSession.js";
 
 const HomePage = lazy(() => import("./pages/Home/HomePage.js"));
 const NewAuctionPage = lazy(() => import("./pages/NewAuction/NewAuctionPage.js"));
@@ -154,110 +153,18 @@ const AppLoadingFallback = ({
 );
 
 const RequireWallet = ({ children }) => {
-  const { provider, checkIfConnected } = useMetaMask();
+  const { status } = useMetaMask();
   const location = useLocation();
-  const [walletStatus, setWalletStatus] = useState("checking");
-  const walletStatusRef = useRef("checking");
+  const admitted = useRef(false);
+  if (status === "connected") admitted.current = true;
 
-  const setGuardStatus = (status) => {
-    walletStatusRef.current = status;
-    setWalletStatus(status);
-  };
-
-  useEffect(() => {
-    let cancelled = false;
-    let verificationId = 0;
-    let verificationTimerId = null;
-    const WALLET_VERIFICATION_INTERVAL_MS = 1000;
-
-    const applyAccounts = (accounts) => {
-      if (cancelled) return;
-      const connected = Boolean(accounts?.length);
-
-      if (connected) {
-        localStorage.setItem("notConnected", "false");
-        setWalletSessionAccount(accounts[0]);
-        setGuardStatus("connected");
-        return;
-      }
-
-      localStorage.setItem("notConnected", "true");
-      setWalletSessionAccount("");
-      setGuardStatus("disconnected");
-    };
-
-    const verifyConnection = async () => {
-      const currentVerificationId = verificationId + 1;
-      verificationId = currentVerificationId;
-      if (walletStatusRef.current !== "connected") {
-        setGuardStatus("checking");
-      }
-
-      try {
-        const accounts = await checkIfConnected();
-        if (cancelled || currentVerificationId !== verificationId) return;
-        applyAccounts(accounts);
-      } catch (error) {
-        if (cancelled || currentVerificationId !== verificationId) return;
-        console.error("Wallet access check failed:", error);
-        applyAccounts([]);
-      }
-    };
-
-    const handleAccountsChanged = (accounts) => applyAccounts(accounts);
-    const handleDisconnect = () => applyAccounts([]);
-    const handleFocus = () => verifyConnection();
-    const handlePageShow = () => verifyConnection();
-    const handleVisibility = () => {
-      if (!document.hidden) {
-        verifyConnection();
-      }
-    };
-
-    verifyConnection();
-    verificationTimerId = window.setInterval(() => {
-      if (!document.hidden) {
-        verifyConnection();
-      }
-    }, WALLET_VERIFICATION_INTERVAL_MS);
-
-    provider?.on?.("accountsChanged", handleAccountsChanged);
-    provider?.on?.("disconnect", handleDisconnect);
-    window.addEventListener("focus", handleFocus);
-    window.addEventListener("pageshow", handlePageShow);
-    document.addEventListener("visibilitychange", handleVisibility);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(verificationTimerId);
-      provider?.removeListener?.("accountsChanged", handleAccountsChanged);
-      provider?.removeListener?.("disconnect", handleDisconnect);
-      window.removeEventListener("focus", handleFocus);
-      window.removeEventListener("pageshow", handlePageShow);
-      document.removeEventListener("visibilitychange", handleVisibility);
-    };
-  }, [checkIfConnected, location.pathname, provider]);
-
-  if (walletStatus === "checking") {
-    return (
-      <AppLoadingFallback
-        copy="Verifying your MetaMask connection"
-        status="Checking wallet access"
-      />
-    );
+  if (status !== "connected" && status !== "checking") {
+    return <Navigate to="/metamask-login" replace state={{ from: `${location.pathname}${location.search}` }} />;
   }
-
-  if (walletStatus !== "connected") {
-    return (
-      <Navigate
-        to="/metamask-login"
-        replace
-        state={{ from: `${location.pathname}${location.search}` }}
-      />
-    );
-  }
-
-  return children;
+  return <>
+    {status === "checking" && <AppLoadingFallback copy="Verifying your MetaMask connection" status="Checking wallet access" />}
+    <div hidden={status !== "connected"}>{admitted.current && children}</div>
+  </>;
 };
 
 function App() {

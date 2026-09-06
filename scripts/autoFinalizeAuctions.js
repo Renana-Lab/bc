@@ -85,7 +85,6 @@ async function withRpcRetry(task, retries = web3Clients.length) {
 
     try {
       const result = await task(client.web3);
-      nextRpcIndex = (nextRpcIndex + 1) % web3Clients.length;
       return result;
     } catch (error) {
       lastError = error;

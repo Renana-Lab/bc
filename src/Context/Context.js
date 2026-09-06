@@ -1,94 +1,18 @@
-import React, { createContext, useCallback, useState, useContext, useEffect } from 'react';
-import {
-  getMetaMaskErrorMessage,
-  getEthereumAccounts,
-  requestEthereumAccounts,
-  waitForEthereumProvider,
-} from "../real_ethereum/ethereumProvider";
+import React, { createContext, useContext, useEffect, useSyncExternalStore } from "react";
+import { getEthereumAccounts, requestEthereumAccounts, getMetaMaskErrorMessage } from "../real_ethereum/ethereumProvider";
+import { getWalletAccess, subscribeWalletAccess, startWalletAccess } from "../real_ethereum/walletAccess";
 
-// Create the context
 const MetaMaskContext = createContext();
-
-// Custom hook to use MetaMask context
-export const useMetaMask = () => {
-  return useContext(MetaMaskContext);
+export const useMetaMask = () => useContext(MetaMaskContext);
+const requestConnection = async () => {
+  try { return { accounts: await requestEthereumAccounts(), error: "" }; }
+  catch (error) { return { accounts: [], error: getMetaMaskErrorMessage(error) }; }
 };
-
-// Create a provider component
 export const MetaMaskProvider = ({ children }) => {
-  const [isMetaMaskInstalled, setIsMetaMaskInstalled] = useState(false);
-  const [provider, setProvider] = useState(null);
-  const [lastConnectionError, setLastConnectionError] = useState("");
-
-  const refreshProvider = useCallback(async () => {
-    const nextProvider = await waitForEthereumProvider({ requireMetaMask: true });
-    setProvider(nextProvider);
-    setIsMetaMaskInstalled(Boolean(nextProvider));
-    return nextProvider;
-  }, []);
-
-  useEffect(() => {
-    refreshProvider();
-
-    const handleVisibility = () => {
-      if (!document.hidden) {
-        refreshProvider();
-      }
-    };
-
-    window.addEventListener("focus", refreshProvider);
-    document.addEventListener("visibilitychange", handleVisibility);
-
-    return () => {
-      window.removeEventListener("focus", refreshProvider);
-      document.removeEventListener("visibilitychange", handleVisibility);
-    };
-  }, [refreshProvider]);
-
-  // Check MetaMask connection status and update localStorage
-  const checkIfConnected = useCallback(async () => {
-    try {
-      await refreshProvider();
-      const accounts = await getEthereumAccounts();
-      const isNotConnected = accounts.length === 0;
-      localStorage.setItem('notConnected', isNotConnected);
-      setLastConnectionError("");
-      return accounts;
-    } catch (error) {
-      console.error("Error checking MetaMask connection:", error);
-      localStorage.setItem('notConnected', true);
-      return [];
-    }
-  }, [refreshProvider]);
-
-  const requestConnection = useCallback(async () => {
-    try {
-      await refreshProvider();
-      const accounts = await requestEthereumAccounts();
-      const isNotConnected = accounts.length === 0;
-      localStorage.setItem('notConnected', isNotConnected);
-      setLastConnectionError("");
-      return { accounts, error: "" };
-    } catch (error) {
-      console.error("Error requesting MetaMask connection:", error);
-      const message = getMetaMaskErrorMessage(error);
-      setLastConnectionError(message);
-      localStorage.setItem('notConnected', true);
-      return { accounts: [], error: message };
-    }
-  }, [refreshProvider]);
-
-  return (
-    <MetaMaskContext.Provider
-      value={{
-        isMetaMaskInstalled,
-        provider,
-        lastConnectionError,
-        checkIfConnected,
-        requestConnection,
-      }}
-    >
-      {children}
-    </MetaMaskContext.Provider>
-  );
+  const session = useSyncExternalStore(subscribeWalletAccess, getWalletAccess);
+  useEffect(startWalletAccess, []);
+  return <MetaMaskContext.Provider value={{
+    ...session, isMetaMaskInstalled: Boolean(session.provider),
+    lastConnectionError: session.reason, checkIfConnected: getEthereumAccounts, requestConnection,
+  }}>{children}</MetaMaskContext.Provider>;
 };

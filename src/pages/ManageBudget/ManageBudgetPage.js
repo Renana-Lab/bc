@@ -72,8 +72,14 @@ import {
   toAuctionListStateRows,
   toDateInputValue,
 } from "./reportUtils";
+import {
+  getExperimentEvidence,
+  toExperimentEventRows,
+  toExperimentReportRows,
+} from "../../experiment/experimentEvidence";
 
 const BotnetControlPanel = lazy(() => import("./BotnetControlPanel"));
+const ExperimentEvidencePanel = lazy(() => import("./ExperimentEvidencePanel"));
 
 const LOCAL_STORAGE_KEY = "globalBudgetStore";
 const ADMIN_SECRET = "1234"; // Do not store production secrets on the frontend.
@@ -130,6 +136,11 @@ const REPORT_SECTION_OPTIONS = [
     key: "listState",
     label: "Auction List History",
     description: "Observed active and finalizable list changes during the report period.",
+  },
+  {
+    key: "experiment",
+    label: "Experiment Evidence",
+    description: "Protocol, cohorts, seeded roles, decisions, transactions, and runtime failures.",
   },
 ];
 const REPORT_DIAGNOSTIC_OPTIONS = [
@@ -388,6 +399,7 @@ const ManageBudgetPage = () => {
   const [batchStudioOpen, setBatchStudioOpen] = useState(false);
   const [autoFinalizerOpen, setAutoFinalizerOpen] = useState(false);
   const [botCommandCenterOpen, setBotCommandCenterOpen] = useState(false);
+  const [experimentEvidenceOpen, setExperimentEvidenceOpen] = useState(false);
   const [auctionReportsOpen, setAuctionReportsOpen] = useState(false);
   const [bulkLoading, setBulkLoading] = useState(false);
   const [bulkProgress, setBulkProgress] = useState({ current: 0, total: 0 });
@@ -1430,6 +1442,18 @@ const ManageBudgetPage = () => {
         activityRange,
         listStateRows,
         listStateRange,
+        ...(() => {
+          const experimentEvidence = getExperimentEvidence();
+          return {
+            experimentManifest: experimentEvidence.manifest,
+            experimentEvents: experimentEvidence.events,
+            experimentRows: toExperimentReportRows(
+              experimentEvidence.manifest,
+              experimentEvidence.events,
+            ),
+            experimentEventRows: toExperimentEventRows(experimentEvidence.events),
+          };
+        })(),
       };
       const payload = buildReportPayload(cleanReports, errors, exportReportOptions);
 
@@ -2233,6 +2257,60 @@ const ManageBudgetPage = () => {
                     }
                   >
                     <BotnetControlPanel schedulerEnabled={false} />
+                  </Suspense>
+                </Box>
+              </Collapse>
+            </Box>
+
+            <Box
+              sx={{
+                width: "100%",
+                mt: 3,
+                p: { xs: 1.5, sm: 2 },
+                border: "1px solid #d9dff2",
+                borderRadius: 3,
+                ...getAdminGlossCardSx(experimentEvidenceOpen),
+              }}
+            >
+              <Box
+                sx={{
+                  display: "grid",
+                  gridTemplateColumns: "minmax(0, 1fr) auto",
+                  alignItems: "start",
+                  gap: 2,
+                }}
+              >
+                <Box sx={{ minWidth: 0 }}>
+                  <Typography variant="h6">Experiment Evidence</Typography>
+                  <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, maxWidth: 680 }}>
+                    Load a public protocol manifest and runner evidence into reports. Wallet secrets are rejected.
+                  </Typography>
+                </Box>
+                <IconButton
+                  onClick={() => setExperimentEvidenceOpen((current) => !current)}
+                  aria-expanded={experimentEvidenceOpen}
+                  aria-controls="experiment-evidence-panel"
+                  aria-label={experimentEvidenceOpen ? "Collapse Experiment Evidence" : "Expand Experiment Evidence"}
+                  title={experimentEvidenceOpen ? "Collapse Experiment Evidence" : "Expand Experiment Evidence"}
+                  sx={ADMIN_COLLAPSE_BUTTON_SX}
+                >
+                  <KeyboardArrowDownIcon
+                    sx={{
+                      transform: experimentEvidenceOpen ? "rotate(180deg)" : "rotate(0deg)",
+                      transition: ADMIN_COLLAPSE_ARROW_TRANSITION,
+                    }}
+                  />
+                </IconButton>
+              </Box>
+              <Collapse
+                id="experiment-evidence-panel"
+                in={experimentEvidenceOpen}
+                timeout={ADMIN_COLLAPSE_TIMEOUT_MS}
+                unmountOnExit
+              >
+                <Box sx={{ pt: 2, opacity: experimentEvidenceOpen ? 1 : 0, transition: ADMIN_COLLAPSE_INNER_TRANSITION }}>
+                  <Suspense fallback={<Box sx={{ py: 2, color: "text.secondary", fontSize: 14 }}>Preparing experiment evidence...</Box>}>
+                    <ExperimentEvidencePanel />
                   </Suspense>
                 </Box>
               </Collapse>

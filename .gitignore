@@ -26,3 +26,5 @@ yarn-error.log*
 # Security
 .env
 /botnet-data
+/experiment-data/private
+/experiment-data/runs

@@ -1074,7 +1074,7 @@ async function executeRoundOnProvider(bots, sharedContext) {
                 `Place a ${decision.amountWei.toString()} wei bid on auction ${candidate.address}`,
               );
             });
-            budget -= decision.amountWei;
+            budget -= decision.budgetCostWei;
             sent += 1;
             slotCompleted = true;
             metrics.bidsSent += 1;

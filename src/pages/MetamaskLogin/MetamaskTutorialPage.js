@@ -6,11 +6,12 @@ import Layout from "../../components/Layout.js";
 import metamaskImg from "./Illustration_Metamask.png";
 import styles from "./metamask.module.scss";
 import { toast } from "react-hot-toast"; // Import hot-toast
+import { walletDiagnostic } from "../../real_ethereum/walletAccess";
 
 function MetamaskTutorialPage() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { isMetaMaskInstalled, checkIfConnected, requestConnection } = useMetaMask(); // Access context values
+  const { isMetaMaskInstalled, checkIfConnected, requestConnection, reason } = useMetaMask(); // Access context values
   const [, setNotConnected] = useState(true); // Default to true (assumes not connected)
   const [loading, setLoading] = useState(true);
   const [connectionError, setConnectionError] = useState("");
@@ -84,6 +85,11 @@ function MetamaskTutorialPage() {
             <h1 className={styles.metamaskTitle}>
               Are you logged in to MetaMask?
             </h1>
+            {reason && <p role="status">{reason}</p>}
+            <Button onClick={async () => {
+              try { await navigator.clipboard.writeText(walletDiagnostic()); toast.success("Connection diagnostic copied"); }
+              catch { toast.error("Clipboard access failed. Check your browser permissions."); }
+            }}>Copy connection diagnostic</Button>
             <div className={styles.metamaskText}>
               Before starting buying/selling data, please make sure you are
               logged into a Metamask account.

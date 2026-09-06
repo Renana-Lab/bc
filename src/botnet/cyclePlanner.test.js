@@ -121,10 +121,11 @@ describe("coordinated bot cycle planner", () => {
       highestBid: "500",
       myBid: "480",
     };
-    expect(getBidDecision(base, 30n, strategy())).toEqual({
+    expect(getBidDecision(base, 510n, strategy())).toEqual({
       bid: true,
       amountWei: 30n,
       targetBid: 510n,
+      budgetCostWei: 510n,
     });
     expect(getBidDecision(base, 29n, strategy())).toMatchObject({
       bid: false,
