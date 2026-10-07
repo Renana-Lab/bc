@@ -1,5 +1,6 @@
 import http from "node:http";
 import https from "node:https";
+import { readFileSync } from "node:fs";
 import { defineConfig, loadEnv, transformWithEsbuild } from "vite";
 import react from "@vitejs/plugin-react";
 
@@ -67,7 +68,7 @@ const clientEnvironment = (environment) => {
   );
 };
 
-export default defineConfig(({ mode }) => {
+export default defineConfig(({ mode, command }) => {
   const loadedEnvironment = loadEnv(mode, process.cwd(), "");
   const environment = clientEnvironment(loadedEnvironment);
   const botnetTarget =
@@ -76,12 +77,21 @@ export default defineConfig(({ mode }) => {
     "http://127.0.0.1:3002";
 
   return {
-    plugins: [treatSourceJavaScriptAsJsx(), react(), botnetProxy(botnetTarget)],
+    plugins: [
+      ...(mode === 'backend' ? [{
+        name: 'backend-market-entry',
+        transformIndexHtml: {
+          order: 'pre',
+          handler: () => readFileSync(new URL('./src/market/document.html', import.meta.url), 'utf8'),
+        },
+      }] : []),
+      treatSourceJavaScriptAsJsx(), react(), botnetProxy(botnetTarget),
+    ],
     define: {
       global: "globalThis",
       "process.env": JSON.stringify({
         ...environment,
-        NODE_ENV: mode === "production" ? "production" : "development",
+        NODE_ENV: command === "build" ? "production" : "development",
         PUBLIC_URL: "",
       }),
     },
@@ -97,6 +107,7 @@ export default defineConfig(({ mode }) => {
       },
     },
     server: {
+      proxy: { '/api/market': 'http://127.0.0.1:3011' },
       host: true,
       port: 3000,
       open: process.env.BROWSER !== "none",

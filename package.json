@@ -33,6 +33,12 @@
     "web3": "^1.10.4"
   },
   "scripts": {
+    "market:dev": "node scripts/market/dev.js",
+    "market:server": "node scripts/market/server.js",
+    "market:create-admin": "node scripts/market/createAdmin.js",
+    "market:test": "node --test scripts/market/*.test.js",
+    "market:backup": "node scripts/market/backup.js",
+    "market:build": "vite build --mode backend --outDir build-backend",
     "start": "vite",
     "start:cra": "react-scripts start",
     "build": "react-scripts build",

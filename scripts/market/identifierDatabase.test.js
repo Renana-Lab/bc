@@ -1,0 +1,129 @@
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const { mkdtempSync, rmSync } = require('node:fs');
+const { tmpdir } = require('node:os');
+const path = require('node:path');
+const { MarketStore } = require('./store');
+const { createMarketServer } = require('./server');
+
+test('identifiers preserve legacy accounts, sessions, budgets and seller identity across restart', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'market-identity-'));
+  let store = new MarketStore(path.join(dir, 'test.sqlite'));
+  try {
+    const admin = await store.createUser({ name: 'Display name', email: 'existing@example.com', role: 'admin' }, null, true);
+    const session = store.emailLogin('existing@example.com');
+    const auction = store.createAuction({ description: 'Original dataset', payload: 'private', minimum: 50, minutes: 25 }, admin.id);
+    store.setBudget(admin.id, 1500, admin.id);
+    store.close(); store = new MarketStore(path.join(dir, 'test.sqlite'));
+    const returning = store.identifierLogin('  EXISTING@example.com ');
+    assert.equal(returning.user.id, admin.id);
+    assert.equal(returning.user.budget, 1500);
+    assert.equal(store.session(session.token).id, admin.id);
+    assert.equal(store.auction(auction.id, admin.id).seller_identifier, 'existing@example.com');
+    assert.equal(store.registerIdentifier('Participant-001').user.identifier, 'participant-001');
+    for (const input of ['', 'a b', {}, null, 'a'.repeat(201), '<script>']) assert.throws(() => store.identifierLogin(input));
+  } finally { store.close(); rmSync(dir, { recursive: true }); }
+});
+
+test('record editing is admin-only, optimistic, atomic, audited and immutable once bid on', async () => {
+  let now = 1800000000000;
+  const store = new MarketStore(':memory:', () => now);
+  try {
+    const admin = await store.createUser({ name: 'Admin', identifier: 'admin-test', role: 'admin' }, null, true);
+    const bidder = store.registerIdentifier('participant-01').user;
+    const { id } = store.createAuction({ description: 'Before', payload: 'secret', minimum: 50, minutes: 25 }, admin.id);
+    assert.throws(() => store.inspectAuction(id, bidder.id), /Administrator/);
+    let state = store.inspectAuction(id, admin.id);
+    const edit = { revision: state.revision, description: 'After', payload: 'changed-secret', minimum: 60, end_at: now + 600000 };
+    assert.throws(() => store.editAuction(id, edit, bidder.id), /Administrator/);
+    assert.throws(() => store.editAuction(id, { ...edit, highest: 10 }, admin.id), /Unsupported/);
+    assert.throws(() => store.editAuction(id, { ...edit, end_at: now - 1 }, admin.id), /integer/);
+    assert.equal(store.inspectAuction(id, admin.id).record.description, 'Before');
+    state = store.editAuction(id, edit, admin.id);
+    assert.equal(state.record.description, 'After');
+    assert.equal(state.events[0].type, 'auction-edited');
+    assert(!JSON.stringify(state.events).includes('changed-secret'));
+    assert.throws(() => store.editAuction(id, edit, admin.id), /changed/);
+    store.bid(id, 60, bidder.id, 'database-test-bid');
+    state = store.inspectAuction(id, admin.id);
+    assert.equal(state.editable, false);
+    assert.throws(() => store.editAuction(id, { ...edit, revision: state.revision }, admin.id), /cannot be rewritten/);
+    assert.equal(state.bids[0].identifier, 'participant-01');
+    now += 600000;
+    store.finalize(id, admin.id);
+    assert.equal(store.user(bidder.id).budget, 1940);
+    assert.equal(store.user(admin.id).budget, 2060);
+  } finally { store.close(); }
+});
+
+test('HTTP identifier registration cannot grant admin rights or access record payloads', async t => {
+  const store = new MarketStore();
+  const admin = await store.createUser({ name: 'Admin', identifier: 'admin-test', role: 'admin' }, null, true);
+  const { id } = store.createAuction({ description: 'Test', payload: 'private', minimum: 50, minutes: 25 }, admin.id);
+  const origin = 'http://localhost:3010';
+  const server = createMarketServer(store, { origin });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(async () => { await new Promise(resolve => server.close(resolve)); store.close(); });
+  const base = `http://127.0.0.1:${server.address().port}/api/market`;
+  const response = await fetch(base + '/register', { method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' }, body: JSON.stringify({ identifier: 'P-001', role: 'admin', developer: true }) });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).user.role, 'user');
+  const cookie = response.headers.get('set-cookie').split(';')[0];
+  for (const method of ['GET', 'POST']) {
+    const result = await fetch(`${base}/admin/auctions/${id}/record`, { method, headers: { Cookie: cookie, Origin: origin, 'Content-Type': 'application/json' }, ...(method === 'POST' ? { body: '{}' } : {}) });
+    assert.equal(result.status, 403);
+    assert(!JSON.stringify(await result.json()).includes('private'));
+  }
+  assert.equal((await fetch(`${base}/admin/auctions/${id}/record`)).status, 401);
+  assert.equal((await fetch(`${base}/auctions/${id}/record`, { headers: { Cookie: cookie } })).status, 403);
+});
+
+test('seller edits require ownership and zero bids, including a bid arriving after the editor opens', () => {
+  let now = 1800000000000;
+  const store = new MarketStore(':memory:', () => now);
+  try {
+    const seller = store.registerIdentifier('seller-01').user;
+    const bidder = store.registerIdentifier('bidder-01').user;
+    const { id } = store.createAuction({ description: 'Initial', payload: 'private', minimum: 50, minutes: 25 }, seller.id);
+    let record = store.inspectAuction(id, seller.id, false);
+    assert.deepEqual(record.ledger, []);
+    assert.throws(() => store.inspectAuction(id, bidder.id, false), /Only the seller/);
+    let edit = { revision: record.revision, description: 'Seller update', payload: 'changed', minimum: 60, end_at: now + 900000 };
+    assert.throws(() => store.editAuction(id, edit, bidder.id, false), /Only the seller/);
+    record = store.editAuction(id, edit, seller.id, false);
+    assert.equal(record.record.description, 'Seller update');
+    edit = { ...edit, revision: record.revision, minimum: 70 };
+    store.bid(id, 60, bidder.id, 'seller-edit-race');
+    assert.throws(() => store.editAuction(id, edit, seller.id, false), /changed/);
+    edit.revision = store.inspectAuction(id, seller.id, false).revision;
+    assert.throws(() => store.editAuction(id, edit, seller.id, false), /cannot be rewritten/);
+    assert.equal(store.auction(id, seller.id).minimum, 60);
+    const empty = store.createAuction({ description: 'Ends without bids', payload: 'private', minimum: 50, minutes: 1 }, seller.id);
+    record = store.inspectAuction(empty.id, seller.id, false);
+    now += 60000;
+    assert.throws(() => store.editAuction(empty.id, { ...edit, revision: record.revision, end_at: now + 60000 }, seller.id, false), /cannot be rewritten/);
+  } finally { store.close(); }
+});
+
+test('regular admin sessions require a password while dev sessions can be pre-unlocked', async t => {
+  const store = new MarketStore();
+  const admin = await store.createUser({ name: 'Admin', identifier: 'admin-lock-test', role: 'admin' }, null, true);
+  const origin = 'http://localhost:3010';
+  const options = { origin, adminPassword: 'correct-admin-password' };
+  const server = createMarketServer(store, options);
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(async () => { await new Promise(resolve => server.close(resolve)); store.close(); });
+  const base = `http://127.0.0.1:${server.address().port}/api/market`;
+  const post = (route, body, cookie = '') => fetch(base + route, { method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json', Cookie: cookie }, body: JSON.stringify(body) });
+  const login = await post('/login', { identifier: admin.identifier });
+  const cookie = login.headers.get('set-cookie').split(';')[0];
+  assert.equal((await login.json()).adminAccess, undefined);
+  assert.equal((await fetch(base + '/admin/access', { headers: { Cookie: cookie } })).status, 200);
+  assert.equal((await (await fetch(base + '/admin/access', { headers: { Cookie: cookie } })).json()).unlocked, false);
+  assert.equal((await fetch(base + '/admin/state', { headers: { Cookie: cookie } })).status, 403);
+  assert.equal((await post('/admin/unlock', { password: 'incorrect' }, cookie)).status, 403);
+  assert.equal(store.adminAccess(cookie.split('=')[1]).unlocked, false);
+  assert.equal((await post('/admin/unlock', { password: 'correct-admin-password' }, cookie)).status, 200);
+  assert.equal((await fetch(base + '/admin/state', { headers: { Cookie: cookie } })).status, 200);
+  assert.equal((await (await fetch(base + '/session', { headers: { Cookie: cookie } })).json()).adminAccess, true);
+});
