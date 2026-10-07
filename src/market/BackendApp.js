@@ -40,7 +40,7 @@ import GavelIcon from '@mui/icons-material/Gavel';
 import AddIcon from '@mui/icons-material/Add';
 import SearchIcon from '@mui/icons-material/Search';
 import SensorsOutlinedIcon from '@mui/icons-material/SensorsOutlined';
-import AccountBalanceWalletOutlinedIcon from '@mui/icons-material/AccountBalanceWalletOutlined';
+import TollOutlinedIcon from '@mui/icons-material/TollOutlined';
 import ScheduleOutlinedIcon from '@mui/icons-material/ScheduleOutlined';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
@@ -135,27 +135,27 @@ function AdminCard({ title, children, defaultOpen = false, action = null }) {
             aria-label={open ? `Collapse ${title}` : `Expand ${title}`}
             className="adminCollapseButton"
           >
-            <KeyboardArrowDownIcon sx={{ transform: open ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 120ms ease' }} />
+            <KeyboardArrowDownIcon sx={{ transform: open ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 75ms ease-out' }} />
           </IconButton>
         </Box>
       </Box>
-      <Collapse in={open} timeout={90}>
+      <Collapse in={open} timeout={65}>
         <Box sx={{ pt: 2 }}>{children}</Box>
       </Collapse>
     </Box>
   );
 }
 
-function MetamaskGuideView() {
+function PlatformGuideView() {
   const navigate = useNavigate();
   return (
     <div className="market-page-data">
-      <div className="metamaskContainer" style={{ minHeight: 'auto', padding: '1rem 0 3rem' }}>
+      <div className="accountContainer" style={{ minHeight: 'auto', padding: '1rem 0 3rem' }}>
         <div className="guideHero">
-          <h1 className="metamaskTitle">
+          <h1 className="accountTitle">
             Get Started with Your Marketplace Account
           </h1>
-          <p className="metamaskText">
+          <p className="accountText">
             Follow these simple steps to set up your account and start participating in our research data auctions.
           </p>
           <Button
@@ -175,12 +175,12 @@ function MetamaskGuideView() {
               </Typography>
             </AccordionSummary>
             <AccordionDetails>
-              <Typography className="metamaskText" sx={{ textAlign: 'left !important', padding: '0 0 1rem' }}>
+              <Typography className="accountText" sx={{ textAlign: 'left !important', padding: '0 0 1rem' }}>
                 Register your Prolific ID or participant identifier first. Then sign in with the same identifier.
               </Typography>
               <Button
                 variant="contained"
-                className="metamaskActionBtn"
+                className="accountActionBtn"
                 onClick={() => navigate("/login")}
               >
                 Go to Sign-In
@@ -195,7 +195,7 @@ function MetamaskGuideView() {
               </Typography>
             </AccordionSummary>
             <AccordionDetails>
-              <Typography className="metamaskText" sx={{ textAlign: 'left !important', padding: '0 0 1rem' }}>
+              <Typography className="accountText" sx={{ textAlign: 'left !important', padding: '0 0 1rem' }}>
                 Every participant account is allocated research credits to bid on data auctions. Your active budget is displayed in the top navigation bar at all times.
               </Typography>
             </AccordionDetails>
@@ -208,12 +208,12 @@ function MetamaskGuideView() {
               </Typography>
             </AccordionSummary>
             <AccordionDetails>
-              <Typography className="metamaskText" sx={{ textAlign: 'left !important', padding: '0 0 1rem' }}>
+              <Typography className="accountText" sx={{ textAlign: 'left !important', padding: '0 0 1rem' }}>
                 Browse live auctions, review data descriptions, and place bids within your credit budget. When an auction concludes, the highest bidder receives access to the dataset.
               </Typography>
               <Button
                 variant="contained"
-                className="metamaskActionBtn"
+                className="accountActionBtn"
                 onClick={() => navigate("/auctions-list")}
               >
                 View Auctions
@@ -242,26 +242,26 @@ function Login({ onLogin }) {
   }, []);
 
   return (
-    <main className="metamaskContainer">
-      <div className="metamaskHeroRow">
+    <main className="accountContainer">
+      <div className="accountHeroRow">
         <img
-          className="metamaskimg"
+          className="accountIllustration"
           src={loginPic}
           height="250"
           width="200"
           alt="Marketplace account setup illustration"
         />
-        <div className="metamaskQuestion">
-          <h1 className="metamaskTitle">
-            {mode === 'signup' ? 'Create your marketplace account' : 'Sign in to Blockchain Data Market'}
+        <div className="accountQuestion">
+          <h1 className="accountTitle">
+            {mode === 'signup' ? 'Create your marketplace account' : 'Sign in to Data Marketplace'}
           </h1>
-          <div className="metamaskText">
+          <div className="accountText">
             Before starting buying/selling data, please make sure you are logged into your account.
             <br />
             {mode === 'signup' ? 'Register your Prolific ID or participant identifier to access the marketplace.' : 'Sign in with your registered Prolific ID or participant identifier. New participants must register first.'}
           </div>
           <form
-            className="metamaskCard"
+            className="accountCard"
             onSubmit={async event => {
               event.preventDefault();
               const data = new FormData(event.currentTarget);
@@ -288,12 +288,12 @@ function Login({ onLogin }) {
               fullWidth
             />
             {error && <p role="alert" style={{ color: '#a51d30', margin: 0 }}>{error}</p>}
-            <div className="metamaskButtons">
+            <div className="accountButtons">
               <Button
                 type="submit"
                 variant="contained"
                 disabled={busy}
-                className="metamaskActionBtn"
+                className="accountActionBtn"
               >
                 {busy ? 'Please wait...' : mode === 'signup' ? 'Register' : 'Sign in'}
               </Button>
@@ -359,11 +359,11 @@ function HomePageView({ user }) {
       <div className={homeStyles.contentContainer}>
         <div className={homeStyles.welcomeSection}>
           <img
-            className={homeStyles.metamaskimg}
+            className="homeMarketplaceImage"
             src={welPic}
             height="330"
             width="400"
-            alt="Blockchain data marketplace illustration"
+            alt="Research data marketplace illustration"
           />
           <div className={homeStyles.introText}>
             <h1 style={{ margin: 0, lineHeight: 1.08 }}>Welcome to our data marketplace</h1>
@@ -399,7 +399,7 @@ function HomePageView({ user }) {
   );
 }
 
-function AuctionsListView({ auctions, admin, user, act, refresh }) {
+function AuctionsListView({ auctions, admin, user, act, refresh, allowPostSubmitEdit }) {
   const navigate = useNavigate();
   const [query, setQuery] = useState('');
   const [sortMode, setSortMode] = useState('normal');
@@ -424,11 +424,11 @@ function AuctionsListView({ auctions, admin, user, act, refresh }) {
           <img
             className={auctionStyles.heroImage}
             src={startPic}
-            alt="Blockchain auction marketplace dashboard"
+            alt="Research auction marketplace dashboard"
           />
           <div className={auctionStyles.heroCopy}>
             <h1 className={auctionStyles.introductionTitle} aria-label="Auctions">
-              Welcome to the Blockchain Data Market Platform
+              Welcome to the Data Marketplace Platform
             </h1>
             <p className={auctionStyles.introductionSubtitle}>
               Scroll down to see all the open and closed auctions.
@@ -575,7 +575,7 @@ function AuctionsListView({ auctions, admin, user, act, refresh }) {
                         {userWon ? 'View Data' : 'View Auction'}
                       </Button>
                       {admin && <IconAction title={`Manage database record: ${a.description}`} onClick={e => { e.stopPropagation(); setRecordId(a.id); }}><StorageOutlinedIcon fontSize="small" /></IconAction>}
-                      {!admin && a.seller_id === user.id && isOpen && !a.bidders && <IconAction title={`Edit your auction: ${a.description}`} onClick={e => { e.stopPropagation(); setRecordId(a.id); }}><EditOutlinedIcon fontSize="small" /></IconAction>}
+                      {!admin && allowPostSubmitEdit && a.seller_id === user.id && isOpen && !a.bidders && <IconAction title={`Edit your auction: ${a.description}`} onClick={e => { e.stopPropagation(); setRecordId(a.id); }}><EditOutlinedIcon fontSize="small" /></IconAction>}
                       {admin && isOpen && (
                         <IconAction
                           title="Close auction early"
@@ -641,7 +641,7 @@ function NewAuctionView({ act }) {
         <img
           className={`${newStyles.Image} backend-create-image`}
           src={createPic}
-          alt="Create a blockchain data auction"
+          alt="Create a research data auction"
         />
         <form
           className={`${newStyles.form} backend-create-form`}
@@ -808,7 +808,7 @@ function NewAuctionView({ act }) {
   );
 }
 
-function AuctionDetailsView({ user, act, revision }) {
+function AuctionDetailsView({ user, act, revision, allowPostSubmitEdit }) {
   const [editing, setEditing] = useState(false);
   const [editRevision, setEditRevision] = useState(0);
   const { address } = useParams();
@@ -858,7 +858,7 @@ function AuctionDetailsView({ user, act, revision }) {
       <p style={{ textAlign: 'center', color: '#5e638a', margin: '0 0 2rem' }}>
         Auction # {a.id}
       </p>
-      {isManager && isAuctionActive && !a.bidders && !a.finalized_at && <Box sx={{ textAlign: 'center' }}><Button startIcon={<EditOutlinedIcon />} onClick={() => setEditing(true)}>Edit your auction</Button></Box>}
+      {allowPostSubmitEdit && isManager && isAuctionActive && !a.bidders && !a.finalized_at && <Box sx={{ textAlign: 'center' }}><Button startIcon={<EditOutlinedIcon />} onClick={() => setEditing(true)}>Edit your auction</Button></Box>}
       {editing && <AuctionDatabaseDialog id={a.id} administrative={false} onClose={() => setEditing(false)} refresh={() => setEditRevision(value => value + 1)} />}
 
       <div className={`${showStyles.page} backend-show-page`}>
@@ -1650,7 +1650,7 @@ function AdminView({ auctions, act, revision, notify }) {
     const tableHtml = tables.map(({ name, rows }) =>
       `<h2>${escapeHtml(name)}</h2><table><tr>${Object.keys(rows[0] || {}).map(h => `<th>${escapeHtml(h)}</th>`).join('')}</tr>${rows.map(r => `<tr>${Object.values(r).map(v => `<td>${escapeHtml(v)}</td>`).join('')}</tr>`).join('')}</table>`
     ).join('');
-    downloadBlob(`<!doctype html><html><meta charset="utf-8"><title>Market report</title><style>body{font:14px system-ui;margin:24px}table{border-collapse:collapse;width:100%;font-size:11px}td,th{padding:6px;border:1px solid #ccc;overflow-wrap:anywhere}h2{break-before:auto}@media print{table{font-size:8px}}</style><h1>Data Market Report</h1><p>${escapeHtml(date(report.generatedAt))} / Credits</p>${tableHtml}</html>`, 'text/html', 'market-report.html');
+    downloadBlob(`<!doctype html><html><meta charset="utf-8"><title>Data Marketplace report</title><style>body{font:14px system-ui;margin:24px}table{border-collapse:collapse;width:100%;font-size:11px}td,th{padding:6px;border:1px solid #ccc;overflow-wrap:anywhere}h2{break-before:auto}@media print{table{font-size:8px}}</style><h1>Data Marketplace Report</h1><p>${escapeHtml(date(report.generatedAt))} / Credits</p>${tableHtml}</html>`, 'text/html', 'data-marketplace-report.html');
   };
 
   const botSummary = {
@@ -1694,7 +1694,8 @@ function AdminView({ auctions, act, revision, notify }) {
               act('/admin/settings', {
                 name: d.get('name'),
                 default_budget: Number(d.get('budget')),
-                auto_finalize: d.has('auto')
+                auto_finalize: d.has('auto'),
+                allow_post_submit_edit: d.has('allowPostSubmitEdit')
               });
             }}
             style={{ display: 'grid', gap: '16px', maxWidth: '600px' }}
@@ -1702,6 +1703,13 @@ function AdminView({ auctions, act, revision, notify }) {
             <TextField name="name" label="Market name" defaultValue={state.settings.name} required size="small" />
             <TextField name="budget" label="Default budget for new accounts" type="number" defaultValue={state.settings.default_budget} size="small" inputProps={{ min: 1, max: 1000000000 }} />
             <FormControlLabel control={<Checkbox name="auto" defaultChecked={Boolean(state.settings.auto_finalize)} />} label="Automatic finalization" />
+            <FormControlLabel
+              control={<Checkbox name="allowPostSubmitEdit" defaultChecked={Boolean(state.settings.allow_post_submit_edit)} />}
+              label="Allow sellers to edit submitted auctions before the first bid"
+            />
+            <Typography variant="caption" color="text.secondary" sx={{ mt: -1 }}>
+              Admin database controls remain available. Open auctions become permanently locked for sellers after their first bid.
+            </Typography>
             <Button type="submit" variant="contained" style={{ backgroundColor: '#103090', borderRadius: '20px' }}>
               Save market settings
             </Button>
@@ -2238,7 +2246,7 @@ export default function BackendApp() {
   }, [session?.user?.id]);
 
   useEffect(() => {
-    document.title = 'Blockchain Data Market | Web3 Research Data Auctions';
+    document.title = 'Data Marketplace | Research Data Auctions';
   }, []);
 
   useEffect(() => {
@@ -2313,7 +2321,7 @@ export default function BackendApp() {
               onClick={() => navigate('/auctions-list')}
               style={{ cursor: 'pointer' }}
             >
-              Blockchain Data Market
+              Data Marketplace
             </Typography>
           </div>
 
@@ -2329,7 +2337,7 @@ export default function BackendApp() {
             </div>
 
             <div className={shellStyles.toolbarPill} title="Current budget">
-              <AccountBalanceWalletOutlinedIcon className={shellStyles.toolbarPillIcon} fontSize="small" aria-hidden="true" />
+              <TollOutlinedIcon className={shellStyles.toolbarPillIcon} fontSize="small" aria-hidden="true" />
               <span className={shellStyles.toolbarPillLabel}>Budget:</span>
               <span className={shellStyles.toolbarPillValue}>{user?.budget ?? '2000'}</span>
             </div>
@@ -2454,14 +2462,12 @@ export default function BackendApp() {
           <Route path="/" element={<HomePageView user={user} />} />
           <Route path="/home" element={<HomePageView user={user} />} />
           <Route path="/login" element={user ? <Navigate to="/auctions-list" replace /> : <Login onLogin={val => { setSession(val); refresh(); }} />} />
-          <Route path="/metamask-login" element={user ? <Navigate to="/auctions-list" replace /> : <Login onLogin={val => { setSession(val); refresh(); }} />} />
-          <Route path="/guide" element={<MetamaskGuideView />} />
-          <Route path="/metamask-guide" element={<MetamaskGuideView />} />
-          <Route path="/platform-guide" element={<MetamaskGuideView />} />
+          <Route path="/guide" element={<PlatformGuideView />} />
+          <Route path="/platform-guide" element={<PlatformGuideView />} />
           <Route path="/account" element={user ? <AccountView user={user} /> : <Login onLogin={val => { setSession(val); refresh(); }} />} />
-          <Route path="/auctions-list" element={user ? <AuctionsListView auctions={auctions} user={user} admin={admin} act={act} refresh={refresh} /> : <Login onLogin={val => { setSession(val); refresh(); }} />} />
+          <Route path="/auctions-list" element={user ? <AuctionsListView auctions={auctions} user={user} admin={admin} act={act} refresh={refresh} allowPostSubmitEdit={Boolean(session.settings?.allow_post_submit_edit)} /> : <Login onLogin={val => { setSession(val); refresh(); }} />} />
           <Route path="/open-auction" element={user ? <NewAuctionView act={act} /> : <Login onLogin={val => { setSession(val); refresh(); }} />} />
-          <Route path="/auction/:address" element={user ? <AuctionDetailsView user={user} act={act} revision={revision} /> : <Login onLogin={val => { setSession(val); refresh(); }} />} />
+          <Route path="/auction/:address" element={user ? <AuctionDetailsView user={user} act={act} revision={revision} allowPostSubmitEdit={Boolean(session.settings?.allow_post_submit_edit)} /> : <Login onLogin={val => { setSession(val); refresh(); }} />} />
           <Route path="/manage-budget" element={!user ? <Login onLogin={val => { setSession(val); refresh(); }} /> : admin ? (session.adminAccess ? <AdminView auctions={auctions} act={act} revision={revision} notify={notify} /> : <AdminUnlock onUnlocked={() => setSession(current => ({ ...current, adminAccess: true }))} />) : <Navigate to="/auctions-list" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

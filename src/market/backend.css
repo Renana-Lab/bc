@@ -369,14 +369,14 @@ button, input, select, textarea {
   animation: softScaleIn 280ms var(--motion-ease, ease) both;
 }
 
-.homeMetamaskImg {
+.homeMarketplaceImage {
   height: auto;
   width: clamp(280px, 40vw, 400px);
   border-radius: 12px;
   transition: transform 220ms var(--motion-ease, ease);
 }
 
-.homeMetamaskImg:hover {
+.homeMarketplaceImage:hover {
   transform: translateY(-3px) scale(1.01);
 }
 
@@ -458,8 +458,8 @@ button, input, select, textarea {
   box-shadow: 0 8px 18px rgba(0, 40, 132, 0.12) !important;
 }
 
-/* Sign-in View matching OG MetamaskTutorialPage.js & metamask.module.scss */
-.metamaskContainer {
+/* Account access view */
+.accountContainer {
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -471,7 +471,7 @@ button, input, select, textarea {
   animation: softFadeUp 240ms var(--motion-ease, ease) both;
 }
 
-.metamaskHeroRow {
+.accountHeroRow {
   display: flex;
   flex-direction: row;
   align-items: center;
@@ -481,7 +481,7 @@ button, input, select, textarea {
   max-width: 1000px;
 }
 
-.metamaskimg {
+.accountIllustration {
   border-radius: 2rem;
   width: clamp(200px, 30vw, 280px);
   height: auto;
@@ -489,16 +489,16 @@ button, input, select, textarea {
   transition: transform 220ms var(--motion-ease, ease);
 }
 
-.metamaskimg:hover {
+.accountIllustration:hover {
   transform: translateY(-3px) scale(1.01);
 }
 
-.metamaskQuestion {
+.accountQuestion {
   max-width: 560px;
   animation: softFadeUp 260ms var(--motion-ease, ease) 60ms both;
 }
 
-.metamaskTitle {
+.accountTitle {
   color: #002884;
   font-size: 2.5rem;
   font-weight: 600;
@@ -506,7 +506,7 @@ button, input, select, textarea {
   padding-bottom: 1.5rem;
 }
 
-.metamaskText {
+.accountText {
   text-align: left;
   color: #3f50b5;
   font-size: 1.2rem;
@@ -514,7 +514,7 @@ button, input, select, textarea {
   line-height: 1.5;
 }
 
-.metamaskCard {
+.accountCard {
   background: rgba(255, 255, 255, 0.95);
   padding: 28px;
   border-radius: 20px;
@@ -525,7 +525,7 @@ button, input, select, textarea {
   gap: 16px;
 }
 
-.metamaskButtons {
+.accountButtons {
   color: #002884;
   padding-top: 1.5rem;
   display: flex;
@@ -534,7 +534,7 @@ button, input, select, textarea {
   align-items: center;
 }
 
-.metamaskActionBtn {
+.accountActionBtn {
   height: 2.5rem !important;
   padding: 0.8rem 1.6rem !important;
   border-radius: 30px !important;
@@ -544,11 +544,11 @@ button, input, select, textarea {
   text-transform: none !important;
 }
 
-.metamaskActionBtn:hover {
+.accountActionBtn:hover {
   background-color: #7b7bc0 !important;
 }
 
-.metamaskSecondaryBtn {
+.accountSecondaryBtn {
   height: 2.5rem !important;
   padding: 0.8rem 1.6rem !important;
   border-radius: 30px !important;
@@ -558,7 +558,7 @@ button, input, select, textarea {
   text-transform: none !important;
 }
 
-/* Metamask Guide View matching OG MetamaskGuidePage.js & metamask.module.scss */
+/* Platform guide view */
 .guideHero {
   text-align: center;
   padding: 2rem 0;
@@ -963,7 +963,7 @@ button, input, select, textarea {
   border: 1px solid rgba(137, 157, 226, 0.26);
   background: radial-gradient(circle at 18% 0%, rgba(255,255,255,.96), rgba(255,255,255,0) 34%), linear-gradient(145deg, rgba(255,255,255,.98), rgba(249,251,255,.96) 48%, rgba(238,243,255,.94));
   box-shadow: 0 22px 52px rgba(16,48,144,.115), 0 4px 16px rgba(240,176,48,.055), inset 0 1px 0 rgba(255,255,255,.86);
-  animation: adminSurfaceEnter 240ms var(--motion-ease) both;
+  animation: adminSurfaceEnter 150ms var(--motion-ease) both;
 }
 
 .adminGlossCard {
@@ -976,7 +976,7 @@ button, input, select, textarea {
   box-shadow: 0 8px 22px rgba(16, 48, 144, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.86);
   padding: 1.5rem;
   margin-bottom: 1.5rem;
-  transition: opacity 90ms ease, border-color 120ms ease, box-shadow 140ms ease;
+  transition: opacity 65ms ease, border-color 80ms ease, box-shadow 90ms ease;
   width: 100%;
   box-sizing: border-box;
 }
@@ -1004,7 +1004,7 @@ button, input, select, textarea {
   background: linear-gradient(145deg, rgba(255, 255, 255, 0.96), rgba(245, 248, 255, 0.9)) !important;
   box-shadow: 0 7px 18px rgba(16, 48, 144, 0.07), inset 0 1px 0 rgba(255, 255, 255, 0.9) !important;
   border-radius: 50% !important;
-  transition: transform 90ms var(--motion-ease), border-color 120ms ease, background-color 120ms ease, box-shadow 120ms ease !important;
+  transition: transform 65ms var(--motion-ease), border-color 80ms ease, background-color 80ms ease, box-shadow 80ms ease !important;
 }
 
 .adminCollapseButton:hover {
@@ -1067,7 +1067,7 @@ button, input, select, textarea {
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.68);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.92);
-  transition: transform 130ms var(--motion-ease), border-color 130ms ease, background-color 130ms ease, box-shadow 130ms ease;
+  transition: transform 80ms var(--motion-ease), border-color 85ms ease, background-color 85ms ease, box-shadow 85ms ease;
 }
 
 @media (hover: hover) and (pointer: fine) {
@@ -1132,7 +1132,7 @@ button, input, select, textarea {
   cursor: pointer;
   color: #183777;
   list-style: none;
-  transition: background-color 120ms ease, color 120ms ease;
+  transition: background-color 80ms ease, color 80ms ease;
 }
 .backendBotObservatory > details > summary:hover { background: rgba(231, 237, 252, 0.62); }
 .backendBotObservatory > details > summary::after {
@@ -1142,7 +1142,7 @@ button, input, select, textarea {
   border-right: 2px solid #3152ad;
   border-bottom: 2px solid #3152ad;
   transform: rotate(45deg);
-  transition: transform 140ms var(--motion-ease);
+  transition: transform 80ms var(--motion-ease);
 }
 .backendBotObservatory > details[open] > summary::after { transform: rotate(225deg); }
 .backendBotObservatory > details > summary::-webkit-details-marker { display: none; }
@@ -1150,7 +1150,7 @@ button, input, select, textarea {
 .backendBotObservatory > details > summary small { color: #68708c; font-weight: 400; }
 .backendBotObservatory > details > summary span:last-child { white-space: nowrap; color: #68708c; font-size: 0.76rem; }
 .backendBotRounds { padding: 0 14px 14px; }
-.backendBotObservatory > details[open] .backendBotRounds { animation: botRoundsReveal 150ms var(--motion-ease) both; }
+.backendBotObservatory > details[open] .backendBotRounds { animation: botRoundsReveal 90ms var(--motion-ease) both; }
 
 @keyframes backendStatusPulse {
   0%, 100% { opacity: 0.58; transform: scale(0.88); }

@@ -234,8 +234,8 @@ const {
     await page.getByText('Bot 01', { exact: true }).first().waitFor();
     assert.equal(await page.getByLabel('Admin password').count(), 0);
     assert.deepEqual(errors, []);
-    assert(!requests.some(url => /infura|sepolia|metamask|etherscan|Alchemy/i.test(url)), 'Unexpected blockchain request');
-    console.log('Browser checks passed: login, admin gate, bots, creation, bidding, finalization, purchased data, desktop/mobile overflow, no blockchain requests.');
+    assert(!requests.some(url => !url.startsWith(base)), 'Unexpected external request');
+    console.log('Browser checks passed: login, admin gate, bots, creation, bidding, finalization, purchased data, desktop/mobile overflow, and local-only requests.');
     await context.close();
   } catch (error) {
     console.error('Page errors:', errors, 'Page text:', await page?.locator('body').innerText());

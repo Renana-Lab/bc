@@ -52,8 +52,8 @@ class MarketStore {
     this.now = clock;
     this.db = new DatabaseSync(filename);
     this.db.exec(`PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;
-      CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), name TEXT NOT NULL, default_budget INTEGER NOT NULL, auto_finalize INTEGER NOT NULL);
-      INSERT OR IGNORE INTO settings VALUES(1,'Data Market',2000,1);
+      CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), name TEXT NOT NULL, default_budget INTEGER NOT NULL, auto_finalize INTEGER NOT NULL, allow_post_submit_edit INTEGER NOT NULL DEFAULT 1);
+      INSERT OR IGNORE INTO settings(id,name,default_budget,auto_finalize) VALUES(1,'Data Marketplace',2000,1);
       CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT UNIQUE NOT NULL, password TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('user','admin','bot')), budget INTEGER NOT NULL CHECK(budget>=0), disabled INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), expires_at INTEGER NOT NULL, seen_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS auctions (id TEXT PRIMARY KEY, seller_id TEXT NOT NULL REFERENCES users(id), description TEXT NOT NULL, payload TEXT NOT NULL, minimum INTEGER NOT NULL, end_at INTEGER NOT NULL, highest INTEGER NOT NULL DEFAULT 0, winner_id TEXT REFERENCES users(id), finalized_at INTEGER, end_recorded INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL);
@@ -80,6 +80,12 @@ class MarketStore {
     if (!botColumns.some(column => column.name === 'max_above_opening')) {
       this.db.exec('ALTER TABLE bots ADD COLUMN max_above_opening INTEGER');
     }
+    const settingColumns = this.db.prepare('PRAGMA table_info(settings)').all();
+    if (!settingColumns.some(column => column.name === 'allow_post_submit_edit')) {
+      this.db.exec('ALTER TABLE settings ADD COLUMN allow_post_submit_edit INTEGER NOT NULL DEFAULT 1');
+    }
+    const legacyMarketName = ['Data', 'Market'].join(' ');
+    this.run('UPDATE settings SET name=? WHERE id=1 AND name=?', 'Data Marketplace', legacyMarketName);
   }
   one(sql, ...args) {
     return this.db.prepare(sql).get(...args);
@@ -102,7 +108,7 @@ class MarketStore {
     }
   }
   settings() {
-    return this.one('SELECT name,default_budget,auto_finalize FROM settings WHERE id=1');
+    return this.one('SELECT name,default_budget,auto_finalize,allow_post_submit_edit FROM settings WHERE id=1');
   }
   user(id) {
     const user = this.one('SELECT id,name,email,email AS identifier,role,budget,disabled,created_at FROM users WHERE id=?', id);
@@ -262,13 +268,14 @@ class MarketStore {
       seller_identifier: this.one('SELECT email FROM users WHERE id=?', record.seller_id).email,
       ledger: adminOnly ? this.all('SELECT * FROM ledger WHERE auction_id=? ORDER BY id', id) : [],
       events: adminOnly ? this.all("SELECT * FROM events WHERE json_extract(detail,'$.id')=? ORDER BY id DESC LIMIT 100", id) : [],
-      editable: !bids.length && !record.finalized_at && record.end_at > this.now()
+      editable: (adminOnly || Boolean(this.settings().allow_post_submit_edit)) && !bids.length && !record.finalized_at && record.end_at > this.now()
     };
   }
   editAuction(id, input, actor, adminOnly = true) {
     if (adminOnly) this.admin(actor); else this.user(actor);
     return this.transaction(() => {
       const current = this.inspectAuction(id, actor, adminOnly);
+      check(adminOnly || Boolean(this.settings().allow_post_submit_edit), 'Auction editing is currently disabled by the administrator.', 403);
       check(input.revision === current.revision, 'Auction changed. Reload the record before saving.', 409);
       check(current.editable, 'Only open auctions without bids can be edited. Bid and payment history cannot be rewritten.', 409);
       check(Object.keys(input).every(key => ['revision', 'description', 'payload', 'minimum', 'end_at'].includes(key)), 'Unsupported database field');
@@ -389,7 +396,8 @@ class MarketStore {
       const name = label(input.name ?? current.name, 100),
         budget = integer(input.default_budget ?? current.default_budget);
       check(input.auto_finalize === undefined || typeof input.auto_finalize === 'boolean', 'Invalid finalizer setting');
-      this.run('UPDATE settings SET name=?,default_budget=?,auto_finalize=? WHERE id=1', name, budget, Number(input.auto_finalize ?? Boolean(current.auto_finalize)));
+      check(input.allow_post_submit_edit === undefined || typeof input.allow_post_submit_edit === 'boolean', 'Invalid auction editing setting');
+      this.run('UPDATE settings SET name=?,default_budget=?,auto_finalize=?,allow_post_submit_edit=? WHERE id=1', name, budget, Number(input.auto_finalize ?? Boolean(current.auto_finalize)), Number(input.allow_post_submit_edit ?? Boolean(current.allow_post_submit_edit)));
       this.event('market-configured', actor, this.settings());
       return this.settings();
     });

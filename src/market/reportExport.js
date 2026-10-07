@@ -7,7 +7,7 @@ export const escapeReportText = value => String(value ?? '').replace(/[&<>"']/g,
 })[c]);
 
 // SpreadsheetML matches the existing market's multi-sheet Excel export without
-// importing its blockchain read stack into the account-based application.
+// importing unrelated runtime dependencies into the account-based application.
 export function buildMarketWorkbook(tables) {
   const sheets = tables.map(({
     name,

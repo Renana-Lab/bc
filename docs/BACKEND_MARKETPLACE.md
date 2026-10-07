@@ -1,8 +1,8 @@
 # Account-Based Marketplace Variant
 
-This variant is isolated from the blockchain application. `npm start` and the
-existing production build still run the blockchain marketplace. Nothing migrates
-wallets, contracts, private keys, or existing live data automatically.
+This is a standalone, account-based marketplace. It uses server-managed users,
+credits, auctions, settlements, reports, and automation. Existing live data from
+other applications is not imported automatically.
 
 ## Local Run
 
@@ -70,9 +70,12 @@ a server-verified admin role. There is no frontend admin passcode.
 - Bot Command Center: persistent server-hosted bots, independent intervals,
   1-5 bids per cycle, maximum bid, enable/start/stop, manual rounds, observatory.
   One active-only snapshot is shared by due bots, with rotating unique auction
-  assignment. There are no RPC requests, nonces, wallets or private keys.
+  assignment. All execution stays inside the marketplace service.
 - Batch Auction Studio: atomic JSON batches of up to 50 auctions.
 - Dynamic active list, admin early close, observed list history at a timestamp.
+- Admin-controlled post-submission editing. When enabled, sellers may edit only
+  open auctions with no bids; administrators retain the same audited database
+  controls when seller editing is disabled.
 - Live counts: human/admin accounts with a heartbeat in the last 45 seconds,
   running bots with recent scheduler activity, and active auctions. Multiple
   tabs for one account count once. Presence samples are persisted every 15 seconds.
@@ -81,17 +84,14 @@ a server-verified admin role. There is no frontend admin passcode.
   Evidence includes bid budgets, credit ledger, events, list transitions, bot
   decisions, participation, seller payments, review flags, and presence samples.
 
-Credits have no cryptocurrency or cash value. Bidding reserves the full current
+Credits have no cash value. Bidding reserves the full current
 winning bid; outbidding immediately returns the previous winner's reservation.
-There is no second ETH deposit, so a separate crypto refund transaction is neither
-necessary nor exposed. Finalization consumes the winner's reservation and credits
-the seller. The ledger records every change in available credit.
+Finalization consumes the winner's reservation and credits the seller. The ledger
+records every change in available credit.
 
-The contract manager becomes market settings. Wallet/key import, MetaMask agent
-wallet controls, Etherscan links and RPC diagnostics are deliberately absent.
-The existing blockchain-specific experiment CLI is **not** redirected at this
-backend. Its seeded-human protocol and legacy evidence imports require a separate
-adapter before they can be used here; do not run it expecting backend auctions.
+Market settings, participant management, automation, evidence, and diagnostics
+are controlled directly from the Admin Zone. Legacy experiment tooling requires
+a separate adapter before it can be used with these auctions.
 
 ## Hosting
 
@@ -134,10 +134,10 @@ node scripts/market/browserTest.js
 node scripts/market/browserTest.js webkit
 ```
 
-The suite uses an isolated database; no live contract or real wallet is touched.
+The suite uses an isolated database and does not touch live participant data.
 It covers role enforcement, CSRF, concurrent bidding, idempotency, exact closing
 boundaries, reservation accounting, atomic batches, session revocation, restart
 recovery, immutable ledger, and 100 bots/1,000 historical/50 active auctions.
 Browser tests cover login, direct protected URLs, admin controls, bot execution,
 auction creation, bid placement, finalization, winner data access, responsive
-overflow, and absence of blockchain network calls.
+overflow, and local-only network behavior.
