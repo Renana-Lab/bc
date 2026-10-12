@@ -192,6 +192,7 @@ const {
     await page.goto(`${base}/auction/${auction.id}`);
     assert.equal(await page.getByRole('button', { name: 'Export Transactions', exact: true }).count(), 0);
     assert.equal(await page.getByText('Your cumulative bid:', { exact: true }).count(), 0);
+    assert.equal(await page.getByText('Auction status:', { exact: true }).count(), 0);
     await page.getByLabel(/^Add to your bid/).fill('100');
     await page.getByRole('button', {
       name: 'Place bid',

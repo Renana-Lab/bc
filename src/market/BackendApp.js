@@ -881,13 +881,6 @@ function AuctionDetailsView({ user, act, revision, allowPostSubmitEdit, canExpor
             <span className="introductionText">{a.bidders}</span>
           </div>
 
-          <div className="introductionDetail">
-            <span className="introductionLabel">Auction status: </span>
-            <span className="introductionText" style={{ color: a.finalized_at ? '#217345' : '#002884', fontWeight: 700 }}>
-              {status(a)}
-            </span>
-          </div>
-
           {!a.finalized_at && !isAuctionActive && (
             <Button
               id="finalize-auction-button"
