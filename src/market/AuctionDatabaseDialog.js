@@ -31,7 +31,7 @@ export default function AuctionDatabaseDialog({ id, onClose, refresh, administra
   const rows = data && [[], data.bids, data.ledger, data.events][tab];
   const columns = [[], ['identifier', 'amount', 'cumulative', 'budget_before', 'budget_after', 'created_at'], ['user_id', 'delta', 'balance', 'reason', 'created_at'], ['type', 'actor_id', 'detail', 'created_at']][tab];
   return <Dialog open fullWidth maxWidth="md" onClose={busy ? undefined : onClose} aria-labelledby="database-title">
-    <DialogTitle id="database-title">{administrative ? 'Auction database record' : 'Edit your auction'}</DialogTitle>
+    <DialogTitle id="database-title">{administrative ? 'Auction database record' : 'Edit minimum bid'}</DialogTitle>
     {busy && <LinearProgress />}
     <DialogContent>
       {error && <Alert severity="error">{error}</Alert>}
@@ -50,11 +50,11 @@ export default function AuctionDatabaseDialog({ id, onClose, refresh, administra
           } : { revision: data.revision, minimum: Number(draft.minimum) }));
         }}>
           {!data.editable && <Alert severity="info">This record is read-only because bidding has started or the auction has ended.</Alert>}
-          <TextField label="Seller identifier" value={data.seller_identifier} InputProps={{ readOnly: true }} />
-          <TextField label="Description" value={draft.description} onChange={e => setDraft({ ...draft, description: e.target.value })} disabled={busy || !data.editable || !administrative} required inputProps={{ maxLength: 300 }} />
+          {administrative && <TextField label="Seller identifier" value={data.seller_identifier} InputProps={{ readOnly: true }} />}
+          {administrative && <TextField label="Description" value={draft.description} onChange={e => setDraft({ ...draft, description: e.target.value })} disabled={busy || !data.editable} required inputProps={{ maxLength: 300 }} />}
           {administrative && <TextField label="Data payload" value={draft.payload} onChange={e => setDraft({ ...draft, payload: e.target.value })} multiline minRows={3} disabled={busy || !data.editable} required inputProps={{ maxLength: 50000 }} />}
           <TextField label="Minimum bid" type="number" value={draft.minimum} onChange={e => setDraft({ ...draft, minimum: e.target.value })} disabled={busy || !data.editable} required inputProps={{ min: 1, max: 1000000000, step: 1 }} />
-          <TextField label="Closing time" type="datetime-local" InputLabelProps={{ shrink: true }} value={new Date(draft.end_at - new Date(draft.end_at).getTimezoneOffset() * 60000).toISOString().slice(0, 19)} onChange={e => { const time = new Date(e.target.value).getTime(); if (Number.isFinite(time)) setDraft({ ...draft, end_at: time }); }} disabled={busy || !data.editable || !administrative} inputProps={{ step: 1 }} required />
+          {administrative && <TextField label="Closing time" type="datetime-local" InputLabelProps={{ shrink: true }} value={new Date(draft.end_at - new Date(draft.end_at).getTimezoneOffset() * 60000).toISOString().slice(0, 19)} onChange={e => { const time = new Date(e.target.value).getTime(); if (Number.isFinite(time)) setDraft({ ...draft, end_at: time }); }} disabled={busy || !data.editable} inputProps={{ step: 1 }} required />}
         </form> : <div className="database-table-scroll"><Table size="small"><TableHead><TableRow>{columns.map(col => <TableCell key={col}>{col.replaceAll('_', ' ')}</TableCell>)}</TableRow></TableHead><TableBody>
           {rows.map((row, index) => <TableRow key={row.id ?? index}>{columns.map(col => <TableCell key={col}>{col === 'created_at' ? new Date(row[col]).toLocaleString() : String(row[col] ?? '-')}</TableCell>)}</TableRow>)}
           {!rows.length && <TableRow><TableCell colSpan={columns.length}>No records.</TableCell></TableRow>}

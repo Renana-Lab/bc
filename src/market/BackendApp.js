@@ -552,7 +552,7 @@ function AuctionsListView({ auctions, admin, user, act, refresh, allowPostSubmit
                         {userWon ? 'View Data' : 'View Auction'}
                       </Button>
                       {admin && <IconAction title={`Manage database record: ${a.description}`} onClick={e => { e.stopPropagation(); setRecordId(a.id); }}><StorageOutlinedIcon fontSize="small" /></IconAction>}
-                      {!admin && allowPostSubmitEdit && a.seller_id === user.id && isOpen && !a.bidders && <IconAction title={`Edit your auction: ${a.description}`} onClick={e => { e.stopPropagation(); setRecordId(a.id); }}><EditOutlinedIcon fontSize="small" /></IconAction>}
+                      {!admin && allowPostSubmitEdit && a.seller_id === user.id && isOpen && !a.bidders && <IconAction title={`Edit minimum bid: ${a.description}`} onClick={e => { e.stopPropagation(); setRecordId(a.id); }}><EditOutlinedIcon fontSize="small" /></IconAction>}
                       {admin && isOpen && (
                         <IconAction
                           title="Close auction early"
@@ -835,7 +835,7 @@ function AuctionDetailsView({ user, act, revision, allowPostSubmitEdit, canExpor
       <p style={{ textAlign: 'center', color: '#5e638a', margin: '0 0 2rem' }}>
         Auction # {a.id}
       </p>
-      {allowPostSubmitEdit && isManager && isAuctionActive && !a.bidders && !a.finalized_at && <Box sx={{ textAlign: 'center' }}><Button startIcon={<EditOutlinedIcon />} onClick={() => setEditing(true)}>Edit your auction</Button></Box>}
+      {allowPostSubmitEdit && isManager && isAuctionActive && !a.bidders && !a.finalized_at && <Box sx={{ textAlign: 'center' }}><Button startIcon={<EditOutlinedIcon />} onClick={() => setEditing(true)}>Edit minimum bid</Button></Box>}
       {editing && <AuctionDatabaseDialog id={a.id} administrative={false} onClose={() => setEditing(false)} refresh={() => setEditRevision(value => value + 1)} />}
 
       <div className={`${showStyles.page} backend-show-page`}>
@@ -1637,10 +1637,10 @@ function AdminView({ auctions, act, revision, notify }) {
             <FormControlLabel control={<Checkbox name="auto" defaultChecked={Boolean(state.settings.auto_finalize)} />} label="Automatic finalization" />
             <FormControlLabel
               control={<Checkbox name="allowPostSubmitEdit" defaultChecked={Boolean(state.settings.allow_post_submit_edit)} />}
-              label="Allow sellers to edit submitted auctions before the first bid"
+              label="Allow sellers to edit the minimum bid before the first bid"
             />
             <Typography variant="caption" color="text.secondary" sx={{ mt: -1 }}>
-              Admin database controls remain available. Open auctions become permanently locked for sellers after their first bid.
+              Sellers can change only the minimum bid. The option disappears permanently after the first bid; admin database controls remain available.
             </Typography>
             <Button type="submit" variant="contained" style={{ backgroundColor: '#103090', borderRadius: '20px' }}>
               Save market settings

@@ -179,8 +179,11 @@ const {
     }).waitFor();
     const owned = store.createAuction({ description: 'Seller-owned auction', payload: 'Owner data', minimum: 50, minutes: 25 }, user.id);
     await page.goto(`${base}/auction/${owned.id}`);
-    await page.getByRole('button', { name: 'Edit your auction', exact: true }).click();
-    assert.equal(await page.getByRole('dialog').getByLabel(/^Description/).isDisabled(), true);
+    await page.getByRole('button', { name: 'Edit minimum bid', exact: true }).click();
+    assert.equal(await page.getByRole('dialog').getByLabel(/^Description/).count(), 0);
+    assert.equal(await page.getByRole('dialog').getByLabel(/^Data payload/).count(), 0);
+    assert.equal(await page.getByRole('dialog').getByLabel(/^Closing time/).count(), 0);
+    assert.equal(await page.getByRole('dialog').getByLabel(/^Seller identifier/).count(), 0);
     await page.getByRole('dialog').getByLabel(/^Minimum bid/).fill('60');
     await page.getByRole('button', { name: 'Save changes', exact: true }).click();
     await page.getByText('Auction updated.', { exact: true }).waitFor();
@@ -192,7 +195,7 @@ const {
     await page.getByText('Auction changed. Reload the record before saving.', { exact: true }).waitFor();
     assert.equal(store.inspectAuction(owned.id, user.id, false).record.minimum, 60);
     await page.getByRole('button', { name: 'Done', exact: true }).click();
-    await page.getByRole('button', { name: 'Edit your auction', exact: true }).waitFor({ state: 'hidden' });
+    await page.getByRole('button', { name: 'Edit minimum bid', exact: true }).waitFor({ state: 'hidden' });
     await page.goto(`${base}/auction/${auction.id}`);
     assert.equal(await page.getByRole('button', { name: 'Export Transactions', exact: true }).count(), 0);
     assert.equal(await page.getByText('Your cumulative bid:', { exact: true }).count(), 0);
