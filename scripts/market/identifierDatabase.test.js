@@ -106,11 +106,15 @@ test('seller edits require ownership and zero bids, including a bid arriving aft
     let record = store.inspectAuction(id, seller.id, false);
     assert.deepEqual(record.ledger, []);
     assert.throws(() => store.inspectAuction(id, bidder.id, false), /Only the seller/);
-    let edit = { revision: record.revision, description: 'Seller update', payload: 'changed', minimum: 60, end_at: now + 900000 };
-    assert.throws(() => store.editAuction(id, edit, bidder.id, false), /Only the seller/);
+    const forbidden = { revision: record.revision, description: 'Seller update', payload: 'changed', minimum: 60, end_at: now + 900000 };
+    assert.throws(() => store.editAuction(id, forbidden, bidder.id, false), /Only the seller/);
+    assert.throws(() => store.editAuction(id, forbidden, seller.id, false), /only change the minimum/i);
+    let edit = { revision: record.revision, minimum: 60 };
     record = store.editAuction(id, edit, seller.id, false);
-    assert.equal(record.record.description, 'Seller update');
-    edit = { ...edit, revision: record.revision, minimum: 70 };
+    assert.equal(record.record.description, 'Initial');
+    assert.equal(record.record.payload, 'private');
+    assert.equal(record.record.minimum, 60);
+    edit = { revision: record.revision, minimum: 70 };
     store.bid(id, 60, bidder.id, 'seller-edit-race');
     assert.throws(() => store.editAuction(id, edit, seller.id, false), /changed/);
     edit.revision = store.inspectAuction(id, seller.id, false).revision;
@@ -119,7 +123,7 @@ test('seller edits require ownership and zero bids, including a bid arriving aft
     const empty = store.createAuction({ description: 'Ends without bids', payload: 'private', minimum: 50, minutes: 1 }, seller.id);
     record = store.inspectAuction(empty.id, seller.id, false);
     now += 60000;
-    assert.throws(() => store.editAuction(empty.id, { ...edit, revision: record.revision, end_at: now + 60000 }, seller.id, false), /cannot be rewritten/);
+    assert.throws(() => store.editAuction(empty.id, { revision: record.revision, minimum: 60 }, seller.id, false), /cannot be rewritten/);
   } finally { store.close(); }
 });
 
@@ -137,12 +141,12 @@ test('admin can toggle seller post-submission editing without losing database co
     assert.equal(settings.allow_post_submit_edit, 0);
     sellerRecord = store.inspectAuction(id, seller.id, false);
     assert.equal(sellerRecord.editable, false);
-    const sellerEdit = { revision: sellerRecord.revision, description: 'Seller edit', payload: 'changed', minimum: 60, end_at: now + 600000 };
+    const sellerEdit = { revision: sellerRecord.revision, minimum: 60 };
     assert.throws(() => store.editAuction(id, sellerEdit, seller.id, false), /disabled by the administrator/);
 
     const adminRecord = store.inspectAuction(id, admin.id);
     assert.equal(adminRecord.editable, true);
-    const adminEdit = store.editAuction(id, { ...sellerEdit, revision: adminRecord.revision, description: 'Admin edit' }, admin.id);
+    const adminEdit = store.editAuction(id, { revision: adminRecord.revision, description: 'Admin edit', payload: 'admin payload', minimum: 55, end_at: now + 600000 }, admin.id);
     assert.equal(adminEdit.record.description, 'Admin edit');
 
     settings = store.configure({ allow_post_submit_edit: true }, admin.id);
@@ -150,7 +154,8 @@ test('admin can toggle seller post-submission editing without losing database co
     sellerRecord = store.inspectAuction(id, seller.id, false);
     assert.equal(sellerRecord.editable, true);
     const restored = store.editAuction(id, { ...sellerEdit, revision: sellerRecord.revision }, seller.id, false);
-    assert.equal(restored.record.description, 'Seller edit');
+    assert.equal(restored.record.description, 'Admin edit');
+    assert.equal(restored.record.minimum, 60);
   } finally { store.close(); }
 });
 

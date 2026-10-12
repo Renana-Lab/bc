@@ -176,7 +176,7 @@ function PlatformGuideView() {
             </AccordionSummary>
             <AccordionDetails>
               <Typography className="accountText" sx={{ textAlign: 'left !important', padding: '0 0 1rem' }}>
-                Register your Prolific ID or participant identifier first. Then sign in with the same identifier.
+                Enter your identifier and log in. A participant account is created automatically the first time you use it.
               </Typography>
               <Button
                 variant="contained"
@@ -229,7 +229,6 @@ function PlatformGuideView() {
 function Login({ onLogin }) {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const [mode, setMode] = useState('signin');
   const [devLogin, setDevLogin] = useState(false);
   const navigate = useNavigate();
 
@@ -253,12 +252,10 @@ function Login({ onLogin }) {
         />
         <div className="accountQuestion">
           <h1 className="accountTitle">
-            {mode === 'signup' ? 'Create your marketplace account' : 'Sign in to Data Marketplace'}
+            Log in to Data Marketplace
           </h1>
           <div className="accountText">
-            Before starting buying/selling data, please make sure you are logged into your account.
-            <br />
-            {mode === 'signup' ? 'Register your Prolific ID or participant identifier to access the marketplace.' : 'Sign in with your registered Prolific ID or participant identifier. New participants must register first.'}
+            Log in with your identifier.
           </div>
           <form
             className="accountCard"
@@ -268,7 +265,7 @@ function Login({ onLogin }) {
               setBusy(true);
               setError('');
               try {
-                onLogin(await api(mode === 'signup' ? '/register' : '/login', {
+                onLogin(await api('/login', {
                   identifier: data.get('identifier')
                 }));
               } catch (err) {
@@ -280,7 +277,7 @@ function Login({ onLogin }) {
           >
             <TextField
               name="identifier"
-              label="Prolific ID / Identifier"
+              label="Identifier"
               type="text"
               autoComplete="username"
               inputProps={{ maxLength: 200, autoCapitalize: 'none', spellCheck: false }}
@@ -295,19 +292,7 @@ function Login({ onLogin }) {
                 disabled={busy}
                 className="accountActionBtn"
               >
-                {busy ? 'Please wait...' : mode === 'signup' ? 'Register' : 'Sign in'}
-              </Button>
-              <Button
-                type="button"
-                variant="text"
-                disabled={busy}
-                onClick={() => {
-                  setMode(m => m === 'signup' ? 'signin' : 'signup');
-                  setError('');
-                }}
-                style={{ color: '#002884', fontWeight: 600, textTransform: 'none' }}
-              >
-                {mode === 'signup' ? 'Already registered? Sign in' : 'New here? Register'}
+                {busy ? 'Please wait...' : 'Log in'}
               </Button>
               <Button
                 type="button"
@@ -1096,9 +1081,7 @@ function AuctionDetailsView({ user, act, revision, allowPostSubmitEdit }) {
 }
 
 function BotItem({ bot, act }) {
-  const [openingCapEnabled, setOpeningCapEnabled] = useState(bot.max_above_opening !== null);
-  const hourlyLimit = Math.ceil(3600 / bot.interval_seconds) * bot.max_bids;
-  const usage = bot.max_bids > 1 || bot.interval_seconds < 60 ? 'High' : bot.interval_seconds < 120 ? 'Moderate' : 'Low';
+  const hourlyLimit = Math.ceil(3600 / bot.interval_seconds);
   return (
     <form
       className="backendBotRow"
@@ -1107,10 +1090,7 @@ function BotItem({ bot, act }) {
         const data = new FormData(event.currentTarget);
         act(`/admin/bots/${bot.user_id}`, {
           interval_seconds: Number(data.get('interval')),
-          max_bids: Number(data.get('limit')),
-          max_bid: Number(data.get('max')),
-          bid_increment: Number(data.get('increment')),
-          max_above_opening: data.has('openingCap') ? Number(data.get('openingAllowance')) : null,
+          budget: Number(data.get('budget')),
           enabled: data.has('enabled')
         });
       }}
@@ -1122,6 +1102,7 @@ function BotItem({ bot, act }) {
           {!bot.enabled && <span className="backendBotStatus">Disabled</span>}
         </div>
         <small>{bot.cycles} cycles / {bot.sent} bids</small>
+        <small>{bot.budget} credits available</small>
         <small>Last cycle {date(bot.last_seen)}</small>
       </div>
 
@@ -1135,36 +1116,11 @@ function BotItem({ bot, act }) {
           inputProps={{ min: 10, max: 3600 }}
         />
         <TextField
-          name="limit"
-          label="Bids / cycle"
+          name="budget"
+          label="Bot budget (credits)"
           type="number"
-          defaultValue={bot.max_bids}
+          defaultValue={bot.total_budget}
           size="small"
-          inputProps={{ min: 1, max: 5 }}
-        />
-        <TextField
-          name="max"
-          label="Absolute maximum"
-          type="number"
-          defaultValue={bot.max_bid}
-          size="small"
-          inputProps={{ min: 1, max: 1000000000 }}
-        />
-        <TextField
-          name="increment"
-          label="Bid increment"
-          type="number"
-          defaultValue={bot.bid_increment ?? 10}
-          size="small"
-          inputProps={{ min: 1, max: 1000000000 }}
-        />
-        <TextField
-          name="openingAllowance"
-          label="Maximum above opening"
-          type="number"
-          defaultValue={bot.max_above_opening ?? 10}
-          size="small"
-          disabled={!openingCapEnabled}
           inputProps={{ min: 0, max: 1000000000 }}
         />
       </div>
@@ -1173,10 +1129,6 @@ function BotItem({ bot, act }) {
         <FormControlLabel
           control={<Checkbox name="enabled" defaultChecked={Boolean(bot.enabled)} />}
           label="Enabled"
-        />
-        <FormControlLabel
-          control={<Checkbox name="openingCap" checked={openingCapEnabled} onChange={event => setOpeningCapEnabled(event.target.checked)} />}
-          label="Cap from opening price"
         />
         <Button type="submit" variant="outlined" size="small" style={{ borderRadius: '20px' }}>
           Save settings
@@ -1194,7 +1146,7 @@ function BotItem({ bot, act }) {
         >
           <DeleteOutlineIcon color="error" fontSize="small" />
         </IconAction>
-        <small className={`backendBotUsage usage${usage}`}>{usage} / {hourlyLimit} bids per hour max</small>
+        <small className="backendBotUsage">Random auction / up to {hourlyLimit} bids per hour</small>
       </div>
     </form>
   );

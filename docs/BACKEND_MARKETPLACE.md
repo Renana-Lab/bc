@@ -14,11 +14,10 @@ npm run market:create-admin -- --identifier research-admin
 npm run market:dev
 ```
 
-The first command creates the administrator's identifier account. Sign-in and
-registration use a case-insensitive identifier, without an email or password.
-Participants must register their Prolific ID or identifier before signing in.
-`POST /login` never creates an account; `POST /register` rejects existing identifiers
-and signs in only after creating the account successfully. Existing accounts remain registered.
+The first command creates the administrator's identifier account. Login uses a
+case-insensitive identifier, without an email or password. The first login creates
+the participant account automatically; returning logins reuse the same account and budget.
+`POST /register` remains only as a compatibility alias for older clients.
 Identifiers allow letters, numbers, dots, underscores, hyphens, @ and + (200 characters maximum).
 Existing email-shaped identifiers continue to work with the same account and balance.
 The database's unique `email` column and legacy API input remain compatibility aliases;
@@ -51,7 +50,7 @@ a server-verified admin role. There is no frontend admin passcode.
 ## Workflows
 
 - Controlled account creation: participant, administrator, and bot roles.
-- Identifier sign-in and registration; password endpoints are retired.
+- One-step identifier login; password endpoints are retired.
 - Auction-list database controls (database icon per row) for server-authorized
   admins, including the local dev account: inspect auction records, bids, ledger
   and audit history; edit open, unbid records; close bidding or finalize payment.
@@ -60,21 +59,22 @@ a server-verified admin role. There is no frontend admin passcode.
   is exposed. Non-admin requests are rejected even when called directly.
 - Auctions: minimum bid, confidential payload, 1-30 minute duration, countdown,
   cumulative bids, bid history, winner-only payload access after settlement.
-- Sellers can edit their own open, unbid auctions from the list or detail page.
+- Sellers can edit only the minimum bid of their own open, unbid auctions.
   Ownership and zero-bid status are rechecked inside the save transaction; a
   concurrent first bid invalidates the edit. Closed/finalized auctions are locked.
 - Budget: default 2,000 integer credits, per-user allocation and atomic global
   reset. Budget settings include existing winning reservations; resetting cannot
   manufacture extra credits when an old winner is later outbid.
 - Automatic and manual finalization. Seller credits are transferred exactly once.
-- Bot Command Center: persistent server-hosted bots, independent intervals,
-  1-5 bids per cycle, maximum bid, enable/start/stop, manual rounds, observatory.
-  One active-only snapshot is shared by due bots, with rotating unique auction
-  assignment. All execution stays inside the marketplace service.
+- Bot Command Center: persistent server-hosted bots, independent budgets and
+  intervals, random eligible-auction selection, enable/start/stop, manual rounds,
+  and observatory. Each bot places at most one bid per round using a fixed ten-credit
+  outbid step. A shared active-only snapshot prevents duplicate assignments in the
+  same round. All execution stays inside the marketplace service.
 - Batch Auction Studio: atomic JSON batches of up to 50 auctions.
 - Dynamic active list, admin early close, observed list history at a timestamp.
 - Admin-controlled post-submission editing. When enabled, sellers may edit only
-  open auctions with no bids; administrators retain the same audited database
+  the minimum bid on open auctions with no bids; administrators retain the audited database
   controls when seller editing is disabled.
 - Live counts: human/admin accounts with a heartbeat in the last 45 seconds,
   running bots with recent scheduler activity, and active auctions. Multiple

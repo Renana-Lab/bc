@@ -3,11 +3,10 @@ const assert = require('node:assert/strict');
 const { MarketStore } = require('./store');
 const { createMarketServer } = require('./server');
 
-test('email signup and returning login share an account and preserve budgets', () => {
+test('first identifier login creates an account and returning login preserves its budget', () => {
   const store = new MarketStore();
   try {
-    assert.throws(() => store.identifierLogin('person@example.com'), /register first/);
-    const first = store.registerIdentifier('  Person@Example.com  ');
+    const first = store.identifierLogin('  Person@Example.com  ');
     assert.equal(first.user.role, 'user');
     assert.equal(first.user.budget, 2000);
     store.run('UPDATE users SET budget=1800 WHERE id=?', first.user.id);
@@ -21,35 +20,28 @@ test('email signup and returning login share an account and preserve budgets', (
   } finally { store.close(); }
 });
 
-test('registration is required before login; duplicates never create sessions or reset budgets', async t => {
+test('one-step login creates unknown identifiers and never resets returning budgets', async t => {
   const store = new MarketStore();
   const server = createMarketServer(store, { origin: 'http://localhost:3010' });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(async () => { await new Promise(resolve => server.close(resolve)); store.close(); });
   const base = `http://127.0.0.1:${server.address().port}/api/market`;
   const post = (route, value) => fetch(base + route, { method: 'POST', headers: { Origin: 'http://localhost:3010', 'Content-Type': 'application/json' }, body: JSON.stringify(value) });
-  for (const value of [{ identifier: 'prolific-001' }, { email: 'prolific-001', registering: true, developer: true }]) {
-    const rejected = await post('/login', value);
-    assert.equal(rejected.status, 403);
-    assert.equal(rejected.headers.get('set-cookie'), null);
-  }
-  assert.equal(store.one('SELECT COUNT(*) n FROM users').n, 0);
-  assert.equal(store.one('SELECT COUNT(*) n FROM sessions').n, 0);
-  assert.equal(store.one('SELECT COUNT(*) n FROM ledger').n, 0);
   assert.equal((await fetch(base + '/auctions')).status, 401);
-  const response = await post('/register', { identifier: ' Prolific-001 ' });
+  const response = await post('/login', { identifier: ' Prolific-001 ' });
   assert.equal(response.status, 200);
   const first = (await response.json()).user;
   assert.equal(first.identifier, 'prolific-001');
+  assert.equal(first.budget, 2000);
+  assert.equal(store.one('SELECT COUNT(*) n FROM users').n, 1);
+  assert.equal(store.one('SELECT COUNT(*) n FROM ledger WHERE user_id=?', first.id).n, 1);
   const count = store.one('SELECT COUNT(*) n FROM sessions').n;
   store.run('UPDATE users SET budget=1800 WHERE id=?', first.id);
-  const duplicate = await post('/register', { identifier: 'PROLIFIC-001' });
-  assert.equal(duplicate.status, 409);
-  assert.equal(duplicate.headers.get('set-cookie'), null);
-  assert.equal(store.one('SELECT COUNT(*) n FROM sessions').n, count);
-  const login = await post('/login', { identifier: 'prolific-001' });
+  const login = await post('/login', { identifier: 'PROLIFIC-001' });
   assert.equal(login.status, 200);
   assert.equal((await login.json()).user.budget, 1800);
+  assert.equal(store.one('SELECT COUNT(*) n FROM users').n, 1);
+  assert.equal(store.one('SELECT COUNT(*) n FROM sessions').n, count + 1);
   const cookie = login.headers.get('set-cookie').split(';')[0];
   assert.equal((await fetch(base + '/auctions', { headers: { Cookie: cookie } })).status, 200);
 });
@@ -73,9 +65,9 @@ test('dev entry is opt-in, loopback-only, blocked in production and not reachabl
   const devCookie = response.headers.get('set-cookie').split(';')[0];
   assert.equal((await fetch(base + '/admin/state', { headers: { Cookie: devCookie } })).status, 200);
   assert.equal((await (await post('/dev-login')).json()).user.id, first.user.id);
-  assert.equal((await post('/login', { email: first.user.email })).status, 403);
-  const signup = await (await post('/register', { email: 'new@example.com', role: 'admin', developer: true })).json();
-  assert.equal(signup.user.role, 'user');
+  assert.equal((await post('/login', { identifier: first.user.identifier })).status, 403);
+  const login = await (await post('/login', { identifier: 'new@example.com', role: 'admin', developer: true })).json();
+  assert.equal(login.user.role, 'user');
   options.origin = 'https://example.com';
   assert.equal((await post('/dev-login')).status, 403);
   options.origin = 'http://localhost:3010';

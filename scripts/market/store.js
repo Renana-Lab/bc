@@ -4,6 +4,7 @@ const {
 const {
   randomUUID,
   randomBytes,
+  randomInt,
   scrypt,
   timingSafeEqual,
   createHash
@@ -171,25 +172,23 @@ class MarketStore {
     return this.identifierLogin(value, developer);
   }
   identifierLogin(value, developer = false) {
-    return this.identifierSession(value, developer, false);
+    return this.identifierSession(value, developer);
   }
   registerIdentifier(value) {
-    return this.identifierSession(value, false, true);
+    return this.identifierSession(value, false);
   }
-  identifierSession(value, developer, registering) {
+  identifierSession(value, developer) {
     // Keep the legacy unique column so existing accounts, sessions and ledger references survive unchanged.
     const email = identifier(value);
     check(developer || email !== 'dev-admin@market.invalid', 'Use the local development sign-in button for this account', 403);
     return this.transaction(() => {
       let user = this.one('SELECT * FROM users WHERE email=?', email);
-      check(!registering || !user, 'This identifier is already registered. Please sign in.', 409);
-      check(user || registering || developer, 'This identifier is not registered. Please register first.', 403);
       if (!user) {
         const id = randomUUID(), role = developer ? 'admin' : 'user';
         const unusedCredential = `${randomBytes(16).toString('hex')}:${randomBytes(64).toString('hex')}`;
         this.run('INSERT INTO users(id,name,email,password,role,budget,created_at) VALUES(?,?,?,?,?,0,?)', id, developer ? 'Development admin' : email, email, unusedCredential, role, this.now());
         this.balance(id, this.settings().default_budget, 'account-created', id);
-        this.event('account-created', id, { id, role, source: developer ? 'development' : 'identifier-signup' });
+        this.event('account-created', id, { id, role, source: developer ? 'development' : 'identifier-login' });
         user = this.user(id);
       }
       check(!user.disabled && user.role !== 'bot', 'Account unavailable', 403);
@@ -278,9 +277,12 @@ class MarketStore {
       check(adminOnly || Boolean(this.settings().allow_post_submit_edit), 'Auction editing is currently disabled by the administrator.', 403);
       check(input.revision === current.revision, 'Auction changed. Reload the record before saving.', 409);
       check(current.editable, 'Only open auctions without bids can be edited. Bid and payment history cannot be rewritten.', 409);
-      check(Object.keys(input).every(key => ['revision', 'description', 'payload', 'minimum', 'end_at'].includes(key)), 'Unsupported database field');
-      const description = label(input.description, 300), payload = label(input.payload, 50000);
-      const minimum = integer(input.minimum), end = integer(input.end_at, this.now() + 1000, this.now() + 30 * 60000);
+      const allowedFields = adminOnly ? ['revision', 'description', 'payload', 'minimum', 'end_at'] : ['revision', 'minimum'];
+      check(Object.keys(input).every(key => allowedFields.includes(key)), adminOnly ? 'Unsupported database field' : 'Sellers can only change the minimum bid', 403);
+      const description = adminOnly ? label(input.description, 300) : current.record.description;
+      const payload = adminOnly ? label(input.payload, 50000) : current.record.payload;
+      const minimum = integer(input.minimum);
+      const end = adminOnly ? integer(input.end_at, this.now() + 1000, this.now() + 30 * 60000) : current.record.end_at;
       this.run('UPDATE auctions SET description=?,payload=?,minimum=?,end_at=? WHERE id=?', description, payload, minimum, end, id);
       this.event('auction-edited', actor, { id, before: { description: current.record.description, minimum: current.record.minimum, end_at: current.record.end_at }, after: { description, minimum, end_at: end }, payloadChanged: payload !== current.record.payload });
       this.snapshot('auction-edited');
@@ -480,30 +482,30 @@ class MarketStore {
     this.admin(actor);
     check(this.one('SELECT user_id FROM bots WHERE user_id=?', id), 'Bot not found', 404);
     const current = this.one('SELECT * FROM bots WHERE user_id=?', id);
+    check(Object.keys(input).every(key => ['interval_seconds', 'budget', 'running', 'enabled'].includes(key)), 'Unsupported bot setting');
     const interval = integer(input.interval_seconds ?? current.interval_seconds, 10, 3600);
-    const maxBids = integer(input.max_bids ?? current.max_bids, 1, 5),
-      maxBid = integer(input.max_bid ?? current.max_bid),
-      bidIncrement = integer(input.bid_increment ?? current.bid_increment, 1, LIMIT);
-    const openingCapInput = input.max_above_opening === undefined ? current.max_above_opening : input.max_above_opening;
-    const maxAboveOpening = openingCapInput === null ? null : integer(openingCapInput, 0, LIMIT);
     const running = input.running ?? Boolean(current.running),
       enabled = input.enabled ?? Boolean(current.enabled);
     check(typeof running === 'boolean' && typeof enabled === 'boolean', 'Invalid bot state');
-    if (running) this.user(id);
-    this.run('UPDATE bots SET interval_seconds=?,max_bids=?,max_bid=?,bid_increment=?,max_above_opening=?,running=?,enabled=?,next_at=? WHERE user_id=?', interval, maxBids, maxBid, bidIncrement, maxAboveOpening, Number(running && enabled), Number(enabled), this.now(), id);
-    this.event('bot-configured', actor, {
-      id,
-      interval,
-      maxBids,
-      maxBid,
-      bidIncrement,
-      maxAboveOpening,
-      running,
-      enabled
+    return this.transaction(() => {
+      const user = this.user(id);
+      if (input.budget !== undefined) {
+        const total = integer(input.budget, 0);
+        const held = this.one('SELECT COALESCE(SUM(highest),0) n FROM auctions WHERE winner_id=? AND finalized_at IS NULL', id).n;
+        check(total >= held, `Budget cannot be lower than ${held} reserved credits`, 409);
+        this.balance(id, total - held - user.budget, 'bot-budget-set', actor);
+      }
+      this.run('UPDATE bots SET interval_seconds=?,max_bids=1,bid_increment=10,max_above_opening=NULL,running=?,enabled=?,next_at=? WHERE user_id=?', interval, Number(running && enabled), Number(enabled), this.now(), id);
+      this.event('bot-configured', actor, {
+        id,
+        interval,
+        budget: input.budget ?? user.budget,
+        strategy: 'random-auction',
+        running,
+        enabled
+      });
+      return { id };
     });
-    return {
-      id
-    };
   }
   removeBot(id, actor) {
     this.admin(actor);
@@ -533,17 +535,23 @@ class MarketStore {
     const active = this.active(),
       assigned = new Set(),
       decisions = [];
-    // Rotate both cohorts and auction candidates; all bots share one active-only read.
+    // All bots share one active-only read. Each bot receives one random eligible auction.
     const roundNumber = this.one('SELECT COUNT(*) n FROM rounds').n;
     const rotate = items => items.length ? [...items.slice(roundNumber % items.length), ...items.slice(0, roundNumber % items.length)] : [];
     for (const bot of rotate(bots)) {
       let sent = 0;
-      for (const a of rotate(active)) {
-        if (sent >= bot.max_bids) break;
-        if (assigned.has(a.id) || a.seller_id === bot.user_id || a.winner_id === bot.user_id || a.end_at - this.now() < 20000) continue;
-        const target = Math.max(a.minimum, a.highest + bot.bid_increment);
-        const strategyMaximum = bot.max_above_opening === null ? bot.max_bid : Math.min(bot.max_bid, a.minimum + bot.max_above_opening);
-        if (target > strategyMaximum || target > this.user(bot.user_id).budget) continue;
+      const budget = this.user(bot.user_id).budget;
+      const candidates = active.filter(a => {
+        if (assigned.has(a.id) || a.seller_id === bot.user_id || a.winner_id === bot.user_id || a.end_at - this.now() < 20000) return false;
+        return Math.max(a.minimum, a.highest + 10) <= budget;
+      });
+      for (let index = candidates.length - 1; index > 0; index--) {
+        const swap = randomInt(index + 1);
+        [candidates[index], candidates[swap]] = [candidates[swap], candidates[index]];
+      }
+      const a = candidates[0];
+      if (a) {
+        const target = Math.max(a.minimum, a.highest + 10);
         const own = this.one('SELECT COALESCE(SUM(amount),0) n FROM bids WHERE auction_id=? AND user_id=?', a.id, bot.user_id).n;
         assigned.add(a.id);
         try {
@@ -567,7 +575,7 @@ class MarketStore {
       if (!sent) decisions.push({
         bot: bot.user_id,
         outcome: 'skipped',
-        reason: 'No eligible unassigned auction within budget and bid limit'
+        reason: 'No eligible unassigned auction within this bot budget'
       });
       this.run('UPDATE bots SET next_at=?,last_seen=?,cycles=cycles+1,sent=sent+? WHERE user_id=?', this.now() + bot.interval_seconds * 1000, this.now(), sent, bot.user_id);
     }
@@ -609,7 +617,9 @@ class MarketStore {
     this.admin(actor);
     return {
       users: this.all('SELECT id,name,email,email AS identifier,role,budget,disabled FROM users'),
-      bots: this.all('SELECT b.*,u.name FROM bots b JOIN users u ON u.id=b.user_id WHERE u.disabled=0 ORDER BY u.created_at,b.user_id'),
+      bots: this.all(`SELECT b.*,u.name,u.budget,
+        u.budget + COALESCE((SELECT SUM(a.highest) FROM auctions a WHERE a.winner_id=u.id AND a.finalized_at IS NULL),0) total_budget
+        FROM bots b JOIN users u ON u.id=b.user_id WHERE u.disabled=0 ORDER BY u.created_at,b.user_id`),
       rounds: this.all('SELECT * FROM rounds ORDER BY id DESC LIMIT 30').map(r => ({
         ...r,
         detail: JSON.parse(r.detail)

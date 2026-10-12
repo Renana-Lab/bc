@@ -99,7 +99,7 @@ function createMarketServer(store, options = {}) {
           check(++attempt.count <= limit, 'Too many sign-in attempts. Wait one minute.', 429);
           attempts.set(key, attempt);
         }
-        const result = route === '/register' ? store.registerIdentifier(identifier) : store.identifierLogin(identifier);
+        const result = store.identifierLogin(identifier);
         res.setHeader('Set-Cookie', cookie(result.token));
         send(200, {
           user: result.user,

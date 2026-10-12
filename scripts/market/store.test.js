@@ -188,8 +188,7 @@ test('100 bots, 1000 ended auctions, 50 active: distinct assignments and active-
   for (let i = 0; i < 100; i++) {
     const bot = await make(`bot${i}`, 'bot');
     s.botSettings(bot.id, {
-      running: true,
-      max_bids: 1 + i % 5
+      running: true
     }, admin.id);
   }
   const round = s.runBots();
@@ -228,31 +227,31 @@ test('bot command controls run one bot and retire it without deleting audit evid
   assert.equal(s.one("SELECT COUNT(*) n FROM events WHERE type='bot-retired'").n, 1);
   assert.equal(s.one('SELECT COUNT(*) n FROM rounds').n, 1);
 });
-test('bots can cap bids relative to each auction opening price with configurable increments', async t => {
+test('bots use independent budgets, one random auction per round, and a fixed ten-credit step', async t => {
   const { s, admin, a, auction, make } = await fixture(t);
-  const bot = await make('opening-cap-bot', 'bot');
+  const bot = await make('budgeted-random-bot', 'bot');
   const id = auction(30);
   s.botSettings(bot.id, {
     running: true,
-    max_bid: 2000,
-    bid_increment: 10,
-    max_above_opening: 10
+    budget: 75
   }, admin.id);
 
   const firstRound = s.runBots(true, bot.id);
   assert.equal(firstRound.sent, 1);
   assert.equal(s.auction(id, admin.id).highest, 50);
+  assert.equal(s.user(bot.id).budget, 25);
 
   s.bid(id, 70, a.id, randomUUID());
-  const cappedRound = s.runBots(true, bot.id);
-  assert.equal(cappedRound.sent, 0);
+  const overBudgetRound = s.runBots(true, bot.id);
+  assert.equal(overBudgetRound.sent, 0);
   assert.equal(s.auction(id, admin.id).highest, 70);
-  assert.match(cappedRound.decisions[0].reason, /No eligible/);
+  assert.match(overBudgetRound.decisions[0].reason, /budget/);
 
-  s.botSettings(bot.id, { bid_increment: 15, max_above_opening: null }, admin.id);
-  const unrestrictedRound = s.runBots(true, bot.id);
-  assert.equal(unrestrictedRound.sent, 1);
-  assert.equal(s.auction(id, admin.id).highest, 85);
+  s.botSettings(bot.id, { budget: 100 }, admin.id);
+  const fundedRound = s.runBots(true, bot.id);
+  assert.equal(fundedRound.sent, 1);
+  assert.equal(s.auction(id, admin.id).highest, 80);
+  assert.equal(s.user(bot.id).budget, 20);
 });
 test('restart preserves bids, balances and idempotency', async t => {
   const dir = mkdtempSync(join(tmpdir(), 'market-test-'));

@@ -80,15 +80,15 @@ const {
     page.on('request', r => requests.push(r.url()));
     await page.goto(base + '/manage-budget');
     await page.getByRole('button', {
-      name: 'Sign in',
+      name: 'Log in',
       exact: true
     }).waitFor();
     assert.equal(await page.getByRole('heading', {
       name: 'Admin Zone'
     }).count(), 0);
-    await page.getByLabel('Prolific ID / Identifier').fill('admin@example.com');
+    await page.getByLabel('Identifier').fill('admin@example.com');
     await page.getByRole('button', {
-      name: 'Sign in',
+      name: 'Log in',
       exact: true
     }).click();
     await page.getByRole('heading', { name: 'Admin Zone', exact: true }).waitFor();
@@ -164,9 +164,9 @@ const {
       name: 'Sign out',
       exact: true
     }).click();
-    await page.getByLabel('Prolific ID / Identifier').fill(user.identifier);
+    await page.getByLabel('Identifier').fill(user.identifier);
     await page.getByRole('button', {
-      name: 'Sign in',
+      name: 'Log in',
       exact: true
     }).click();
     await page.getByRole('heading', {
@@ -176,15 +176,17 @@ const {
     const owned = store.createAuction({ description: 'Seller-owned auction', payload: 'Owner data', minimum: 50, minutes: 25 }, user.id);
     await page.goto(`${base}/auction/${owned.id}`);
     await page.getByRole('button', { name: 'Edit your auction', exact: true }).click();
-    await page.getByRole('dialog').getByLabel(/^Description/).fill('Seller edited auction');
+    assert.equal(await page.getByRole('dialog').getByLabel(/^Description/).isDisabled(), true);
+    await page.getByRole('dialog').getByLabel(/^Minimum bid/).fill('60');
     await page.getByRole('button', { name: 'Save changes', exact: true }).click();
     await page.getByText('Auction updated.', { exact: true }).waitFor();
-    assert.equal(store.inspectAuction(owned.id, user.id, false).record.description, 'Seller edited auction');
-    await page.getByRole('dialog').getByLabel(/^Description/).fill('Must not save after first bid');
-    store.bid(owned.id, 50, admin.id, 'browser-edit-race');
+    assert.equal(store.inspectAuction(owned.id, user.id, false).record.description, 'Seller-owned auction');
+    assert.equal(store.inspectAuction(owned.id, user.id, false).record.minimum, 60);
+    await page.getByRole('dialog').getByLabel(/^Minimum bid/).fill('70');
+    store.bid(owned.id, 60, admin.id, 'browser-edit-race');
     await page.getByRole('button', { name: 'Save changes', exact: true }).click();
     await page.getByText('Auction changed. Reload the record before saving.', { exact: true }).waitFor();
-    assert.equal(store.inspectAuction(owned.id, user.id, false).record.description, 'Seller edited auction');
+    assert.equal(store.inspectAuction(owned.id, user.id, false).record.minimum, 60);
     await page.getByRole('button', { name: 'Done', exact: true }).click();
     await page.getByRole('button', { name: 'Edit your auction', exact: true }).waitFor({ state: 'hidden' });
     await page.goto(`${base}/auction/${auction.id}`);
@@ -219,13 +221,8 @@ const {
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
     assert.equal(await page.getByRole('button', { name: /Manage database record/ }).count(), 0);
     await page.getByRole('button', { name: 'Sign out', exact: true }).click();
-    await page.getByLabel('Prolific ID / Identifier').fill('participant-browser-02');
-    await page.getByRole('button', { name: 'Sign in', exact: true }).click();
-    await page.getByText('This identifier is not registered. Please register first.', { exact: true }).waitFor();
-    assert.equal(store.one('SELECT id FROM users WHERE email=?', 'participant-browser-02'), undefined);
-    assert.equal(await page.getByRole('heading', { name: 'Auctions', exact: true }).count(), 0);
-    await page.getByRole('button', { name: 'New here? Register', exact: true }).click();
-    await page.getByRole('button', { name: 'Register', exact: true }).click();
+    await page.getByLabel('Identifier').fill('participant-browser-02');
+    await page.getByRole('button', { name: 'Log in', exact: true }).click();
     await page.getByRole('heading', { name: 'Auctions', exact: true }).waitFor();
     assert.equal(store.one('SELECT role FROM users WHERE email=?', 'participant-browser-02').role, 'user');
     await page.getByRole('button', { name: 'Sign out', exact: true }).click();
@@ -235,7 +232,7 @@ const {
     assert.equal(await page.getByLabel('Admin password').count(), 0);
     assert.deepEqual(errors, []);
     assert(!requests.some(url => !url.startsWith(base)), 'Unexpected external request');
-    console.log('Browser checks passed: login, admin gate, bots, creation, bidding, finalization, purchased data, desktop/mobile overflow, and local-only requests.');
+    console.log('Browser checks passed: one-step login, admin gate, bots, minimum-only seller edits, creation, bidding, finalization, purchased data, desktop/mobile overflow, and local-only requests.');
     await context.close();
   } catch (error) {
     console.error('Page errors:', errors, 'Page text:', await page?.locator('body').innerText());
