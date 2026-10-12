@@ -191,12 +191,12 @@ function PlatformGuideView() {
           <Accordion slots={{ heading: "h2" }}>
             <AccordionSummary expandIcon={<ExpandMoreIcon />}>
               <Typography variant="h6" component="span" sx={{ fontWeight: 600, color: '#002884' }}>
-                <span className="guideStepNumber">2</span> Check Your Starting Credit Balance
+                <span className="guideStepNumber">2</span> Check Your Starting Budget
               </Typography>
             </AccordionSummary>
             <AccordionDetails>
               <Typography className="accountText" sx={{ textAlign: 'left !important', padding: '0 0 1rem' }}>
-                Every participant account is allocated research credits to bid on data auctions. Your active budget is displayed in the top navigation bar at all times.
+                Every participant account receives a budget for bidding on data auctions. Your available budget is displayed in the top navigation bar at all times.
               </Typography>
             </AccordionDetails>
           </Accordion>
@@ -209,7 +209,7 @@ function PlatformGuideView() {
             </AccordionSummary>
             <AccordionDetails>
               <Typography className="accountText" sx={{ textAlign: 'left !important', padding: '0 0 1rem' }}>
-                Browse live auctions, review data descriptions, and place bids within your credit budget. When an auction concludes, the highest bidder receives access to the dataset.
+                Browse live auctions, review data descriptions, and place bids within your available budget. When an auction concludes, the highest bidder receives access to the dataset.
               </Typography>
               <Button
                 variant="contained"
@@ -355,7 +355,7 @@ function HomePageView({ user }) {
             <br />
             <p style={{ margin: 0, fontSize: '1.2rem' }}>
               This is a research platform, for running <br />
-              auctions of personal data using credits.
+              auctions of personal data using the marketplace budget.
               <br />
               Each auction lasts up to 30 mins.
             </p>
@@ -533,7 +533,7 @@ function AuctionsListView({ auctions, admin, user, act, refresh, allowPostSubmit
                       <Countdown end={a.end_at} plain />
                     </TableCell>
                     <TableCell align="center" style={{ color: '#0d0d4e', fontWeight: 700 }}>
-                      {a.highest.toLocaleString()} credits
+                      {a.highest.toLocaleString()}
                     </TableCell>
                     <TableCell align="center" style={{ color: '#0d0d4e' }}>
                       {a.bidders}
@@ -702,7 +702,7 @@ function NewAuctionView({ act }) {
             </Typography>
           </Box>
 
-          {renderTooltip('minBid', 'Minimum Contribution', 'Minimum Bid (in credits)')}
+          {renderTooltip('minBid', 'Minimum Contribution', 'Minimum Bid')}
           <TextField
             type="number"
             sx={{ width: '85%' }}
@@ -867,12 +867,12 @@ function AuctionDetailsView({ user, act, revision, allowPostSubmitEdit }) {
           </div>
 
           <div className="introductionDetail">
-            <span className="introductionLabel">Minimum bid (credits) required: </span>
+            <span className="introductionLabel">Minimum bid required: </span>
             <span className="introductionText">{a.minimum}</span>
           </div>
 
           <div className="introductionDetail">
-            <span className="introductionLabel">Highest bid (credits) recorded: </span>
+            <span className="introductionLabel">Highest bid recorded: </span>
             <span className="introductionText">{a.highest}</span>
           </div>
 
@@ -883,7 +883,7 @@ function AuctionDetailsView({ user, act, revision, allowPostSubmitEdit }) {
 
           <div className="introductionDetail">
             <span className="introductionLabel">Your cumulative bid: </span>
-            <span className="introductionText">{a.my_bid} credits</span>
+            <span className="introductionText">{a.my_bid}</span>
           </div>
 
           <div className="introductionDetail">
@@ -923,7 +923,7 @@ function AuctionDetailsView({ user, act, revision, allowPostSubmitEdit }) {
         {isAuctionActive && !isManager && (
           <div className={showStyles.contributeForm}>
             <Typography variant="h6" textAlign="center" sx={{ marginBottom: '1rem', color: '#002884', fontWeight: 700 }}>
-              Remaining Budget: {user.budget} credits
+              Remaining Budget: {user.budget}
             </Typography>
             <form
               onSubmit={async event => {
@@ -942,7 +942,7 @@ function AuctionDetailsView({ user, act, revision, allowPostSubmitEdit }) {
               </div>
               <TextField
                 name="amount"
-                label="Add to your bid (credits)"
+                label="Add to your bid"
                 type="number"
                 defaultValue={Math.max(1, a.minimum - a.my_bid, a.highest + 10 - a.my_bid)}
                 required
@@ -1102,7 +1102,7 @@ function BotItem({ bot, act }) {
           {!bot.enabled && <span className="backendBotStatus">Disabled</span>}
         </div>
         <small>{bot.cycles} cycles / {bot.sent} bids</small>
-        <small>{bot.budget} credits available</small>
+        <small>Available budget: {bot.budget}</small>
         <small>Last cycle {date(bot.last_seen)}</small>
       </div>
 
@@ -1117,7 +1117,7 @@ function BotItem({ bot, act }) {
         />
         <TextField
           name="budget"
-          label="Bot budget (credits)"
+          label="Bot budget"
           type="number"
           defaultValue={bot.total_budget}
           size="small"
@@ -1602,7 +1602,7 @@ function AdminView({ auctions, act, revision, notify }) {
     const tableHtml = tables.map(({ name, rows }) =>
       `<h2>${escapeHtml(name)}</h2><table><tr>${Object.keys(rows[0] || {}).map(h => `<th>${escapeHtml(h)}</th>`).join('')}</tr>${rows.map(r => `<tr>${Object.values(r).map(v => `<td>${escapeHtml(v)}</td>`).join('')}</tr>`).join('')}</table>`
     ).join('');
-    downloadBlob(`<!doctype html><html><meta charset="utf-8"><title>Data Marketplace report</title><style>body{font:14px system-ui;margin:24px}table{border-collapse:collapse;width:100%;font-size:11px}td,th{padding:6px;border:1px solid #ccc;overflow-wrap:anywhere}h2{break-before:auto}@media print{table{font-size:8px}}</style><h1>Data Marketplace Report</h1><p>${escapeHtml(date(report.generatedAt))} / Credits</p>${tableHtml}</html>`, 'text/html', 'data-marketplace-report.html');
+    downloadBlob(`<!doctype html><html><meta charset="utf-8"><title>Data Marketplace report</title><style>body{font:14px system-ui;margin:24px}table{border-collapse:collapse;width:100%;font-size:11px}td,th{padding:6px;border:1px solid #ccc;overflow-wrap:anywhere}h2{break-before:auto}@media print{table{font-size:8px}}</style><h1>Data Marketplace Report</h1><p>${escapeHtml(date(report.generatedAt))}</p>${tableHtml}</html>`, 'text/html', 'data-marketplace-report.html');
   };
 
   const botSummary = {
@@ -1694,7 +1694,7 @@ function AdminView({ auctions, act, revision, notify }) {
             <Table size="small">
               <TableHead>
                 <TableRow>
-                  {['Name', 'Identifier', 'Role', 'Available credits', 'Account', 'Actions'].map((h, i) => (
+                  {['Name', 'Identifier', 'Role', 'Available budget', 'Account', 'Actions'].map((h, i) => (
                     <TableCell key={i} style={{ fontWeight: 700, color: '#002884' }}>{h}</TableCell>
                   ))}
                 </TableRow>
@@ -1711,7 +1711,7 @@ function AdminView({ auctions, act, revision, notify }) {
                       <Button
                         size="small"
                         onClick={() => {
-                          const total = window.prompt('Set total budget, including credits reserved in winning bids:');
+                          const total = window.prompt('Set total budget, including amounts reserved in winning bids:');
                           if (total !== null && total.trim()) act(`/admin/users/${u.id}/budget`, { total: Number(total) });
                         }}
                       >
@@ -1765,7 +1765,7 @@ function AdminView({ auctions, act, revision, notify }) {
           >
             <TextField
               name="total"
-              label="Total credits per account"
+              label="Total budget per account"
               type="number"
               defaultValue={state.settings.default_budget}
               size="small"
@@ -1973,7 +1973,7 @@ function AdminView({ auctions, act, revision, notify }) {
                       <TableCell align="center">
                         {isActive ? <Countdown end={a.end_at} /> : <span style={{ color: '#b71c1c', fontWeight: 700 }}>Awaiting finalization</span>}
                       </TableCell>
-                      <TableCell align="center" style={{ fontWeight: 700 }}>{a.highest} credits</TableCell>
+                      <TableCell align="center" style={{ fontWeight: 700 }}>{a.highest}</TableCell>
                       <TableCell align="center">{a.bidders}</TableCell>
                       <TableCell align="center">
                         <Button component={Link} to={`/auction/${a.id}`} size="small">View</Button>
@@ -2138,7 +2138,7 @@ function AccountView({ user }) {
         </div>
         <div className="introductionDetail">
           <span className="introductionLabel">Budget: </span>
-          <span className="introductionText" style={{ fontWeight: 700 }}>{user.budget} credits</span>
+          <span className="introductionText" style={{ fontWeight: 700 }}>{user.budget}</span>
         </div>
       </div>
     </div>

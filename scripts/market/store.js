@@ -410,7 +410,7 @@ class MarketStore {
     return this.transaction(() => {
       const user = this.user(id);
       const held = this.one('SELECT COALESCE(SUM(highest),0) n FROM auctions WHERE winner_id=? AND finalized_at IS NULL', id).n;
-      check(total >= held, `Budget cannot be lower than ${held} reserved credits`, 409);
+      check(total >= held, `Budget cannot be lower than ${held} currently reserved`, 409);
       this.balance(id, total - held - user.budget, 'admin-budget-set', actor);
       this.event('budget-set', actor, {
         id,
@@ -444,7 +444,7 @@ class MarketStore {
       const users = this.all('SELECT id,budget FROM users');
       for (const user of users) {
         const held = this.one('SELECT COALESCE(SUM(highest),0) n FROM auctions WHERE winner_id=? AND finalized_at IS NULL', user.id).n;
-        check(total >= held, 'A user has more reserved credits than this budget. No budgets were changed.', 409);
+        check(total >= held, 'A user has more reserved funds than this budget. No budgets were changed.', 409);
         this.balance(user.id, total - held - user.budget, 'admin-global-budget-reset', actor);
       }
       this.run('UPDATE settings SET default_budget=? WHERE id=1', total);
@@ -492,7 +492,7 @@ class MarketStore {
       if (input.budget !== undefined) {
         const total = integer(input.budget, 0);
         const held = this.one('SELECT COALESCE(SUM(highest),0) n FROM auctions WHERE winner_id=? AND finalized_at IS NULL', id).n;
-        check(total >= held, `Budget cannot be lower than ${held} reserved credits`, 409);
+        check(total >= held, `Budget cannot be lower than ${held} currently reserved`, 409);
         this.balance(id, total - held - user.budget, 'bot-budget-set', actor);
       }
       this.run('UPDATE bots SET interval_seconds=?,max_bids=1,bid_increment=10,max_above_opening=NULL,running=?,enabled=?,next_at=? WHERE user_id=?', interval, Number(running && enabled), Number(enabled), this.now(), id);
@@ -640,7 +640,7 @@ class MarketStore {
       return {
         version: 1,
         mode: 'backend',
-        unit: 'credits',
+        unit: 'budget',
         generatedAt: this.now(),
         settings: this.settings(),
         users: this.all('SELECT id,name,email AS identifier,role,budget,disabled FROM users'),

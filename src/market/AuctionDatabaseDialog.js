@@ -53,7 +53,7 @@ export default function AuctionDatabaseDialog({ id, onClose, refresh, administra
           <TextField label="Seller identifier" value={data.seller_identifier} InputProps={{ readOnly: true }} />
           <TextField label="Description" value={draft.description} onChange={e => setDraft({ ...draft, description: e.target.value })} disabled={busy || !data.editable || !administrative} required inputProps={{ maxLength: 300 }} />
           {administrative && <TextField label="Data payload" value={draft.payload} onChange={e => setDraft({ ...draft, payload: e.target.value })} multiline minRows={3} disabled={busy || !data.editable} required inputProps={{ maxLength: 50000 }} />}
-          <TextField label="Minimum bid (credits)" type="number" value={draft.minimum} onChange={e => setDraft({ ...draft, minimum: e.target.value })} disabled={busy || !data.editable} required inputProps={{ min: 1, max: 1000000000, step: 1 }} />
+          <TextField label="Minimum bid" type="number" value={draft.minimum} onChange={e => setDraft({ ...draft, minimum: e.target.value })} disabled={busy || !data.editable} required inputProps={{ min: 1, max: 1000000000, step: 1 }} />
           <TextField label="Closing time" type="datetime-local" InputLabelProps={{ shrink: true }} value={new Date(draft.end_at - new Date(draft.end_at).getTimezoneOffset() * 60000).toISOString().slice(0, 19)} onChange={e => { const time = new Date(e.target.value).getTime(); if (Number.isFinite(time)) setDraft({ ...draft, end_at: time }); }} disabled={busy || !data.editable || !administrative} inputProps={{ step: 1 }} required />
         </form> : <div className="database-table-scroll"><Table size="small"><TableHead><TableRow>{columns.map(col => <TableCell key={col}>{col.replaceAll('_', ' ')}</TableCell>)}</TableRow></TableHead><TableBody>
           {rows.map((row, index) => <TableRow key={row.id ?? index}>{columns.map(col => <TableCell key={col}>{col === 'created_at' ? new Date(row[col]).toLocaleString() : String(row[col] ?? '-')}</TableCell>)}</TableRow>)}
@@ -65,7 +65,7 @@ export default function AuctionDatabaseDialog({ id, onClose, refresh, administra
       <Button disabled={busy} onClick={() => run(load)}>Reload record</Button>
       {administrative && data && !data.record.finalized_at && <Button color="warning" disabled={busy} onClick={() => {
         const open = data.record.end_at > Date.now();
-        if (window.confirm(open ? 'Close bidding immediately?' : 'Finalize this auction and credit the seller?')) run(() => marketApi(open ? `/admin/auctions/${id}/close` : `/auctions/${id}/finalize`, {}));
+        if (window.confirm(open ? 'Close bidding immediately?' : 'Finalize this auction and pay the seller?')) run(() => marketApi(open ? `/admin/auctions/${id}/close` : `/auctions/${id}/finalize`, {}));
       }}>{data.record.end_at > Date.now() ? 'Close auction' : 'Finalize payment'}</Button>}
       {tab === 0 && data?.editable && <Button variant="contained" type="submit" form="auction-record-form" disabled={busy}>Save changes</Button>}
       <Button disabled={busy} onClick={onClose}>Done</Button>

@@ -227,7 +227,7 @@ test('bot command controls run one bot and retire it without deleting audit evid
   assert.equal(s.one("SELECT COUNT(*) n FROM events WHERE type='bot-retired'").n, 1);
   assert.equal(s.one('SELECT COUNT(*) n FROM rounds').n, 1);
 });
-test('bots use independent budgets, one random auction per round, and a fixed ten-credit step', async t => {
+test('bots use independent budgets, one random auction per round, and a fixed ten-point step', async t => {
   const { s, admin, a, auction, make } = await fixture(t);
   const bot = await make('budgeted-random-bot', 'bot');
   const id = auction(30);

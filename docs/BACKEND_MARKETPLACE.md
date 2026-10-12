@@ -1,7 +1,7 @@
 # Account-Based Marketplace Variant
 
 This is a standalone, account-based marketplace. It uses server-managed users,
-credits, auctions, settlements, reports, and automation. Existing live data from
+budgets, auctions, settlements, reports, and automation. Existing live data from
 other applications is not imported automatically.
 
 ## Local Run
@@ -62,13 +62,13 @@ a server-verified admin role. There is no frontend admin passcode.
 - Sellers can edit only the minimum bid of their own open, unbid auctions.
   Ownership and zero-bid status are rechecked inside the save transaction; a
   concurrent first bid invalidates the edit. Closed/finalized auctions are locked.
-- Budget: default 2,000 integer credits, per-user allocation and atomic global
+- Budget: default 2,000 integer units, per-user allocation and atomic global
   reset. Budget settings include existing winning reservations; resetting cannot
-  manufacture extra credits when an old winner is later outbid.
-- Automatic and manual finalization. Seller credits are transferred exactly once.
+  manufacture extra funds when an old winner is later outbid.
+- Automatic and manual finalization. Seller payments are transferred exactly once.
 - Bot Command Center: persistent server-hosted bots, independent budgets and
   intervals, random eligible-auction selection, enable/start/stop, manual rounds,
-  and observatory. Each bot places at most one bid per round using a fixed ten-credit
+  and observatory. Each bot places at most one bid per round using a fixed ten-point
   outbid step. A shared active-only snapshot prevents duplicate assignments in the
   same round. All execution stays inside the marketplace service.
 - Batch Auction Studio: atomic JSON batches of up to 50 auctions.
@@ -81,13 +81,13 @@ a server-verified admin role. There is no frontend admin passcode.
   tabs for one account count once. Presence samples are persisted every 15 seconds.
 - JSON evidence, bid CSV, printable HTML, multi-sheet Excel-compatible XML
   workbook (`.xls`, matching the existing application's export approach).
-  Evidence includes bid budgets, credit ledger, events, list transitions, bot
+  Evidence includes bid budgets, budget ledger, events, list transitions, bot
   decisions, participation, seller payments, review flags, and presence samples.
 
-Credits have no cash value. Bidding reserves the full current
+The marketplace budget has no cash value. Bidding reserves the full current
 winning bid; outbidding immediately returns the previous winner's reservation.
-Finalization consumes the winner's reservation and credits the seller. The ledger
-records every change in available credit.
+Finalization consumes the winner's reservation and pays the seller. The ledger
+records every change in the available budget.
 
 Market settings, participant management, automation, evidence, and diagnostics
 are controlled directly from the Admin Zone. Legacy experiment tooling requires
