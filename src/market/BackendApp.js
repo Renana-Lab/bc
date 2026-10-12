@@ -370,14 +370,6 @@ function HomePageView({ user }) {
         >
           Continue
         </Button>
-        <Button
-          className={homeStyles.secondaryButton}
-          variant="outlined"
-          component="a"
-          href="https://www.mturk.com/"
-        >
-          No Thanks
-        </Button>
       </div>
     </div>
     </div>

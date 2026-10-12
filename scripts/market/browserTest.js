@@ -92,6 +92,10 @@ const {
       exact: true
     }).click();
     await page.getByRole('heading', { name: 'Admin Zone', exact: true }).waitFor();
+    await page.goto(base + '/');
+    await page.getByRole('button', { name: 'Continue', exact: true }).waitFor();
+    assert.equal(await page.getByRole('link', { name: 'No Thanks', exact: true }).count(), 0);
+    await page.goto(base + '/manage-budget');
     assert.equal(await page.getByText('Bot 01', { exact: true }).count(), 0);
     await page.getByLabel('Admin password').fill('wrong-password');
     await page.getByRole('button', { name: 'Unlock Admin Zone', exact: true }).click();
