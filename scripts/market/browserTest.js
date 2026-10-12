@@ -190,6 +190,8 @@ const {
     await page.getByRole('button', { name: 'Done', exact: true }).click();
     await page.getByRole('button', { name: 'Edit your auction', exact: true }).waitFor({ state: 'hidden' });
     await page.goto(`${base}/auction/${auction.id}`);
+    assert.equal(await page.getByRole('button', { name: 'Export Transactions', exact: true }).count(), 0);
+    assert.equal(await page.getByText('Your cumulative bid:', { exact: true }).count(), 0);
     await page.getByLabel(/^Add to your bid/).fill('100');
     await page.getByRole('button', {
       name: 'Place bid',
@@ -227,6 +229,8 @@ const {
     assert.equal(store.one('SELECT role FROM users WHERE email=?', 'participant-browser-02').role, 'user');
     await page.getByRole('button', { name: 'Sign out', exact: true }).click();
     await page.getByRole('button', { name: 'Quick dev sign-in', exact: true }).click();
+    await page.goto(`${base}/auction/${auction.id}`);
+    await page.getByRole('button', { name: 'Export Transactions', exact: true }).waitFor();
     await page.goto(base + '/manage-budget');
     await page.getByText('Bot 01', { exact: true }).first().waitFor();
     assert.equal(await page.getByLabel('Admin password').count(), 0);

@@ -793,7 +793,7 @@ function NewAuctionView({ act }) {
   );
 }
 
-function AuctionDetailsView({ user, act, revision, allowPostSubmitEdit }) {
+function AuctionDetailsView({ user, act, revision, allowPostSubmitEdit, canExportTransactions = false }) {
   const [editing, setEditing] = useState(false);
   const [editRevision, setEditRevision] = useState(0);
   const { address } = useParams();
@@ -879,11 +879,6 @@ function AuctionDetailsView({ user, act, revision, allowPostSubmitEdit }) {
           <div className="introductionDetail">
             <span className="introductionLabel">Number of bidders: </span>
             <span className="introductionText">{a.bidders}</span>
-          </div>
-
-          <div className="introductionDetail">
-            <span className="introductionLabel">Your cumulative bid: </span>
-            <span className="introductionText">{a.my_bid}</span>
           </div>
 
           <div className="introductionDetail">
@@ -1003,7 +998,7 @@ function AuctionDetailsView({ user, act, revision, allowPostSubmitEdit }) {
             <Typography variant="h6" sx={{ color: '#002884', fontWeight: 700 }}>
               Bidding History
             </Typography>
-            {a.bids?.length > 0 && (
+            {canExportTransactions && a.bids?.length > 0 && (
               <Button
                 size="small"
                 variant="outlined"
@@ -2419,7 +2414,7 @@ export default function BackendApp() {
           <Route path="/account" element={user ? <AccountView user={user} /> : <Login onLogin={val => { setSession(val); refresh(); }} />} />
           <Route path="/auctions-list" element={user ? <AuctionsListView auctions={auctions} user={user} admin={admin} act={act} refresh={refresh} allowPostSubmitEdit={Boolean(session.settings?.allow_post_submit_edit)} /> : <Login onLogin={val => { setSession(val); refresh(); }} />} />
           <Route path="/open-auction" element={user ? <NewAuctionView act={act} /> : <Login onLogin={val => { setSession(val); refresh(); }} />} />
-          <Route path="/auction/:address" element={user ? <AuctionDetailsView user={user} act={act} revision={revision} allowPostSubmitEdit={Boolean(session.settings?.allow_post_submit_edit)} /> : <Login onLogin={val => { setSession(val); refresh(); }} />} />
+          <Route path="/auction/:address" element={user ? <AuctionDetailsView user={user} act={act} revision={revision} allowPostSubmitEdit={Boolean(session.settings?.allow_post_submit_edit)} canExportTransactions={Boolean(admin && session.adminAccess)} /> : <Login onLogin={val => { setSession(val); refresh(); }} />} />
           <Route path="/manage-budget" element={!user ? <Login onLogin={val => { setSession(val); refresh(); }} /> : admin ? (session.adminAccess ? <AdminView auctions={auctions} act={act} revision={revision} notify={notify} /> : <AdminUnlock onUnlocked={() => setSession(current => ({ ...current, adminAccess: true }))} />) : <Navigate to="/auctions-list" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
