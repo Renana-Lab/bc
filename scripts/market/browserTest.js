@@ -54,7 +54,6 @@ const {
   const options = {
     staticDir: path.resolve('build-backend'),
     origin: 'http://localhost:3010',
-    adminPassword: 'browser-admin-password',
     devLogin: true
   };
   const server = createMarketServer(store, options);
@@ -96,12 +95,6 @@ const {
     await page.getByRole('button', { name: 'Continue', exact: true }).waitFor();
     assert.equal(await page.getByRole('link', { name: 'No Thanks', exact: true }).count(), 0);
     await page.goto(base + '/manage-budget');
-    assert.equal(await page.getByText('Bot 01', { exact: true }).count(), 0);
-    await page.getByLabel('Admin password').fill('wrong-password');
-    await page.getByRole('button', { name: 'Unlock Admin Zone', exact: true }).click();
-    await page.getByText('Admin password incorrect', { exact: true }).waitFor();
-    await page.getByLabel('Admin password').fill('browser-admin-password');
-    await page.getByRole('button', { name: 'Unlock Admin Zone', exact: true }).click();
     await page.getByRole('heading', {
       name: 'Admin Zone'
     }).waitFor();

@@ -195,11 +195,12 @@ test('admin can toggle seller post-submission editing without losing database co
   } finally { store.close(); }
 });
 
-test('regular admin sessions require a password while dev sessions can be pre-unlocked', async t => {
+test('admin role grants direct Admin Zone access while regular users remain blocked', async t => {
   const store = new MarketStore();
   const admin = await store.createUser({ name: 'Admin', identifier: 'admin-lock-test', role: 'admin' }, null, true);
+  const participant = store.registerIdentifier('participant-admin-gate').user;
   const origin = 'http://localhost:3010';
-  const options = { origin, adminPassword: 'correct-admin-password' };
+  const options = { origin };
   const server = createMarketServer(store, options);
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(async () => { await new Promise(resolve => server.close(resolve)); store.close(); });
@@ -207,13 +208,12 @@ test('regular admin sessions require a password while dev sessions can be pre-un
   const post = (route, body, cookie = '') => fetch(base + route, { method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json', Cookie: cookie }, body: JSON.stringify(body) });
   const login = await post('/login', { identifier: admin.identifier });
   const cookie = login.headers.get('set-cookie').split(';')[0];
-  assert.equal((await login.json()).adminAccess, undefined);
+  assert.equal((await login.json()).adminAccess, true);
   assert.equal((await fetch(base + '/admin/access', { headers: { Cookie: cookie } })).status, 200);
-  assert.equal((await (await fetch(base + '/admin/access', { headers: { Cookie: cookie } })).json()).unlocked, false);
-  assert.equal((await fetch(base + '/admin/state', { headers: { Cookie: cookie } })).status, 403);
-  assert.equal((await post('/admin/unlock', { password: 'incorrect' }, cookie)).status, 403);
-  assert.equal(store.adminAccess(cookie.split('=')[1]).unlocked, false);
-  assert.equal((await post('/admin/unlock', { password: 'correct-admin-password' }, cookie)).status, 200);
+  assert.equal((await (await fetch(base + '/admin/access', { headers: { Cookie: cookie } })).json()).unlocked, true);
   assert.equal((await fetch(base + '/admin/state', { headers: { Cookie: cookie } })).status, 200);
   assert.equal((await (await fetch(base + '/session', { headers: { Cookie: cookie } })).json()).adminAccess, true);
+  const userLogin = await post('/login', { identifier: participant.identifier });
+  const userCookie = userLogin.headers.get('set-cookie').split(';')[0];
+  assert.equal((await fetch(base + '/admin/state', { headers: { Cookie: userCookie } })).status, 403);
 });

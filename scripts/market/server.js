@@ -1,7 +1,7 @@
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
-const { randomUUID, createHash, timingSafeEqual } = require('node:crypto');
+const { randomUUID } = require('node:crypto');
 const {
   MarketStore,
   MarketError,
@@ -11,14 +11,6 @@ function createMarketServer(store, options = {}) {
   const attempts = new Map();
   const origin = options.origin || 'http://localhost:3010';
   const secure = new URL(origin).protocol === 'https:';
-  const passwordMatches = value => {
-    const configured = options.adminPassword || process.env.MARKET_ADMIN_PASSWORD || '';
-    check(configured.length >= 8, 'Admin Zone password is not configured', 503);
-    check(typeof value === 'string' && value.length <= 256, 'Admin password required', 400);
-    const expected = createHash('sha256').update(configured).digest();
-    const actual = createHash('sha256').update(value).digest();
-    return timingSafeEqual(actual, expected);
-  };
   const cookie = (token, expired = false) => `market_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${expired ? 0 : 28800}${secure ? '; Secure' : ''}`;
   const server = http.createServer(async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
@@ -103,7 +95,8 @@ function createMarketServer(store, options = {}) {
         res.setHeader('Set-Cookie', cookie(result.token));
         send(200, {
           user: result.user,
-          settings: store.settings()
+          settings: store.settings(),
+          adminAccess: result.user.role === 'admin'
         });
         return;
       }
@@ -122,14 +115,7 @@ function createMarketServer(store, options = {}) {
       }
       if (route === '/admin/unlock' && req.method === 'POST') {
         store.admin(user.id);
-        const key = `${req.socket.remoteAddress}:admin-unlock`;
-        const now = Date.now();
-        let attempt = attempts.get(key) || { count: 0, until: now + 60000 };
-        if (attempt.until < now) attempt = { count: 0, until: now + 60000 };
-        check(++attempt.count <= 8, 'Too many admin password attempts. Wait one minute.', 429);
-        attempts.set(key, attempt);
-        check(passwordMatches(body.password), 'Admin password incorrect', 403);
-        send(200, store.unlockAdminSession(token)); return;
+        send(200, { unlocked: true }); return;
       }
       const parts = route.split('/').filter(Boolean);
       if (parts[0] === 'auctions' && parts[2] === 'record' && parts.length === 3 && ['GET', 'POST'].includes(req.method)) {
@@ -140,7 +126,7 @@ function createMarketServer(store, options = {}) {
       if (route === '/session' && req.method === 'GET') result = {
         user,
         settings: store.settings(),
-        adminAccess: user.role === 'admin' ? store.adminAccess(token).unlocked : false,
+        adminAccess: user.role === 'admin',
         serverTime: store.now()
       };else if (route === '/heartbeat' && req.method === 'POST') {
         store.heartbeat(token);
@@ -151,7 +137,7 @@ function createMarketServer(store, options = {}) {
         auctions: store.auctions(),
         serverTime: store.now()
       };else if (route === '/auctions' && req.method === 'POST') result = store.createAuction(body, user.id);else if (parts[0] === 'auctions' && parts.length === 2 && req.method === 'GET') result = store.auction(parts[1], user.id);else if (parts[0] === 'auctions' && parts[2] === 'bid' && req.method === 'POST') result = store.bid(parts[1], body.amount, user.id, req.headers['idempotency-key']);else if (parts[0] === 'auctions' && parts[2] === 'finalize' && req.method === 'POST') result = store.finalize(parts[1], user.id);else if (parts[0] === 'admin') {
-        store.adminSession(token);
+        store.admin(user.id);
         if (parts[1] === 'auctions' && parts[3] === 'record' && parts.length === 4 && ['GET', 'POST'].includes(req.method)) {
           result = req.method === 'GET' ? store.inspectAuction(parts[2], user.id) : store.editAuction(parts[2], body, user.id);
           send(200, result); return;

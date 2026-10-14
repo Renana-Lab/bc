@@ -217,7 +217,7 @@ class MarketStore {
     const session = this.one('SELECT * FROM sessions WHERE token=? AND expires_at>?', digest(token || ''), this.now());
     check(session, 'Please sign in', 401);
     const user = this.admin(session.user_id);
-    return { user, unlocked: Boolean(session.admin_unlocked) };
+    return { user, unlocked: true };
   }
   unlockAdminSession(token) {
     const access = this.adminAccess(token);
@@ -226,9 +226,7 @@ class MarketStore {
     return { unlocked: true };
   }
   adminSession(token) {
-    const access = this.adminAccess(token);
-    check(access.unlocked, 'Admin Zone password required', 403);
-    return access.user;
+    return this.adminAccess(token).user;
   }
   heartbeat(token) {
     const user = this.session(token);

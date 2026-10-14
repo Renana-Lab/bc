@@ -1132,28 +1132,6 @@ function BotItem({ bot, act }) {
   );
 }
 
-function AdminUnlock({ onUnlocked }) {
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
-  return <div className="market-page-data backend-admin-page">
-    <div className="adminUnlockCard">
-      <Typography component="h1" variant="h4">Admin Zone</Typography>
-      <Typography color="text.secondary">Enter the Admin Zone password to continue.</Typography>
-      <form onSubmit={async event => {
-        event.preventDefault(); setBusy(true); setError('');
-        try { await api('/admin/unlock', { password }); await onUnlocked(); }
-        catch (err) { setError(err.message); }
-        finally { setBusy(false); }
-      }}>
-        <TextField label="Admin password" type="password" autoComplete="current-password" value={password} onChange={event => setPassword(event.target.value)} required fullWidth autoFocus />
-        {error && <p role="alert" className="adminUnlockError">{error}</p>}
-        <Button type="submit" variant="contained" disabled={busy || !password}>{busy ? 'Checking...' : 'Unlock Admin Zone'}</Button>
-      </form>
-    </div>
-  </div>;
-}
-
 function BatchAuctionStudio({ act, notify }) {
   const [defaults, setDefaults] = useState({
     rowCount: 3,
@@ -2400,7 +2378,7 @@ export default function BackendApp() {
           <Route path="/auctions-list" element={user ? <AuctionsListView auctions={auctions} user={user} admin={admin} act={act} refresh={refresh} allowPostSubmitEdit={Boolean(session.settings?.allow_post_submit_edit)} /> : <Login onLogin={val => { setSession(val); refresh(); }} />} />
           <Route path="/open-auction" element={user ? <NewAuctionView act={act} /> : <Login onLogin={val => { setSession(val); refresh(); }} />} />
           <Route path="/auction/:address" element={user ? <AuctionDetailsView user={user} act={act} revision={revision} allowPostSubmitEdit={Boolean(session.settings?.allow_post_submit_edit)} canExportTransactions={Boolean(admin && session.adminAccess)} /> : <Login onLogin={val => { setSession(val); refresh(); }} />} />
-          <Route path="/manage-budget" element={!user ? <Login onLogin={val => { setSession(val); refresh(); }} /> : admin ? (session.adminAccess ? <AdminView auctions={auctions} act={act} revision={revision} notify={notify} /> : <AdminUnlock onUnlocked={() => setSession(current => ({ ...current, adminAccess: true }))} />) : <Navigate to="/auctions-list" replace />} />
+          <Route path="/manage-budget" element={!user ? <Login onLogin={val => { setSession(val); refresh(); }} /> : admin ? <AdminView auctions={auctions} act={act} revision={revision} notify={notify} /> : <Navigate to="/auctions-list" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>
