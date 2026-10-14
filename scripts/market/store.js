@@ -57,7 +57,7 @@ class MarketStore {
       INSERT OR IGNORE INTO settings(id,name,default_budget,auto_finalize) VALUES(1,'Data Marketplace',2000,1);
       CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT UNIQUE NOT NULL, password TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('user','admin','bot')), budget INTEGER NOT NULL CHECK(budget>=0), disabled INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), expires_at INTEGER NOT NULL, seen_at INTEGER NOT NULL);
-      CREATE TABLE IF NOT EXISTS auctions (id TEXT PRIMARY KEY, seller_id TEXT NOT NULL REFERENCES users(id), description TEXT NOT NULL, payload TEXT NOT NULL, minimum INTEGER NOT NULL, end_at INTEGER NOT NULL, highest INTEGER NOT NULL DEFAULT 0, winner_id TEXT REFERENCES users(id), finalized_at INTEGER, end_recorded INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS auctions (id TEXT PRIMARY KEY, seller_id TEXT NOT NULL REFERENCES users(id), description TEXT NOT NULL, payload TEXT NOT NULL, minimum INTEGER NOT NULL, original_minimum INTEGER, adjusted_minimum INTEGER, end_at INTEGER NOT NULL, highest INTEGER NOT NULL DEFAULT 0, winner_id TEXT REFERENCES users(id), finalized_at INTEGER, end_recorded INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS auctions_active ON auctions(finalized_at,end_at);
       CREATE TABLE IF NOT EXISTS bids (id TEXT PRIMARY KEY, auction_id TEXT NOT NULL REFERENCES auctions(id), user_id TEXT NOT NULL REFERENCES users(id), amount INTEGER NOT NULL, cumulative INTEGER NOT NULL, budget_before INTEGER NOT NULL, budget_after INTEGER NOT NULL, created_at INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS bids_actor ON bids(auction_id,user_id,created_at);
@@ -85,6 +85,14 @@ class MarketStore {
     if (!settingColumns.some(column => column.name === 'allow_post_submit_edit')) {
       this.db.exec('ALTER TABLE settings ADD COLUMN allow_post_submit_edit INTEGER NOT NULL DEFAULT 1');
     }
+    const auctionColumns = this.db.prepare('PRAGMA table_info(auctions)').all();
+    if (!auctionColumns.some(column => column.name === 'original_minimum')) {
+      this.db.exec('ALTER TABLE auctions ADD COLUMN original_minimum INTEGER');
+    }
+    if (!auctionColumns.some(column => column.name === 'adjusted_minimum')) {
+      this.db.exec('ALTER TABLE auctions ADD COLUMN adjusted_minimum INTEGER');
+    }
+    this.db.exec('UPDATE auctions SET original_minimum=minimum WHERE original_minimum IS NULL');
     const legacyMarketName = ['Data', 'Market'].join(' ');
     this.run('UPDATE settings SET name=? WHERE id=1 AND name=?', 'Data Marketplace', legacyMarketName);
   }
@@ -231,13 +239,13 @@ class MarketStore {
     this.run('DELETE FROM sessions WHERE token=?', digest(token || ''));
   }
   active() {
-    return this.all('SELECT id,description,seller_id,minimum,end_at,highest,winner_id FROM auctions WHERE finalized_at IS NULL AND end_at>? ORDER BY end_at,id', this.now());
+    return this.all('SELECT id,description,seller_id,minimum,original_minimum,adjusted_minimum,end_at,highest,winner_id FROM auctions WHERE finalized_at IS NULL AND end_at>? ORDER BY end_at,id', this.now());
   }
   snapshot(reason) {
     this.run('INSERT INTO snapshots(reason,state,created_at) VALUES(?,?,?)', reason, JSON.stringify(this.active()), this.now());
   }
   auctions() {
-    return this.all(`SELECT a.id,a.description,a.seller_id,u.email seller,u.email seller_identifier,a.minimum,a.end_at,a.highest,a.winner_id,a.finalized_at,a.created_at,
+    return this.all(`SELECT a.id,a.description,a.seller_id,u.email seller,u.email seller_identifier,a.minimum,a.original_minimum,a.adjusted_minimum,a.end_at,a.highest,a.winner_id,a.finalized_at,a.created_at,
       (SELECT COUNT(DISTINCT user_id) FROM bids b WHERE b.auction_id=a.id) bidders FROM auctions a JOIN users u ON u.id=a.seller_id ORDER BY a.created_at DESC,a.id`);
   }
   auction(id, actor) {
@@ -283,8 +291,15 @@ class MarketStore {
       const payload = adminOnly ? label(input.payload, 50000) : current.record.payload;
       const minimum = integer(input.minimum);
       const end = adminOnly ? integer(input.end_at, this.now() + 1000, this.now() + 30 * 60000) : current.record.end_at;
-      this.run('UPDATE auctions SET description=?,payload=?,minimum=?,end_at=? WHERE id=?', description, payload, minimum, end, id);
-      this.event('auction-edited', actor, { id, before: { description: current.record.description, minimum: current.record.minimum, end_at: current.record.end_at }, after: { description, minimum, end_at: end }, payloadChanged: payload !== current.record.payload });
+      const originalMinimum = current.record.original_minimum ?? current.record.minimum;
+      const adjustedMinimum = minimum === originalMinimum ? null : minimum;
+      this.run('UPDATE auctions SET description=?,payload=?,minimum=?,adjusted_minimum=?,end_at=? WHERE id=?', description, payload, minimum, adjustedMinimum, end, id);
+      this.event('auction-edited', actor, {
+        id,
+        before: { description: current.record.description, minimum: current.record.minimum, original_minimum: originalMinimum, adjusted_minimum: current.record.adjusted_minimum, end_at: current.record.end_at },
+        after: { description, minimum, original_minimum: originalMinimum, adjusted_minimum: adjustedMinimum, end_at: end },
+        payloadChanged: payload !== current.record.payload
+      });
       this.snapshot('auction-edited');
       return this.inspectAuction(id, actor, adminOnly);
     });
@@ -296,7 +311,7 @@ class MarketStore {
     const minimum = integer(input.minimum ?? input.minimumContribution),
       minutes = integer(input.minutes ?? input.auctionDuration, 1, 30);
     const id = randomUUID();
-    this.run('INSERT INTO auctions(id,seller_id,description,payload,minimum,end_at,created_at) VALUES(?,?,?,?,?,?,?)', id, actor, description, payload, minimum, this.now() + minutes * 60000, this.now());
+    this.run('INSERT INTO auctions(id,seller_id,description,payload,minimum,original_minimum,adjusted_minimum,end_at,created_at) VALUES(?,?,?,?,?,?,NULL,?,?)', id, actor, description, payload, minimum, minimum, this.now() + minutes * 60000, this.now());
     this.event('auction-opened', actor, {
       id,
       description,

@@ -43,6 +43,24 @@ test('existing marketplace databases gain the seller-edit setting without losing
   } finally { store.close(); rmSync(dir, { recursive: true }); }
 });
 
+test('existing auctions preserve their submitted minimum when adjustment columns are added', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'market-minimum-migration-'));
+  const filename = path.join(dir, 'legacy.sqlite');
+  const legacy = new DatabaseSync(filename);
+  legacy.exec(`
+    CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT UNIQUE NOT NULL, password TEXT NOT NULL, role TEXT NOT NULL, budget INTEGER NOT NULL, disabled INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL);
+    CREATE TABLE auctions (id TEXT PRIMARY KEY, seller_id TEXT NOT NULL REFERENCES users(id), description TEXT NOT NULL, payload TEXT NOT NULL, minimum INTEGER NOT NULL, end_at INTEGER NOT NULL, highest INTEGER NOT NULL DEFAULT 0, winner_id TEXT REFERENCES users(id), finalized_at INTEGER, end_recorded INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL);
+    INSERT INTO users VALUES('seller','Seller','legacy-seller','unused','user',2000,0,1);
+    INSERT INTO auctions VALUES('auction','seller','Legacy auction','private',75,9999999999999,0,NULL,NULL,0,1);
+  `);
+  legacy.close();
+  const store = new MarketStore(filename);
+  try {
+    const auction = store.one('SELECT minimum,original_minimum,adjusted_minimum FROM auctions WHERE id=?', 'auction');
+    assert.deepEqual({ ...auction }, { minimum: 75, original_minimum: 75, adjusted_minimum: null });
+  } finally { store.close(); rmSync(dir, { recursive: true }); }
+});
+
 test('record editing is admin-only, optimistic, atomic, audited and immutable once bid on', async () => {
   let now = 1800000000000;
   const store = new MarketStore(':memory:', () => now);
@@ -104,6 +122,8 @@ test('seller edits require ownership and zero bids, including a bid arriving aft
     const bidder = store.registerIdentifier('bidder-01').user;
     const { id } = store.createAuction({ description: 'Initial', payload: 'private', minimum: 50, minutes: 25 }, seller.id);
     let record = store.inspectAuction(id, seller.id, false);
+    assert.equal(record.record.original_minimum, 50);
+    assert.equal(record.record.adjusted_minimum, null);
     assert.deepEqual(record.ledger, []);
     assert.throws(() => store.inspectAuction(id, bidder.id, false), /Only the seller/);
     const forbidden = { revision: record.revision, description: 'Seller update', payload: 'changed', minimum: 60, end_at: now + 900000 };
@@ -114,12 +134,16 @@ test('seller edits require ownership and zero bids, including a bid arriving aft
     assert.equal(record.record.description, 'Initial');
     assert.equal(record.record.payload, 'private');
     assert.equal(record.record.minimum, 60);
+    assert.equal(record.record.original_minimum, 50);
+    assert.equal(record.record.adjusted_minimum, 60);
     edit = { revision: record.revision, minimum: 70 };
     store.bid(id, 60, bidder.id, 'seller-edit-race');
     assert.throws(() => store.editAuction(id, edit, seller.id, false), /changed/);
     edit.revision = store.inspectAuction(id, seller.id, false).revision;
     assert.throws(() => store.editAuction(id, edit, seller.id, false), /cannot be rewritten/);
     assert.equal(store.auction(id, seller.id).minimum, 60);
+    assert.equal(store.auction(id, seller.id).original_minimum, 50);
+    assert.equal(store.auction(id, seller.id).adjusted_minimum, 60);
     const empty = store.createAuction({ description: 'Ends without bids', payload: 'private', minimum: 50, minutes: 1 }, seller.id);
     record = store.inspectAuction(empty.id, seller.id, false);
     now += 60000;
@@ -148,6 +172,8 @@ test('admin can toggle seller post-submission editing without losing database co
     assert.equal(adminRecord.editable, true);
     const adminEdit = store.editAuction(id, { revision: adminRecord.revision, description: 'Admin edit', payload: 'admin payload', minimum: 55, end_at: now + 600000 }, admin.id);
     assert.equal(adminEdit.record.description, 'Admin edit');
+    assert.equal(adminEdit.record.original_minimum, 50);
+    assert.equal(adminEdit.record.adjusted_minimum, 55);
 
     settings = store.configure({ allow_post_submit_edit: true }, admin.id);
     assert.equal(settings.allow_post_submit_edit, 1);
@@ -156,6 +182,16 @@ test('admin can toggle seller post-submission editing without losing database co
     const restored = store.editAuction(id, { ...sellerEdit, revision: sellerRecord.revision }, seller.id, false);
     assert.equal(restored.record.description, 'Admin edit');
     assert.equal(restored.record.minimum, 60);
+    assert.equal(restored.record.original_minimum, 50);
+    assert.equal(restored.record.adjusted_minimum, 60);
+    const report = store.report(admin.id);
+    const reportedAuction = report.auctions.find(auction => auction.id === id);
+    assert.equal(reportedAuction.original_minimum, 50);
+    assert.equal(reportedAuction.adjusted_minimum, 60);
+    const latestEditSnapshot = [...report.snapshots].reverse().find(snapshot => snapshot.reason === 'auction-edited');
+    const snapshottedAuction = latestEditSnapshot.state.find(auction => auction.id === id);
+    assert.equal(snapshottedAuction.original_minimum, 50);
+    assert.equal(snapshottedAuction.adjusted_minimum, 60);
   } finally { store.close(); }
 });
 
