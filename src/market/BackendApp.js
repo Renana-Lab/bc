@@ -718,14 +718,14 @@ function NewAuctionView({ act }) {
             </Typography>
           </Box>
 
-          {renderTooltip('minBid', 'Minimum Contribution', 'The lowest total bid accepted for this auction. You can adjust only this value before the first bid, if editing is enabled.')}
+          {renderTooltip('minBid', 'Minimum Bid', 'The lowest total bid accepted for this auction. You can adjust only this value before the first bid, if editing is enabled.')}
           <TextField
             type="number"
             sx={{ width: '85%' }}
             name="minimumContribution"
             defaultValue={50}
             required
-            inputProps={{ min: 1, max: 1000000000, 'aria-label': 'Minimum Contribution' }}
+            inputProps={{ min: 1, max: 1000000000, 'aria-label': 'Minimum Bid' }}
           />
 
           {renderTooltip('dataDescription', 'Description of the Data', 'Describe what buyers receive. This description is visible to everyone and cannot be changed after submission.')}

@@ -14,6 +14,8 @@ test('identifiers preserve legacy accounts, sessions, budgets and seller identit
     const admin = await store.createUser({ name: 'Display name', email: 'existing@example.com', role: 'admin' }, null, true);
     const session = store.emailLogin('existing@example.com');
     const auction = store.createAuction({ description: 'Original dataset', payload: 'private', minimum: 50, minutes: 25 }, admin.id);
+    const record = store.inspectAuction(auction.id, admin.id);
+    store.editAuction(auction.id, { revision: record.revision, minimum: 60 }, admin.id);
     store.setBudget(admin.id, 1500, admin.id);
     store.close(); store = new MarketStore(path.join(dir, 'test.sqlite'));
     const returning = store.identifierLogin('  EXISTING@example.com ');
@@ -21,6 +23,11 @@ test('identifiers preserve legacy accounts, sessions, budgets and seller identit
     assert.equal(returning.user.budget, 1500);
     assert.equal(store.session(session.token).id, admin.id);
     assert.equal(store.auction(auction.id, admin.id).seller_identifier, 'existing@example.com');
+    const minimums = store.one('SELECT minimum,original_minimum,adjusted_minimum FROM auctions WHERE id=?', auction.id);
+    assert.deepEqual({ ...minimums }, { minimum: 60, original_minimum: 50, adjusted_minimum: 60 });
+    const reported = store.report(admin.id).auctions.find(row => row.id === auction.id);
+    assert.equal(reported.original_minimum, 50);
+    assert.equal(reported.adjusted_minimum, 60);
     assert.equal(store.registerIdentifier('Participant-001').user.identifier, 'participant-001');
     for (const input of ['', 'a b', {}, null, 'a'.repeat(201), '<script>']) assert.throws(() => store.identifierLogin(input));
   } finally { store.close(); rmSync(dir, { recursive: true }); }
