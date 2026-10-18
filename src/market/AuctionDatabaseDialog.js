@@ -49,18 +49,15 @@ export default function AuctionDatabaseDialog({ id, onClose, refresh, administra
         </Tabs>}
         {tab === 0 ? <form id="auction-record-form" className="database-record-form" onSubmit={event => {
           event.preventDefault();
-          run(() => marketApi(endpoint, administrative ? {
-            revision: data.revision, description: draft.description, payload: draft.payload,
-            minimum: Number(draft.minimum), end_at: Number(draft.end_at)
-          } : { revision: data.revision, minimum: Number(draft.minimum) }), !administrative);
+          run(() => marketApi(endpoint, { revision: data.revision, minimum: Number(draft.minimum) }), !administrative);
         }}>
           {!data.editable && <Alert severity="info">This record is read-only because bidding has started or the auction has ended.</Alert>}
           {administrative && <TextField label="Seller identifier" value={data.seller_identifier} InputProps={{ readOnly: true }} />}
-          {administrative && <TextField label="Description" value={draft.description} onChange={e => setDraft({ ...draft, description: e.target.value })} disabled={busy || !data.editable} required inputProps={{ maxLength: 300 }} />}
-          {administrative && <TextField label="Data payload" value={draft.payload} onChange={e => setDraft({ ...draft, payload: e.target.value })} multiline minRows={3} disabled={busy || !data.editable} required inputProps={{ maxLength: 50000 }} />}
+          {administrative && <TextField label="Description" value={draft.description} InputProps={{ readOnly: true }} />}
+          {administrative && <TextField label="Data payload" value={draft.payload} multiline minRows={3} InputProps={{ readOnly: true }} />}
           <TextField label="Original minimum bid" type="number" value={draft.original_minimum ?? draft.minimum} InputProps={{ readOnly: true }} />
           <TextField label="Adjusted minimum bid" type="number" value={draft.minimum} onChange={e => setDraft({ ...draft, minimum: e.target.value })} disabled={busy || !data.editable} required inputProps={{ min: 1, max: 1000000000, step: 1 }} />
-          {administrative && <TextField label="Closing time" type="datetime-local" InputLabelProps={{ shrink: true }} value={new Date(draft.end_at - new Date(draft.end_at).getTimezoneOffset() * 60000).toISOString().slice(0, 19)} onChange={e => { const time = new Date(e.target.value).getTime(); if (Number.isFinite(time)) setDraft({ ...draft, end_at: time }); }} disabled={busy || !data.editable} inputProps={{ step: 1 }} required />}
+          {administrative && <TextField label="Closing time" value={new Date(draft.end_at).toLocaleString()} InputProps={{ readOnly: true }} />}
         </form> : <div className="database-table-scroll"><Table size="small"><TableHead><TableRow>{columns.map(col => <TableCell key={col}>{col.replaceAll('_', ' ')}</TableCell>)}</TableRow></TableHead><TableBody>
           {rows.map((row, index) => <TableRow key={row.id ?? index}>{columns.map(col => <TableCell key={col}>{col === 'created_at' ? new Date(row[col]).toLocaleString() : String(row[col] ?? '-')}</TableCell>)}</TableRow>)}
           {!rows.length && <TableRow><TableCell colSpan={columns.length}>No records.</TableCell></TableRow>}
@@ -68,11 +65,6 @@ export default function AuctionDatabaseDialog({ id, onClose, refresh, administra
       </>}
     </DialogContent>
     <DialogActions sx={{ flexWrap: 'wrap', gap: 1 }}>
-      {administrative && <Button disabled={busy} onClick={() => run(load)}>Reload record</Button>}
-      {administrative && data && !data.record.finalized_at && <Button color="warning" disabled={busy} onClick={() => {
-        const open = data.record.end_at > Date.now();
-        if (window.confirm(open ? 'Close bidding immediately?' : 'Finalize this auction and pay the seller?')) run(() => marketApi(open ? `/admin/auctions/${id}/close` : `/auctions/${id}/finalize`, {}));
-      }}>{data.record.end_at > Date.now() ? 'Close auction' : 'Finalize payment'}</Button>}
       {tab === 0 && data?.editable && <Button variant="contained" type="submit" form="auction-record-form" disabled={busy}>{administrative ? 'Save changes' : 'Save'}</Button>}
       <Button disabled={busy} onClick={onClose}>{administrative ? 'Done' : 'Discard'}</Button>
     </DialogActions>

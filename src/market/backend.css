@@ -1126,6 +1126,12 @@ button, input, select, textarea {
 .deploymentSteps li::before { content: counter(deploy); display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: #e9eefb; color: #2549a1; font-size: 0.7rem; font-weight: 700; }
 .deploymentSteps li strong { color: #173270; }
 .architectureAccess { margin-top: 24px; padding-top: 20px; border-top: 1px solid #e3e8f3; }
+.architectureResourceLinks { display: flex; flex-wrap: wrap; gap: 10px 20px; margin: 16px 0 10px; font-size: 0.82rem; }
+.architectureResourceLinks a, .architectureComponentRow > a, .architectureAccessHeading > a, .architectureDetails a { color: #214ba9; text-decoration: underline; text-underline-offset: 3px; overflow-wrap: anywhere; }
+.bidFieldHeading { display: flex; align-items: center; gap: 6px; margin: 18px 0 8px; color: #002884; font-size: 1rem; font-weight: 600; }
+.bidFieldHeading .MuiIconButton-root { width: 28px; height: 28px; font-size: 0.9rem; color: #002884; background: #d8dcf0; }
+.totalBidInput { border-radius: 8px; background: #d8dcf0; }
+.totalBidInput .MuiOutlinedInput-root { color: #002884; border-radius: 8px; }
 .architectureAccessIntro { margin: -2px 0 14px; color: #677187; font-size: 0.82rem; line-height: 1.5; }
 .architectureAccessGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .architectureAccessCard {

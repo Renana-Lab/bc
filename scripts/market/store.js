@@ -286,12 +286,12 @@ class MarketStore {
       check(adminOnly || Boolean(this.settings().allow_post_submit_edit), 'Auction editing is currently disabled by the administrator.', 403);
       check(input.revision === current.revision, 'Auction changed. Reload the record before saving.', 409);
       check(current.editable, 'Only open auctions without bids can be edited. Bid and payment history cannot be rewritten.', 409);
-      const allowedFields = adminOnly ? ['revision', 'description', 'payload', 'minimum', 'end_at'] : ['revision', 'minimum'];
-      check(Object.keys(input).every(key => allowedFields.includes(key)), adminOnly ? 'Unsupported database field' : 'Sellers can only change the minimum bid', 403);
-      const description = adminOnly ? label(input.description, 300) : current.record.description;
-      const payload = adminOnly ? label(input.payload, 50000) : current.record.payload;
+      const allowedFields = ['revision', 'minimum'];
+      check(Object.keys(input).every(key => allowedFields.includes(key)), 'You can only change the minimum bid', 403);
+      const description = current.record.description;
+      const payload = current.record.payload;
       const minimum = integer(input.minimum);
-      const end = adminOnly ? integer(input.end_at, this.now() + 1000, this.now() + 30 * 60000) : current.record.end_at;
+      const end = current.record.end_at;
       const originalMinimum = current.record.original_minimum ?? current.record.minimum;
       const adjustedMinimum = minimum === originalMinimum ? null : minimum;
       this.run('UPDATE auctions SET description=?,payload=?,minimum=?,adjusted_minimum=?,end_at=? WHERE id=?', description, payload, minimum, adjustedMinimum, end, id);

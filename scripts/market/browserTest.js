@@ -108,6 +108,10 @@ const {
     await page.getByText('AWS EC2', { exact: false }).first().waitFor();
     await page.getByText(':memory:', { exact: true }).waitFor();
     await page.getByText('Deployment path', { exact: true }).waitFor();
+    for (const text of ['Auto Finalizer', 'Awaiting finalization', 'Index status']) {
+      assert.equal(await page.getByText(text, { exact: true }).count(), 0);
+    }
+    assert((await page.getByRole('link', { name: 'Open database server session' }).getAttribute('href')).includes('session-manager/i-0dced63de1425ce81'));
     await page.getByText('How to access and maintain each component', { exact: true }).waitFor();
     await page.getByText('Backup first:', { exact: false }).waitFor();
     await page.getByText('Bot observatory', { exact: false }).first().waitFor();
@@ -137,11 +141,17 @@ const {
     await page.getByRole('button', { name: 'Done', exact: true }).click();
     const editable = store.createAuction({ description: 'Editable record', payload: 'Private editable data', minimum: 50, minutes: 25 }, admin.id);
     await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+    assert.equal(await page.getByRole('columnheader', { name: 'Payment Status', exact: true }).count(), 0);
+    await page.getByRole('row').filter({ hasText: 'Editable record' }).getByRole('link', { name: 'View Auction', exact: true }).waitFor();
     await page.getByRole('button', { name: 'Manage database record: Editable record', exact: true }).click();
-    await page.getByRole('dialog').getByLabel(/^Description/).fill('Edited from list');
+    assert.equal(await page.getByRole('dialog').getByLabel(/^Description/).isEditable(), false);
+    assert.equal(await page.getByRole('dialog').getByLabel(/^Data payload/).isEditable(), false);
+    assert.equal(await page.getByRole('dialog').getByLabel(/^Closing time/).isEditable(), false);
+    await page.getByRole('dialog').getByLabel('Adjusted minimum bid').fill('60');
     await page.getByRole('button', { name: 'Save changes', exact: true }).click();
     await page.getByText('Database updated.', { exact: true }).waitFor();
-    assert.equal(store.inspectAuction(editable.id, admin.id).record.description, 'Edited from list');
+    assert.equal(store.inspectAuction(editable.id, admin.id).record.description, 'Editable record');
+    assert.equal(store.inspectAuction(editable.id, admin.id).record.minimum, 60);
     await page.screenshot({ path: 'artifacts/backend/database-editor.png', fullPage: true });
     await page.getByRole('button', { name: 'Done', exact: true }).click();
     await page.screenshot({ path: 'artifacts/backend/auctions-desktop.png', fullPage: true });
@@ -184,6 +194,9 @@ const {
       exact: true
     }).waitFor();
     const owned = store.createAuction({ description: 'Seller-owned auction', payload: 'Owner data', minimum: 50, minutes: 25 }, user.id);
+    await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+    await page.getByRole('row').filter({ hasText: 'Research dataset' }).getByRole('link', { name: 'Place Bid', exact: true }).waitFor();
+    await page.getByRole('row').filter({ hasText: 'Seller-owned auction' }).getByRole('link', { name: 'View Auction', exact: true }).waitFor();
     await page.goto(`${base}/auction/${owned.id}`);
     await page.getByRole('button', { name: 'Edit minimum bid', exact: true }).click();
     assert.equal(await page.getByRole('dialog').getByLabel(/^Description/).count(), 0);
@@ -218,16 +231,34 @@ const {
     assert.equal(await page.getByText('Your cumulative bid:', { exact: true }).count(), 0);
     assert.equal(await page.getByText('Auction status:', { exact: true }).count(), 0);
     assert.equal(await page.getByText(/\b(?:wei|credits?)\b/i).count(), 0);
-    await page.getByLabel(/^Add to your bid/).fill('100');
+    await page.getByLabel('Total Bid', { exact: true }).fill('100');
     await page.getByRole('button', {
-      name: 'Place bid',
+      name: 'Submit your bid',
       exact: true
     }).click();
+    await page.getByText('Bid placed successfully!', { exact: true }).waitFor();
     await page.getByRole('cell', {
       name: 'Participant',
       exact: true
     }).waitFor();
     assert.equal(store.user(user.id).budget, 1900);
+    await page.getByLabel('Total Bid', { exact: true }).fill('120');
+    await page.getByRole('button', { name: 'Submit your bid', exact: true }).click();
+    await page.getByText('Bid placed successfully!', { exact: true }).waitFor();
+    await page.waitForFunction(() => document.querySelector('#total-bid')?.value === '');
+    assert.equal(store.user(user.id).budget, 1880);
+    assert.equal(store.auction(auction.id, user.id).my_bid, 120);
+    await page.screenshot({ path: 'artifacts/backend/bid-desktop.png', fullPage: true });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.screenshot({ path: 'artifacts/backend/bid-mobile.png', fullPage: true });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.route('**/api/market/auctions/*/bid', route => route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'Bid must meet the minimum and exceed the highest bid' }) }));
+    await page.getByLabel('Total Bid', { exact: true }).fill('140');
+    await page.getByRole('button', { name: 'Submit your bid', exact: true }).click();
+    await page.getByText('Your bid was not accepted.', { exact: false }).waitFor();
+    assert.equal(store.user(user.id).budget, 1880);
+    await page.unroute('**/api/market/auctions/*/bid');
     store.closeAuction(auction.id, admin.id);
     store.tick();
     await page.getByText('Purchased dataset', {

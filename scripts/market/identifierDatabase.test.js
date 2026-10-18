@@ -70,13 +70,16 @@ test('record editing is admin-only, optimistic, atomic, audited and immutable on
     const { id } = store.createAuction({ description: 'Before', payload: 'secret', minimum: 50, minutes: 25 }, admin.id);
     assert.throws(() => store.inspectAuction(id, bidder.id), /Administrator/);
     let state = store.inspectAuction(id, admin.id);
-    const edit = { revision: state.revision, description: 'After', payload: 'changed-secret', minimum: 60, end_at: now + 600000 };
+    const edit = { revision: state.revision, minimum: 60 };
     assert.throws(() => store.editAuction(id, edit, bidder.id), /Administrator/);
-    assert.throws(() => store.editAuction(id, { ...edit, highest: 10 }, admin.id), /Unsupported/);
-    assert.throws(() => store.editAuction(id, { ...edit, end_at: now - 1 }, admin.id), /integer/);
+    for (const extra of [{ highest: 10 }, { end_at: now - 1 }, { description: 'After' }, { payload: 'changed-secret' }]) {
+      assert.throws(() => store.editAuction(id, { ...edit, ...extra }, admin.id), /only change the minimum/);
+    }
     assert.equal(store.inspectAuction(id, admin.id).record.description, 'Before');
     state = store.editAuction(id, edit, admin.id);
-    assert.equal(state.record.description, 'After');
+    assert.equal(state.record.description, 'Before');
+    assert.equal(state.record.payload, 'secret');
+    assert.equal(state.record.minimum, 60);
     assert.equal(state.events[0].type, 'auction-edited');
     assert(!JSON.stringify(state.events).includes('changed-secret'));
     assert.throws(() => store.editAuction(id, edit, admin.id), /changed/);
@@ -85,7 +88,7 @@ test('record editing is admin-only, optimistic, atomic, audited and immutable on
     assert.equal(state.editable, false);
     assert.throws(() => store.editAuction(id, { ...edit, revision: state.revision }, admin.id), /cannot be rewritten/);
     assert.equal(state.bids[0].identifier, 'participant-01');
-    now += 600000;
+    now += 25 * 60000;
     store.finalize(id, admin.id);
     assert.equal(store.user(bidder.id).budget, 1940);
     assert.equal(store.user(admin.id).budget, 2060);
@@ -170,8 +173,8 @@ test('admin can toggle seller post-submission editing without losing database co
 
     const adminRecord = store.inspectAuction(id, admin.id);
     assert.equal(adminRecord.editable, true);
-    const adminEdit = store.editAuction(id, { revision: adminRecord.revision, description: 'Admin edit', payload: 'admin payload', minimum: 55, end_at: now + 600000 }, admin.id);
-    assert.equal(adminEdit.record.description, 'Admin edit');
+    const adminEdit = store.editAuction(id, { revision: adminRecord.revision, minimum: 55 }, admin.id);
+    assert.equal(adminEdit.record.description, 'Original');
     assert.equal(adminEdit.record.original_minimum, 50);
     assert.equal(adminEdit.record.adjusted_minimum, 55);
 
@@ -180,7 +183,7 @@ test('admin can toggle seller post-submission editing without losing database co
     sellerRecord = store.inspectAuction(id, seller.id, false);
     assert.equal(sellerRecord.editable, true);
     const restored = store.editAuction(id, { ...sellerEdit, revision: sellerRecord.revision }, seller.id, false);
-    assert.equal(restored.record.description, 'Admin edit');
+    assert.equal(restored.record.description, 'Original');
     assert.equal(restored.record.minimum, 60);
     assert.equal(restored.record.original_minimum, 50);
     assert.equal(restored.record.adjusted_minimum, 60);

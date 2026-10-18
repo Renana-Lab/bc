@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
+  Alert,
   AppBar,
   Toolbar,
   Typography,
@@ -78,7 +79,7 @@ import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
 import FactCheckOutlinedIcon from '@mui/icons-material/FactCheckOutlined';
 
 const date = value => value ? new Date(value).toLocaleString() : '-';
-const status = a => a.finalized_at ? 'Payment finalized' : a.end_at <= Date.now() ? 'Awaiting finalization' : 'Open';
+const status = a => a.end_at <= Date.now() ? 'Closed' : 'Open';
 
 function IconAction({ title, children, ...props }) {
   return (
@@ -233,7 +234,7 @@ function PlatformGuideView() {
             </AccordionSummary>
             <AccordionDetails>
               <Typography className="accountText" sx={{ textAlign: 'left !important', padding: '0 0 1rem' }}>
-                Open an active auction, review its description and minimum, and add to your bid within your available budget. The highest bidder receives access to the dataset after finalization.
+                Open an active auction, review its description and minimum, and submit your total bid within your available budget. The highest bidder receives access to the dataset after the auction closes.
               </Typography>
               <Button
                 variant="contained"
@@ -512,7 +513,7 @@ function AuctionsListView({ auctions, admin, user, act, refresh, allowPostSubmit
           <Table className={auctionStyles.auctionsTable} aria-label="auctions table">
             <TableHead>
               <TableRow>
-                {['Description', 'End Date', 'Auction Status', 'Highest Bid', 'Number Of Bidders', 'Payment Status', ''].map((h, i) => (
+                {['Description', 'End Date', 'Auction Status', 'Highest Bid', 'Number Of Bidders', ''].map((h, i) => (
                   <TableCell key={i} align="center" style={{ color: '#0d0d4e', fontWeight: 'bold' }}>
                     {h}
                   </TableCell>
@@ -554,10 +555,8 @@ function AuctionsListView({ auctions, admin, user, act, refresh, allowPostSubmit
                     <TableCell align="center" style={{ color: '#0d0d4e' }}>
                       {a.bidders}
                     </TableCell>
-                    <TableCell align="center" style={{ color: isPaid ? '#1b5e20' : '#b71c1c', fontWeight: 700 }}>
-                      {isPaid ? 'Finalized' : 'Pending'}
-                    </TableCell>
                     <TableCell align="center">
+                      <Tooltip describeChild enterTouchDelay={0} title={isOpen ? a.seller_id === user.id ? 'Review your auction. The minimum can be edited before the first bid when editing is enabled.' : 'Review the data description and minimum, then submit your total bid within your available budget.' : userWon ? 'This auction has closed. Open it to access the data you won.' : 'This auction has closed. Review its details and bidding history.'}>
                       <Button
                         variant="contained"
                         style={{
@@ -573,8 +572,9 @@ function AuctionsListView({ auctions, admin, user, act, refresh, allowPostSubmit
                         to={`/auction/${a.id}`}
                         onClick={e => e.stopPropagation()}
                       >
-                        {userWon ? 'View Data' : 'View Auction'}
+                        {isOpen && a.seller_id !== user.id ? 'Place Bid' : 'View Auction'}
                       </Button>
+                      </Tooltip>
                       {admin && <IconAction title={`Manage database record: ${a.description}`} onClick={e => { e.stopPropagation(); setRecordId(a.id); }}><StorageOutlinedIcon fontSize="small" /></IconAction>}
                       {!admin && allowPostSubmitEdit && a.seller_id === user.id && isOpen && !a.bidders && <IconAction title={`Edit minimum bid: ${a.description}`} onClick={e => { e.stopPropagation(); setRecordId(a.id); }}><EditOutlinedIcon fontSize="small" /></IconAction>}
                       {admin && isOpen && (
@@ -718,7 +718,7 @@ function NewAuctionView({ act }) {
             </Typography>
           </Box>
 
-          {renderTooltip('minBid', 'Minimum Contribution', 'Minimum Bid')}
+          {renderTooltip('minBid', 'Minimum Contribution', 'The lowest total bid accepted for this auction. You can adjust only this value before the first bid, if editing is enabled.')}
           <TextField
             type="number"
             sx={{ width: '85%' }}
@@ -728,7 +728,7 @@ function NewAuctionView({ act }) {
             inputProps={{ min: 1, max: 1000000000, 'aria-label': 'Minimum Contribution' }}
           />
 
-          {renderTooltip('dataDescription', 'Description of the Data')}
+          {renderTooltip('dataDescription', 'Description of the Data', 'Describe what buyers receive. This description is visible to everyone and cannot be changed after submission.')}
           <TextField
             sx={{ width: '85%' }}
             name="dataDescription"
@@ -736,7 +736,7 @@ function NewAuctionView({ act }) {
             inputProps={{ maxLength: 300, 'aria-label': 'Description of the Data' }}
           />
 
-          {renderTooltip('dataForSale', 'Data For Sell', 'Data for sale payload')}
+          {renderTooltip('dataForSale', 'Data For Sell', 'Enter the data being sold. It is released to the winning bidder after the auction closes. This cannot be changed after submission.')}
           <TextField
             sx={{ width: '85%' }}
             name="dataForSell"
@@ -744,7 +744,7 @@ function NewAuctionView({ act }) {
             inputProps={{ maxLength: 50000, 'aria-label': 'Data for sale' }}
           />
 
-          {renderTooltip('auctionTime', 'Auction Duration (1-30 min)', 'Auction duration in minutes (1-30)')}
+          {renderTooltip('auctionTime', 'Auction Duration (1-30 min)', 'Bidding starts on submission and ends after this many minutes. The duration cannot be changed after submission.')}
           <TextField
             sx={{ width: '85%' }}
             type="number"
@@ -817,6 +817,10 @@ function AuctionDetailsView({ user, act, revision, allowPostSubmitEdit, canExpor
   const [auction, setAuction] = useState(null);
   const [error, setError] = useState('');
   const key = useRef(null);
+  const [bidPending, setBidPending] = useState(false);
+  const [bidNotice, setBidNotice] = useState(null);
+  const [totalBid, setTotalBid] = useState('');
+  useEffect(() => { setTotalBid(''); setBidNotice(null); }, [address]);
 
   useEffect(() => {
     let live = true, pending = false;
@@ -897,31 +901,6 @@ function AuctionDetailsView({ user, act, revision, allowPostSubmitEdit, canExpor
             <span className="introductionText">{a.bidders}</span>
           </div>
 
-          {!a.finalized_at && !isAuctionActive && (
-            <Button
-              id="finalize-auction-button"
-              variant="contained"
-              style={{
-                height: '2.5rem',
-                borderRadius: '1rem',
-                backgroundColor: '#103090',
-                color: '#D8DCF0',
-                fontWeight: 600,
-                width: '100%',
-                marginTop: '1.5rem',
-              }}
-              onClick={() => act(`/auctions/${a.id}/finalize`, {})}
-            >
-              {isManager ? 'Get your money' : 'Finalize payment'}
-            </Button>
-          )}
-
-          {a.finalized_at && isManager && (
-            <div className="finalizedPaymentBadge" role="status" aria-label="Seller payment finalized">
-              <span>Seller payment finalized</span>
-              <small>Funds were released to the seller</small>
-            </div>
-          )}
         </div>
 
         {isAuctionActive && !isManager && (
@@ -932,30 +911,54 @@ function AuctionDetailsView({ user, act, revision, allowPostSubmitEdit, canExpor
             <form
               onSubmit={async event => {
                 event.preventDefault();
-                const amount = Number(new FormData(event.currentTarget).get('amount'));
+                if (bidPending) return;
+                const total = Number(totalBid);
+                const amount = total - a.my_bid;
+                const cost = a.winner_id === user.id ? amount : total;
+                if (!Number.isSafeInteger(total) || total < a.minimum || total <= a.highest || amount <= 0 || cost > user.budget) {
+                  setBidNotice({ severity: 'error', text: `Your total bid must be at least ${Math.max(a.minimum, a.highest + 1, a.my_bid + 1)} and the increase must fit your remaining budget (${user.budget}).` });
+                  return;
+                }
+                setBidPending(true);
+                setBidNotice(null);
                 if (!key.current || key.current.amount !== amount) {
                   key.current = { amount, id: crypto.randomUUID() };
                 }
-                const result = await act(`/auctions/${a.id}/bid`, { amount }, { 'Idempotency-Key': key.current.id });
-                if (result) key.current = null;
+                try {
+                  const result = await act(`/auctions/${a.id}/bid`, { amount }, { 'Idempotency-Key': key.current.id });
+                  if (result) {
+                    key.current = null;
+                    setTotalBid('');
+                    setBidNotice({ severity: 'success', text: 'Bid placed successfully!' });
+                    try { setAuction(await api(`/auctions/${a.id}`)); } catch { /* Polling will refresh the confirmed bid. */ }
+                  } else setBidNotice({ severity: 'error', text: 'Your bid was not accepted. Review the latest highest bid and your budget, then try again.' });
+                } catch (err) {
+                  setBidNotice({ severity: 'error', text: err.message });
+                } finally { setBidPending(false); }
               }}
             >
-              <div className="tooltiplabe" style={{ color: '#002884' }}>
-                Add to your bid
-                <button type="button" className="circleIcon">?</button>
+              <div className="bidFieldHeading">
+                <label htmlFor="total-bid">Total Bid</label>
+                <Tooltip enterTouchDelay={0} title={`Enter your total bid, including any amount you already bid (${a.my_bid}). When you lead, only the increase is reserved; otherwise the full total is reserved. Minimum accepted now: ${Math.max(a.minimum, a.highest + 1, a.my_bid + 1)}. If another bidder takes the lead, your reserved budget is released.`}>
+                  <IconButton size="small" aria-label="How total bids work">?</IconButton>
+                </Tooltip>
               </div>
               <TextField
+                id="total-bid"
                 name="amount"
-                label="Add to your bid"
                 type="number"
-                defaultValue={Math.max(1, a.minimum - a.my_bid, a.highest + 10 - a.my_bid)}
+                value={totalBid}
+                onChange={event => setTotalBid(event.target.value)}
+                disabled={bidPending}
                 required
                 fullWidth
-                style={{ backgroundColor: 'white', borderRadius: '8px' }}
-                inputProps={{ min: 1, max: 1000000000 }}
+                className="totalBidInput"
+                inputProps={{ min: Math.max(a.minimum, a.highest + 1, a.my_bid + 1), max: Math.min(1000000000, (a.winner_id === user.id ? a.my_bid : 0) + user.budget), step: 1, 'aria-describedby': bidNotice ? 'bid-feedback' : undefined }}
               />
+              {bidNotice && <Alert id="bid-feedback" severity={bidNotice.severity} role={bidNotice.severity === 'error' ? 'alert' : 'status'} sx={{ mt: 2 }}>{bidNotice.text}</Alert>}
               <Button
                 type="submit"
+                disabled={bidPending}
                 variant="contained"
                 style={{
                   marginTop: '1.5rem',
@@ -967,7 +970,7 @@ function AuctionDetailsView({ user, act, revision, allowPostSubmitEdit, canExpor
                   width: '100%',
                 }}
               >
-                Place bid
+                {bidPending ? 'Submitting...' : 'Submit your bid'}
               </Button>
             </form>
           </div>
@@ -1594,9 +1597,23 @@ function AdminView({ auctions, act, revision, notify }) {
     bids: state.bots.reduce((sum, b) => sum + (b.sent || 0), 0),
   };
 
-  const awaitingFinalizationCount = auctions.filter(a => !a.finalized_at && a.end_at <= Date.now()).length;
   const activeAuctionsCount = auctions.filter(a => !a.finalized_at && a.end_at > Date.now()).length;
   const system = state.system;
+  const resourceLinks = {
+    frontend: 'https://us-east-1.console.aws.amazon.com/amplify/apps/d1480nbd1jz398/branches/main',
+    server: 'https://us-east-1.console.aws.amazon.com/ec2/home?region=us-east-1#InstanceDetails:instanceId=i-0dced63de1425ce81',
+    database: 'https://us-east-1.console.aws.amazon.com/systems-manager/session-manager/i-0dced63de1425ce81?region=us-east-1',
+    source: 'https://github.com/Renana-Lab/bc/tree/codex/backend-marketplace-release',
+    api: 'https://54.83.80.133.nip.io/api/market/session'
+  };
+  const componentLinks = {
+    Frontend: resourceLinks.frontend,
+    'API service': resourceLinks.server,
+    Database: resourceLinks.database,
+    Scheduler: resourceLinks.database,
+    'Bot engine': '#admin-bots',
+    'Evidence and reports': '#admin-reports'
+  };
   const formatBytes = value => {
     if (!Number.isFinite(value)) return 'In memory';
     if (value < 1024) return `${value} B`;
@@ -1638,10 +1655,10 @@ function AdminView({ auctions, act, revision, notify }) {
       warning: 'Backup first: MARKET_DATA_DIR=/var/lib/bc-marketplace node scripts/market/backup.js'
     },
     {
-      name: 'Scheduler and finalizer',
-      access: 'Admin Zone > Auto Finalizer and Dynamic active-auction list',
-      change: 'Toggle automatic finalization here and inspect auction boundaries before changing scheduling code.',
-      reference: `Current cadence ${system.scheduler.tick_interval_ms / 1000}s / ${system.scheduler.auto_finalize ? 'auto-finalize enabled' : 'auto-finalize disabled'}`
+      name: 'Scheduler',
+      access: 'Admin Zone > Dynamic active-auction list',
+      change: 'Inspect auction boundaries here. For server logs, open Systems Manager and run journalctl -u bc-marketplace.',
+      reference: `Current cadence ${system.scheduler.tick_interval_ms / 1000}s`
     },
     {
       name: 'Bot engine',
@@ -1681,7 +1698,7 @@ function AdminView({ auctions, act, revision, notify }) {
               { icon: <CloudQueueOutlinedIcon />, label: 'Frontend', value: 'AWS Amplify', note: 'React + Vite' },
               { icon: <ApiOutlinedIcon />, label: 'API', value: 'AWS EC2', note: 'Node.js + systemd' },
               { icon: <StorageOutlinedIcon />, label: 'Data', value: 'SQLite', note: 'Persistent disk + WAL' },
-              { icon: <ScheduleOutlinedIcon />, label: 'Automation', value: 'Scheduler', note: 'Finalizer + bots' },
+              { icon: <ScheduleOutlinedIcon />, label: 'Automation', value: 'Scheduler', note: 'Auctions + bots' },
               { icon: <FactCheckOutlinedIcon />, label: 'Evidence', value: 'Reports', note: 'Ledger + snapshots' }
             ].map((layer, index) => (
               <div className="architectureLayer" key={layer.label}>
@@ -1700,7 +1717,7 @@ function AdminView({ auctions, act, revision, notify }) {
             </div>
             {componentRows.map(component => (
               <div className="architectureComponentRow" key={component.name}>
-                <strong>{component.name}</strong>
+                <a href={componentLinks[component.name]} target={componentLinks[component.name]?.startsWith('https:') ? '_blank' : undefined} rel="noreferrer">{component.name}</a>
                 <span>{component.role}</span>
                 <span>{component.host}<small>{component.detail}</small></span>
                 <span className={`architectureStatus status-${component.status}`}>{component.status}</span>
@@ -1712,7 +1729,7 @@ function AdminView({ auctions, act, revision, notify }) {
             <section>
               <div className="architectureSectionTitle"><StorageOutlinedIcon fontSize="small" /><strong>Database and persistence</strong></div>
               <dl>
-                <div><dt>Database file</dt><dd><code>{system.database.path}</code></dd></div>
+                <div><dt>Database file</dt><dd><code>{system.database.path}</code><br /><a href={resourceLinks.database} target="_blank" rel="noreferrer">Open database server session</a></dd></div>
                 <div><dt>Storage mode</dt><dd>{system.database.journal_mode.toUpperCase()} / foreign keys {system.database.foreign_keys ? 'enabled' : 'disabled'}</dd></div>
                 <div><dt>Database size</dt><dd>{formatBytes(system.database.size_bytes)}</dd></div>
                 <div><dt>Latest backup</dt><dd>{system.database.latest_backup ? date(system.database.latest_backup.modified_at) : 'No filesystem backup recorded'}</dd></div>
@@ -1741,7 +1758,7 @@ function AdminView({ auctions, act, revision, notify }) {
               {accessRows.map(component => (
                 <section className="architectureAccessCard" key={component.name}>
                   <div className="architectureAccessHeading">
-                    <strong>{component.name}</strong>
+                    <a href={componentLinks[component.name]} target={componentLinks[component.name]?.startsWith('https:') ? '_blank' : undefined} rel="noreferrer">{component.name}</a>
                     <code>{component.reference}</code>
                   </div>
                   <dl>
@@ -1755,6 +1772,14 @@ function AdminView({ auctions, act, revision, notify }) {
           </div>
         </AdminCard>
 
+        <nav className="architectureResourceLinks" aria-label="Infrastructure resources">
+          <a href={resourceLinks.frontend} target="_blank" rel="noreferrer">Amplify deployments</a>
+          <a href={resourceLinks.server} target="_blank" rel="noreferrer">EC2 instance</a>
+          <a href={resourceLinks.database} target="_blank" rel="noreferrer">Database, backups &amp; service logs</a>
+          <a href={resourceLinks.source} target="_blank" rel="noreferrer">GitHub release source</a>
+          <a href={resourceLinks.api} target="_blank" rel="noreferrer">API session endpoint</a>
+        </nav>
+        <p className="architectureAccessIntro">AWS links require your AWS account permissions. SQLite is a file on the EC2 server. The database link opens a server session. Run the backup command from /opt/bc-marketplace. For direct SQL maintenance, stop bc-marketplace, use a SQLite client with foreign keys enabled and a transaction, verify integrity, then restart the service. Preserve ledger and audit history.</p>
         <AdminCard title="Live Experiment Activity" defaultOpen={true}>
           <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 2 }}>
             {Object.entries(state.presence).map(([name, count]) => (
@@ -1776,7 +1801,7 @@ function AdminView({ auctions, act, revision, notify }) {
               act('/admin/settings', {
                 name: d.get('name'),
                 default_budget: Number(d.get('budget')),
-                auto_finalize: d.has('auto'),
+                auto_finalize: true,
                 allow_post_submit_edit: d.has('allowPostSubmitEdit')
               });
             }}
@@ -1784,7 +1809,6 @@ function AdminView({ auctions, act, revision, notify }) {
           >
             <TextField name="name" label="Market name" defaultValue={state.settings.name} required size="small" />
             <TextField name="budget" label="Default budget for new accounts" type="number" defaultValue={state.settings.default_budget} size="small" inputProps={{ min: 1, max: 1000000000 }} />
-            <FormControlLabel control={<Checkbox name="auto" defaultChecked={Boolean(state.settings.auto_finalize)} />} label="Automatic finalization" />
             <FormControlLabel
               control={<Checkbox name="allowPostSubmitEdit" defaultChecked={Boolean(state.settings.allow_post_submit_edit)} />}
               label="Allow sellers to edit the minimum bid before the first bid"
@@ -1865,22 +1889,6 @@ function AdminView({ auctions, act, revision, notify }) {
           </div>
         </AdminCard>
 
-        <AdminCard title="Auto Finalizer">
-          <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center', mb: 1.5 }}>
-            <span style={{ padding: '4px 12px', borderRadius: '12px', background: state.settings.auto_finalize ? '#e8f5e9' : '#fff3e0', color: state.settings.auto_finalize ? '#2e7d32' : '#e65100', fontWeight: 700, fontSize: '0.85rem' }}>
-              {state.settings.auto_finalize ? 'Automatic (runs on scheduler tick)' : 'Manual finalization only'}
-            </span>
-            <span style={{ color: '#5e638a', fontSize: '0.9rem' }}>
-              Awaiting finalization: <strong>{awaitingFinalizationCount}</strong> auctions
-            </span>
-          </Box>
-          <p style={{ color: '#5e638a', margin: '0 0 1rem' }}>
-            Seller payments are {state.settings.auto_finalize ? 'automatically processed when auctions conclude' : 'held until manual trigger'}.
-          </p>
-          <Button variant="outlined" onClick={() => act('/admin/finalize', {})} style={{ borderRadius: '20px' }}>
-            Finalize ended auctions ({awaitingFinalizationCount})
-          </Button>
-        </AdminCard>
 
         <AdminCard title="Set Global Budget">
           <form
@@ -1907,6 +1915,7 @@ function AdminView({ auctions, act, revision, notify }) {
           </form>
         </AdminCard>
 
+        <div id="admin-bots" />
         <AdminCard title="Bot Command Center" defaultOpen={true}>
           <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2, 1fr)', sm: 'repeat(4, 1fr)' }, gap: 1, mb: 2 }}>
             <Box sx={{ p: 1.5, borderRadius: 2, background: '#fbfcff', border: '1px solid #e5e9f8' }}>
@@ -2064,22 +2073,10 @@ function AdminView({ auctions, act, revision, notify }) {
                 {activeAuctionsCount}
               </div>
             </Box>
-            <Box sx={{ p: 1, borderRadius: 2, background: '#fff7df', border: '1px solid #fde68a', textAlign: 'center' }}>
-              <small style={{ color: '#8a5b00', fontWeight: 700 }}>Awaiting finalization</small>
-              <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#9a6411' }}>
-                {awaitingFinalizationCount}
-              </div>
-            </Box>
             <Box sx={{ p: 1, borderRadius: 2, background: '#f0f3f9', border: '1px solid #d9dff2', textAlign: 'center' }}>
               <small style={{ color: '#5e638a', fontWeight: 700 }}>Total listed</small>
               <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#002884' }}>
                 {auctions.length}
-              </div>
-            </Box>
-            <Box sx={{ p: 1, borderRadius: 2, background: '#f0f3f9', border: '1px solid #d9dff2', textAlign: 'center' }}>
-              <small style={{ color: '#5e638a', fontWeight: 700 }}>Index status</small>
-              <div style={{ fontSize: '1.1rem', fontWeight: 700, color: '#103090', mt: 0.2 }}>
-                up to date
               </div>
             </Box>
           </Box>
@@ -2094,25 +2091,23 @@ function AdminView({ auctions, act, revision, notify }) {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {auctions.filter(a => !a.finalized_at).map(a => {
+                {auctions.filter(a => !a.finalized_at && a.end_at > Date.now()).map(a => {
                   const isActive = a.end_at > Date.now();
                   return (
                     <TableRow key={a.id}>
                       <TableCell align="center"><strong>{a.description}</strong><br /><small>{a.seller}</small></TableCell>
                       <TableCell align="center">{date(a.end_at)}</TableCell>
                       <TableCell align="center">
-                        {isActive ? <Countdown end={a.end_at} /> : <span style={{ color: '#b71c1c', fontWeight: 700 }}>Awaiting finalization</span>}
+                        <Countdown end={a.end_at} />
                       </TableCell>
                       <TableCell align="center" style={{ fontWeight: 700 }}>{a.highest}</TableCell>
                       <TableCell align="center">{a.bidders}</TableCell>
                       <TableCell align="center">
                         <Button component={Link} to={`/auction/${a.id}`} size="small">View</Button>
-                        {isActive ? (
+                        {isActive && (
                           <IconAction title="Close auction early" onClick={() => window.confirm('Close auction early?') && act(`/admin/auctions/${a.id}/close`, {})}>
                             <StopIcon color="error" />
                           </IconAction>
-                        ) : (
-                          <Button size="small" variant="text" onClick={() => act(`/auctions/${a.id}/finalize`, {})}>Finalize</Button>
                         )}
                       </TableCell>
                     </TableRow>
@@ -2166,6 +2161,7 @@ function AdminView({ auctions, act, revision, notify }) {
           )}
         </AdminCard>
 
+        <div id="admin-reports" />
         <AdminCard title="Reports">
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
             Build a focused export from auctions and ledger events. Choose optional date range, then download.
@@ -2342,7 +2338,7 @@ export default function BackendApp() {
     try {
       const result = await api(path, body, headers);
       setRevision(v => v + 1);
-      await refresh();
+      try { await refresh(); } catch { /* Confirmed writes remain successful; polling retries the refresh. */ }
       return result || { ok: true };
     } catch (err) {
       notify(err.message);
@@ -2549,7 +2545,7 @@ export default function BackendApp() {
           <Route path="/account" element={user ? <AccountView user={user} /> : <Login onLogin={val => { setSession(val); refresh(); }} />} />
           <Route path="/auctions-list" element={user ? <AuctionsListView auctions={auctions} user={user} admin={admin} act={act} refresh={refresh} allowPostSubmitEdit={Boolean(session.settings?.allow_post_submit_edit)} /> : <Login onLogin={val => { setSession(val); refresh(); }} />} />
           <Route path="/open-auction" element={user ? <NewAuctionView act={act} /> : <Login onLogin={val => { setSession(val); refresh(); }} />} />
-          <Route path="/auction/:address" element={user ? <AuctionDetailsView user={user} act={act} revision={revision} allowPostSubmitEdit={Boolean(session.settings?.allow_post_submit_edit)} canExportTransactions={Boolean(admin && session.adminAccess)} /> : <Login onLogin={val => { setSession(val); refresh(); }} />} />
+          <Route path="/auction/:address" element={user ? <AuctionDetailsView key={location.pathname} user={user} act={act} revision={revision} allowPostSubmitEdit={Boolean(session.settings?.allow_post_submit_edit)} canExportTransactions={Boolean(admin && session.adminAccess)} /> : <Login onLogin={val => { setSession(val); refresh(); }} />} />
           <Route path="/manage-budget" element={!user ? <Login onLogin={val => { setSession(val); refresh(); }} /> : admin ? <AdminView auctions={auctions} act={act} revision={revision} notify={notify} /> : <Navigate to="/auctions-list" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
