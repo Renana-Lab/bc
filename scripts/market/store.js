@@ -12,6 +12,8 @@ const {
 const {
   promisify
 } = require('node:util');
+const fs = require('node:fs');
+const path = require('node:path');
 const derive = promisify(scrypt);
 const LIMIT = 1_000_000_000;
 class MarketError extends Error {
@@ -51,6 +53,7 @@ async function verifyPassword(password, hash) {
 class MarketStore {
   constructor(filename = ':memory:', clock = Date.now) {
     this.now = clock;
+    this.filename = filename === ':memory:' ? filename : path.resolve(filename);
     this.db = new DatabaseSync(filename);
     this.db.exec(`PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), name TEXT NOT NULL, default_budget INTEGER NOT NULL, auto_finalize INTEGER NOT NULL, allow_post_submit_edit INTEGER NOT NULL DEFAULT 1);
@@ -643,7 +646,62 @@ class MarketStore {
       })),
       active: this.active(),
       presence: this.presence(),
-      settings: this.settings()
+      settings: this.settings(),
+      system: this.systemState(actor)
+    };
+  }
+  systemState(actor) {
+    this.admin(actor);
+    const memoryDatabase = this.filename === ':memory:';
+    let databaseBytes = null;
+    let latestBackup = null;
+    if (!memoryDatabase && fs.existsSync(this.filename)) {
+      databaseBytes = fs.statSync(this.filename).size;
+      const directory = path.dirname(this.filename);
+      const backups = fs.readdirSync(directory)
+        .filter(name => /^backup-\d+\.sqlite$/.test(name))
+        .map(name => {
+          const filename = path.join(directory, name);
+          return { filename, modified_at: fs.statSync(filename).mtimeMs };
+        })
+        .sort((a, b) => b.modified_at - a.modified_at);
+      latestBackup = backups[0] || null;
+    }
+    const scalar = (table, where = '') => this.one(`SELECT COUNT(*) n FROM ${table}${where}`).n;
+    const latestActivity = this.one('SELECT created_at FROM activity ORDER BY id DESC LIMIT 1')?.created_at || null;
+    return {
+      checked_at: this.now(),
+      runtime: {
+        status: 'online',
+        node: process.version,
+        uptime_seconds: Math.floor(process.uptime()),
+        memory_bytes: process.memoryUsage().rss
+      },
+      database: {
+        status: 'online',
+        engine: 'SQLite',
+        path: this.filename,
+        size_bytes: databaseBytes,
+        journal_mode: this.one('PRAGMA journal_mode').journal_mode,
+        foreign_keys: Boolean(this.one('PRAGMA foreign_keys').foreign_keys),
+        latest_backup: latestBackup
+      },
+      scheduler: {
+        status: latestActivity && this.now() - latestActivity <= 30000 ? 'healthy' : 'starting',
+        tick_interval_ms: 1000,
+        last_activity_at: latestActivity,
+        auto_finalize: Boolean(this.settings().auto_finalize)
+      },
+      counts: {
+        users: scalar('users'),
+        auctions: scalar('auctions'),
+        active_auctions: this.active().length,
+        bids: scalar('bids'),
+        ledger_entries: scalar('ledger'),
+        events: scalar('events'),
+        snapshots: scalar('snapshots'),
+        bot_rounds: scalar('rounds')
+      }
     };
   }
   report(actor) {

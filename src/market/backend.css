@@ -1043,6 +1043,88 @@ button, input, select, textarea {
 .backend-toolbar > div { min-width: 0; }
 .backend-auctions-page { padding-top: 2rem; }
 .backend-admin-page { padding-top: 64px; }
+.architectureIntro {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 18px;
+  color: #173270;
+}
+.architectureIntro > div { display: grid; gap: 3px; }
+.architectureIntro span { color: #667087; font-size: 0.86rem; }
+.architectureChecked { white-space: nowrap; }
+.architectureFlow {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 20px;
+}
+.architectureLayer {
+  position: relative;
+  min-width: 0;
+  padding: 14px 12px;
+  border: 1px solid rgba(137, 157, 226, 0.3);
+  border-radius: 8px;
+  background: rgba(249, 251, 255, 0.82);
+  display: grid;
+  gap: 2px;
+}
+.architectureLayerIcon { color: #3152ad; line-height: 0; margin-bottom: 5px; }
+.architectureLayer small { color: #747c90; }
+.architectureLayer strong { color: #173270; }
+.architectureLayer span { color: #667087; font-size: 0.76rem; }
+.architectureLayer i {
+  position: absolute;
+  z-index: 2;
+  right: -10px;
+  top: 50%;
+  width: 10px;
+  height: 1px;
+  background: #aeb9d8;
+}
+.architectureComponentTable { border-top: 1px solid #e3e8f3; border-bottom: 1px solid #e3e8f3; }
+.architectureTableHeader,
+.architectureComponentRow {
+  display: grid;
+  grid-template-columns: minmax(120px, .8fr) minmax(180px, 1.4fr) minmax(190px, 1.5fr) 90px;
+  gap: 16px;
+  align-items: center;
+  padding: 10px 4px;
+}
+.architectureTableHeader { color: #727b91; font-size: 0.75rem; text-transform: uppercase; }
+.architectureComponentRow { border-top: 1px solid #edf0f6; color: #4f596f; font-size: 0.84rem; }
+.architectureComponentRow > strong { color: #173270; }
+.architectureComponentRow > span:nth-child(3) { display: grid; gap: 2px; }
+.architectureComponentRow small { color: #7b8497; }
+.architectureStatus {
+  justify-self: start;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: #edf0f7;
+  color: #596176;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: capitalize;
+}
+.architectureStatus.status-online,
+.architectureStatus.status-healthy,
+.architectureStatus.status-active { background: #e5f5eb; color: #176a3d; }
+.architectureStatus.status-starting { background: #fff3df; color: #8b5b00; }
+.architectureDetails { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; margin-top: 22px; }
+.architectureSectionTitle { display: flex; align-items: center; gap: 8px; color: #173270; margin-bottom: 10px; }
+.architectureDetails dl { margin: 0; display: grid; gap: 8px; }
+.architectureDetails dl > div { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 12px; font-size: 0.82rem; }
+.architectureDetails dt { color: #747c90; }
+.architectureDetails dd { margin: 0; color: #3f4960; min-width: 0; overflow-wrap: anywhere; }
+.architectureDetails code { color: #183777; font-size: 0.78rem; }
+.architectureCounts { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 14px; }
+.architectureCounts span { display: grid; min-width: 82px; padding: 7px 9px; border: 1px solid #e4e9f3; border-radius: 6px; color: #737c90; font-size: 0.68rem; text-transform: capitalize; }
+.architectureCounts strong { color: #173270; font-size: 0.98rem; }
+.deploymentSteps { margin: 0; padding: 0; list-style: none; counter-reset: deploy; display: grid; gap: 9px; }
+.deploymentSteps li { counter-increment: deploy; display: grid; grid-template-columns: 24px 88px minmax(0, 1fr); gap: 8px; align-items: start; color: #586278; font-size: 0.82rem; }
+.deploymentSteps li::before { content: counter(deploy); display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: #e9eefb; color: #2549a1; font-size: 0.7rem; font-weight: 700; }
+.deploymentSteps li strong { color: #173270; }
 .adminUnlockCard {
   width: min(460px, 100%);
   margin: 0 auto;
@@ -1163,6 +1245,18 @@ button, input, select, textarea {
 }
 
 @media (max-width: 760px) {
+  .architectureIntro { display: grid; }
+  .architectureChecked { white-space: normal; }
+  .architectureFlow { grid-template-columns: 1fr; }
+  .architectureLayer i { display: none; }
+  .architectureTableHeader { display: none; }
+  .architectureComponentRow { grid-template-columns: 1fr auto; gap: 5px 12px; padding: 13px 4px; }
+  .architectureComponentRow > span:nth-child(2),
+  .architectureComponentRow > span:nth-child(3) { grid-column: 1 / -1; }
+  .architectureComponentRow .architectureStatus { grid-column: 2; grid-row: 1; }
+  .architectureDetails { grid-template-columns: 1fr; }
+  .deploymentSteps li { grid-template-columns: 24px minmax(0, 1fr); }
+  .deploymentSteps li span { grid-column: 2; }
   .backendBotRow { grid-template-columns: 1fr; }
   .backendBotSettings { grid-template-columns: 1fr; }
   .backendBotUsage { width: 100%; margin-left: 0; }

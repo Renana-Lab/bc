@@ -137,6 +137,15 @@ test('authentication, authorization, expiry and disabled-account session revocat
   const login = await s.login(a.email, password);
   assert.equal(s.session(login.token).id, a.id);
   assert.throws(() => s.adminState(a.id), /Administrator/);
+  const system = s.adminState(admin.id).system;
+  assert.equal(system.runtime.status, 'online');
+  assert.equal(system.database.engine, 'SQLite');
+  assert.equal(system.database.path, ':memory:');
+  assert.equal(system.database.journal_mode, 'memory');
+  assert.equal(system.database.foreign_keys, true);
+  assert.equal(system.scheduler.tick_interval_ms, 1000);
+  assert.equal(system.counts.users, 4);
+  assert.equal(system.counts.auctions, 0);
   s.disable(a.id, true, admin.id);
   assert.throws(() => s.session(login.token), /sign in|unavailable/);
   s.disable(a.id, false, admin.id);

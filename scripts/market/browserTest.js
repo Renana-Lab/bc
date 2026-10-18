@@ -103,6 +103,11 @@ const {
     await page.getByRole('heading', {
       name: 'Admin Zone'
     }).waitFor();
+    await page.getByText('Architecture & Operations', { exact: true }).waitFor();
+    await page.getByText('AWS Amplify', { exact: true }).first().waitFor();
+    await page.getByText('AWS EC2', { exact: false }).first().waitFor();
+    await page.getByText(':memory:', { exact: true }).waitFor();
+    await page.getByText('Deployment path', { exact: true }).waitFor();
     await page.getByText('Bot 01', {
       exact: true
     }).first().waitFor();

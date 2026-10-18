@@ -72,6 +72,10 @@ import newStyles from '../pages/NewAuction/new.module.scss';
 import AuctionDatabaseDialog from './AuctionDatabaseDialog';
 import StorageOutlinedIcon from '@mui/icons-material/StorageOutlined';
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
+import CloudQueueOutlinedIcon from '@mui/icons-material/CloudQueueOutlined';
+import ApiOutlinedIcon from '@mui/icons-material/ApiOutlined';
+import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
+import FactCheckOutlinedIcon from '@mui/icons-material/FactCheckOutlined';
 
 const date = value => value ? new Date(value).toLocaleString() : '-';
 const status = a => a.finalized_at ? 'Payment finalized' : a.end_at <= Date.now() ? 'Awaiting finalization' : 'Open';
@@ -1592,6 +1596,27 @@ function AdminView({ auctions, act, revision, notify }) {
 
   const awaitingFinalizationCount = auctions.filter(a => !a.finalized_at && a.end_at <= Date.now()).length;
   const activeAuctionsCount = auctions.filter(a => !a.finalized_at && a.end_at > Date.now()).length;
+  const system = state.system;
+  const formatBytes = value => {
+    if (!Number.isFinite(value)) return 'In memory';
+    if (value < 1024) return `${value} B`;
+    if (value < 1024 ** 2) return `${(value / 1024).toFixed(1)} KB`;
+    return `${(value / 1024 ** 2).toFixed(1)} MB`;
+  };
+  const formatUptime = seconds => {
+    const days = Math.floor(seconds / 86400);
+    const hours = Math.floor((seconds % 86400) / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    return [days && `${days}d`, (days || hours) && `${hours}h`, `${minutes}m`].filter(Boolean).join(' ');
+  };
+  const componentRows = [
+    { name: 'Frontend', role: 'Participant and admin interface', host: 'AWS Amplify / React + Vite', status: 'online', detail: 'Static assets and SPA routing' },
+    { name: 'API service', role: 'Authentication and marketplace rules', host: `AWS EC2 / Node.js ${system.runtime.node}`, status: system.runtime.status, detail: `Process uptime ${formatUptime(system.runtime.uptime_seconds)}` },
+    { name: 'Database', role: 'Users, auctions, bids, budgets and audit evidence', host: `${system.database.engine} / WAL`, status: system.database.status, detail: formatBytes(system.database.size_bytes) },
+    { name: 'Scheduler', role: 'Auction boundaries, finalization and bot cycles', host: `Server tick every ${system.scheduler.tick_interval_ms / 1000}s`, status: system.scheduler.status, detail: system.scheduler.last_activity_at ? `Last activity ${date(system.scheduler.last_activity_at)}` : 'Waiting for first activity record' },
+    { name: 'Bot engine', role: 'Random auction selection and controlled bidding', host: 'Coordinated inside the API service', status: botSummary.running ? 'active' : 'idle', detail: `${botSummary.registered} registered / ${botSummary.running} running` },
+    { name: 'Evidence and reports', role: 'Ledger, events, snapshots and exports', host: 'SQLite + Admin report generator', status: 'online', detail: `${system.counts.ledger_entries} ledger entries / ${system.counts.snapshots} snapshots` }
+  ];
 
   return (
     <div className="market-page-data backend-admin-page">
@@ -1602,6 +1627,74 @@ function AdminView({ auctions, act, revision, notify }) {
         <Typography variant="body2" color="text.secondary" textAlign="center" sx={{ maxWidth: 680, mx: 'auto', mb: 3 }}>
           Manage users, budgets, auctions, automation, and reports.
         </Typography>
+
+        <AdminCard title="Architecture & Operations" defaultOpen={true}>
+          <div className="architectureIntro">
+            <div>
+              <strong>System map</strong>
+              <span>Live operational view from the browser interface through the API and persistent database.</span>
+            </div>
+            <span className="architectureChecked">Checked {date(system.checked_at)}</span>
+          </div>
+
+          <div className="architectureFlow" aria-label="Project architecture flow">
+            {[
+              { icon: <CloudQueueOutlinedIcon />, label: 'Frontend', value: 'AWS Amplify', note: 'React + Vite' },
+              { icon: <ApiOutlinedIcon />, label: 'API', value: 'AWS EC2', note: 'Node.js + systemd' },
+              { icon: <StorageOutlinedIcon />, label: 'Data', value: 'SQLite', note: 'Persistent disk + WAL' },
+              { icon: <ScheduleOutlinedIcon />, label: 'Automation', value: 'Scheduler', note: 'Finalizer + bots' },
+              { icon: <FactCheckOutlinedIcon />, label: 'Evidence', value: 'Reports', note: 'Ledger + snapshots' }
+            ].map((layer, index) => (
+              <div className="architectureLayer" key={layer.label}>
+                <div className="architectureLayerIcon">{layer.icon}</div>
+                <small>{layer.label}</small>
+                <strong>{layer.value}</strong>
+                <span>{layer.note}</span>
+                {index < 4 && <i aria-hidden="true" />}
+              </div>
+            ))}
+          </div>
+
+          <div className="architectureComponentTable">
+            <div className="architectureTableHeader">
+              <span>Component</span><span>Responsibility</span><span>Runtime / location</span><span>Status</span>
+            </div>
+            {componentRows.map(component => (
+              <div className="architectureComponentRow" key={component.name}>
+                <strong>{component.name}</strong>
+                <span>{component.role}</span>
+                <span>{component.host}<small>{component.detail}</small></span>
+                <span className={`architectureStatus status-${component.status}`}>{component.status}</span>
+              </div>
+            ))}
+          </div>
+
+          <div className="architectureDetails">
+            <section>
+              <div className="architectureSectionTitle"><StorageOutlinedIcon fontSize="small" /><strong>Database and persistence</strong></div>
+              <dl>
+                <div><dt>Database file</dt><dd><code>{system.database.path}</code></dd></div>
+                <div><dt>Storage mode</dt><dd>{system.database.journal_mode.toUpperCase()} / foreign keys {system.database.foreign_keys ? 'enabled' : 'disabled'}</dd></div>
+                <div><dt>Database size</dt><dd>{formatBytes(system.database.size_bytes)}</dd></div>
+                <div><dt>Latest backup</dt><dd>{system.database.latest_backup ? date(system.database.latest_backup.modified_at) : 'No filesystem backup recorded'}</dd></div>
+              </dl>
+              <div className="architectureCounts">
+                {Object.entries(system.counts).map(([label, count]) => <span key={label}><strong>{count}</strong>{label.replaceAll('_', ' ')}</span>)}
+              </div>
+            </section>
+
+            <section>
+              <div className="architectureSectionTitle"><AccountTreeOutlinedIcon fontSize="small" /><strong>Deployment path</strong></div>
+              <ol className="deploymentSteps">
+                <li><strong>Source</strong><span>GitHub `master` and `codex/backend-marketplace-release` branches.</span></li>
+                <li><strong>Verification</strong><span>Backend tests, browser E2E checks, and the Vite production build run before release.</span></li>
+                <li><strong>Frontend</strong><span>The compiled static bundle is uploaded to AWS Amplify.</span></li>
+                <li><strong>Backend</strong><span>EC2 pulls the release branch and restarts the `bc-marketplace` systemd service.</span></li>
+                <li><strong>Data safety</strong><span>A consistent SQLite backup is created before backend migrations or restarts.</span></li>
+              </ol>
+            </section>
+          </div>
+        </AdminCard>
 
         <AdminCard title="Live Experiment Activity" defaultOpen={true}>
           <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 2 }}>
