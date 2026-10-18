@@ -204,12 +204,32 @@ function PlatformGuideView() {
           <Accordion slots={{ heading: "h2" }}>
             <AccordionSummary expandIcon={<ExpandMoreIcon />}>
               <Typography variant="h6" component="span" sx={{ fontWeight: 600, color: '#002884' }}>
-                <span className="guideStepNumber">3</span> Browse & Bid on Data Auctions
+                <span className="guideStepNumber">3</span> Open an Auction
               </Typography>
             </AccordionSummary>
             <AccordionDetails>
               <Typography className="accountText" sx={{ textAlign: 'left !important', padding: '0 0 1rem' }}>
-                Browse live auctions, review data descriptions, and place bids within your available budget. When an auction concludes, the highest bidder receives access to the dataset.
+                Choose Start an Auction, add the data description and payload, set the minimum bid and closing time, then submit it. Before the first bid, you may adjust only the minimum bid.
+              </Typography>
+              <Button
+                variant="contained"
+                className="accountActionBtn"
+                onClick={() => navigate("/open-auction")}
+              >
+                Start an Auction
+              </Button>
+            </AccordionDetails>
+          </Accordion>
+
+          <Accordion slots={{ heading: "h2" }}>
+            <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+              <Typography variant="h6" component="span" sx={{ fontWeight: 600, color: '#002884' }}>
+                <span className="guideStepNumber">4</span> Participate in an Auction
+              </Typography>
+            </AccordionSummary>
+            <AccordionDetails>
+              <Typography className="accountText" sx={{ textAlign: 'left !important', padding: '0 0 1rem' }}>
+                Open an active auction, review its description and minimum, and add to your bid within your available budget. The highest bidder receives access to the dataset after finalization.
               </Typography>
               <Button
                 variant="contained"
