@@ -1617,6 +1617,45 @@ function AdminView({ auctions, act, revision, notify }) {
     { name: 'Bot engine', role: 'Random auction selection and controlled bidding', host: 'Coordinated inside the API service', status: botSummary.running ? 'active' : 'idle', detail: `${botSummary.registered} registered / ${botSummary.running} running` },
     { name: 'Evidence and reports', role: 'Ledger, events, snapshots and exports', host: 'SQLite + Admin report generator', status: 'online', detail: `${system.counts.ledger_entries} ledger entries / ${system.counts.snapshots} snapshots` }
   ];
+  const accessRows = [
+    {
+      name: 'Frontend',
+      access: 'AWS Console > Amplify > Data Marketplace > main',
+      change: 'Edit the React source on GitHub, run the production checks, then deploy the generated build to Amplify.',
+      reference: 'Amplify app d1480nbd1jz398'
+    },
+    {
+      name: 'API service',
+      access: 'AWS Console > Systems Manager > Run Command > marketplace EC2 instance',
+      change: 'Application code lives in /opt/bc-marketplace. Deploy the release branch, then restart and verify the bc-marketplace service.',
+      reference: 'EC2 i-0dced63de1425ce81 / systemd: bc-marketplace'
+    },
+    {
+      name: 'Database',
+      access: 'Use the auction editor, Users and budgets, and Market manager below for normal changes. Use Systems Manager only for maintenance.',
+      change: 'Schema changes belong in scripts/market/store.js. Back up the database before a migration or direct maintenance and never edit the live file while the service is writing.',
+      reference: `Live file ${system.database.path}`,
+      warning: 'Backup first: MARKET_DATA_DIR=/var/lib/bc-marketplace node scripts/market/backup.js'
+    },
+    {
+      name: 'Scheduler and finalizer',
+      access: 'Admin Zone > Auto Finalizer and Dynamic active-auction list',
+      change: 'Toggle automatic finalization here and inspect auction boundaries before changing scheduling code.',
+      reference: `Current cadence ${system.scheduler.tick_interval_ms / 1000}s / ${system.scheduler.auto_finalize ? 'auto-finalize enabled' : 'auto-finalize disabled'}`
+    },
+    {
+      name: 'Bot engine',
+      access: 'Admin Zone > Bot Command Center and Bot observatory',
+      change: 'Create, configure, start, stop, and inspect bots here. Runtime evidence remains available in the observatory and reports.',
+      reference: `${botSummary.registered} registered / ${botSummary.running} running`
+    },
+    {
+      name: 'Evidence and reports',
+      access: 'Admin Zone > Reports, Auction list history, and Audit and error inspection',
+      change: 'Generate exports or inspect evidence here. Ledger and audit records are append-only and must not be manually rewritten.',
+      reference: `${system.counts.events} events / ${system.counts.snapshots} snapshots`
+    }
+  ];
 
   return (
     <div className="market-page-data backend-admin-page">
@@ -1693,6 +1732,26 @@ function AdminView({ auctions, act, revision, notify }) {
                 <li><strong>Data safety</strong><span>A consistent SQLite backup is created before backend migrations or restarts.</span></li>
               </ol>
             </section>
+          </div>
+
+          <div className="architectureAccess">
+            <div className="architectureSectionTitle"><ApiOutlinedIcon fontSize="small" /><strong>How to access and maintain each component</strong></div>
+            <p className="architectureAccessIntro">Use the Admin Zone for routine marketplace operations. Use AWS Systems Manager for server or database maintenance; no inbound SSH access is required.</p>
+            <div className="architectureAccessGrid">
+              {accessRows.map(component => (
+                <section className="architectureAccessCard" key={component.name}>
+                  <div className="architectureAccessHeading">
+                    <strong>{component.name}</strong>
+                    <code>{component.reference}</code>
+                  </div>
+                  <dl>
+                    <div><dt>Access</dt><dd>{component.access}</dd></div>
+                    <div><dt>Change</dt><dd>{component.change}</dd></div>
+                  </dl>
+                  {component.warning && <div className="architectureMaintenanceWarning"><strong>Safe maintenance</strong><code>{component.warning}</code></div>}
+                </section>
+              ))}
+            </div>
           </div>
         </AdminCard>
 

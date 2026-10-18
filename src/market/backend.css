@@ -1125,6 +1125,25 @@ button, input, select, textarea {
 .deploymentSteps li { counter-increment: deploy; display: grid; grid-template-columns: 24px 88px minmax(0, 1fr); gap: 8px; align-items: start; color: #586278; font-size: 0.82rem; }
 .deploymentSteps li::before { content: counter(deploy); display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: #e9eefb; color: #2549a1; font-size: 0.7rem; font-weight: 700; }
 .deploymentSteps li strong { color: #173270; }
+.architectureAccess { margin-top: 24px; padding-top: 20px; border-top: 1px solid #e3e8f3; }
+.architectureAccessIntro { margin: -2px 0 14px; color: #677187; font-size: 0.82rem; line-height: 1.5; }
+.architectureAccessGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.architectureAccessCard {
+  min-width: 0;
+  padding: 13px 14px;
+  border: 1px solid #e1e7f2;
+  border-radius: 8px;
+  background: rgba(250, 252, 255, 0.8);
+}
+.architectureAccessHeading { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 9px; }
+.architectureAccessHeading strong { color: #173270; font-size: 0.88rem; }
+.architectureAccessHeading code { color: #6e7890; font-size: 0.68rem; text-align: right; overflow-wrap: anywhere; }
+.architectureAccessCard dl { display: grid; gap: 7px; margin: 0; }
+.architectureAccessCard dl > div { display: grid; grid-template-columns: 50px minmax(0, 1fr); gap: 8px; font-size: 0.77rem; line-height: 1.45; }
+.architectureAccessCard dt { color: #3152ad; font-weight: 700; }
+.architectureAccessCard dd { min-width: 0; margin: 0; color: #586278; overflow-wrap: anywhere; }
+.architectureMaintenanceWarning { display: grid; gap: 4px; margin-top: 10px; padding: 8px 9px; border-left: 3px solid #d39a26; background: #fff9ec; color: #7a5814; font-size: 0.72rem; }
+.architectureMaintenanceWarning code { color: #664a12; overflow-wrap: anywhere; }
 .adminUnlockCard {
   width: min(460px, 100%);
   margin: 0 auto;
@@ -1255,6 +1274,9 @@ button, input, select, textarea {
   .architectureComponentRow > span:nth-child(3) { grid-column: 1 / -1; }
   .architectureComponentRow .architectureStatus { grid-column: 2; grid-row: 1; }
   .architectureDetails { grid-template-columns: 1fr; }
+  .architectureAccessGrid { grid-template-columns: 1fr; }
+  .architectureAccessHeading { display: grid; }
+  .architectureAccessHeading code { text-align: left; }
   .deploymentSteps li { grid-template-columns: 24px minmax(0, 1fr); }
   .deploymentSteps li span { grid-column: 2; }
   .backendBotRow { grid-template-columns: 1fr; }

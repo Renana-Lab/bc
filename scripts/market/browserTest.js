@@ -108,6 +108,9 @@ const {
     await page.getByText('AWS EC2', { exact: false }).first().waitFor();
     await page.getByText(':memory:', { exact: true }).waitFor();
     await page.getByText('Deployment path', { exact: true }).waitFor();
+    await page.getByText('How to access and maintain each component', { exact: true }).waitFor();
+    await page.getByText('Backup first:', { exact: false }).waitFor();
+    await page.getByText('Bot observatory', { exact: false }).first().waitFor();
     await page.getByText('Bot 01', {
       exact: true
     }).first().waitFor();
