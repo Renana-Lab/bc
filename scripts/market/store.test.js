@@ -108,7 +108,8 @@ test('idempotency prevents double bids and rejects conflicting retry', async t =
     key = randomUUID();
   assert.deepEqual(s.bid(id, 50, a.id, key), s.bid(id, 50, a.id, key));
   assert.throws(() => s.bid(id, 100, a.id, key), /reused/);
-  assert.equal(s.auction(id, a.id).bids.length, 1);
+  assert.deepEqual(s.auction(id, a.id).bids, []);
+  assert.equal(s.auction(id, a.id).my_bid, 50);
 });
 test('budget adjustment includes reservations and cannot create a release windfall', async t => {
   const {

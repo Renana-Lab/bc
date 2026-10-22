@@ -67,7 +67,8 @@ test('HTTP gate, CSRF, role enforcement, cookies and concurrent bid ordering', a
     'Idempotency-Key': `test-bid-${i}`
   })));
   assert.deepEqual(results.map(r => r.status).sort(), [200, 409]);
-  assert.equal(store.auction(id, users[0].id).bids.length, 1);
+  assert.deepEqual(store.auction(id, users[0].id).bids, []);
+  assert.equal(store.auction(id, users[0].id).my_bid, results[0].status === 200 ? 100 : 0);
   await post('/logout', {}, cookies[0]);
   assert.equal((await fetch(base + '/session', {
     headers: {

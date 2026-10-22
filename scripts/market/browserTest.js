@@ -114,6 +114,16 @@ const {
     assert((await page.getByRole('link', { name: 'Open database server session' }).getAttribute('href')).includes('session-manager/i-0dced63de1425ce81'));
     await page.getByText('How to access and maintain each component', { exact: true }).waitFor();
     await page.getByText('Backup first:', { exact: false }).waitFor();
+    await page.getByRole('button', { name: 'Expand Batch Auction Studio', exact: true }).click();
+    const batchMinimum = page.getByRole('spinbutton', { name: 'Minimum bid row 1', exact: true });
+    const batchRow = page.getByRole('row').filter({ has: batchMinimum });
+    for (const invalid of ['00', '1.5', '1000000001']) {
+      await batchMinimum.fill(invalid);
+      await batchRow.getByText('Fix', { exact: true }).waitFor();
+    }
+    await batchMinimum.fill('50');
+    await batchRow.getByText('Ready', { exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Collapse Batch Auction Studio', exact: true }).click();
     await page.getByText('Bot observatory', { exact: false }).first().waitFor();
     await page.getByText('Bot 01', {
       exact: true
@@ -124,6 +134,17 @@ const {
     await page.getByText('1 cycles / 1 bids', {
       exact: false
     }).waitFor();
+    await page.getByRole('button', { name: 'Expand Reports', exact: true }).click();
+    await page.waitForTimeout(150);
+    const workbookDownload = page.waitForEvent('download');
+    await page.getByRole('button', { name: 'Workbook', exact: true }).evaluate(button => button.click());
+    const workbook = fs.readFileSync(await (await workbookDownload).path(), 'utf8');
+    assert(workbook.includes('ss:Type="DateTime"'));
+    assert(workbook.includes('created_at (UTC)'));
+    assert(workbook.includes('end_at (UTC)'));
+    assert(workbook.includes(new Date(store.auction(auction.id, admin.id).end_at).toISOString().replace(/Z$/, '')));
+    assert(!workbook.includes('ss:Type="String">null</Data>'));
+    await page.getByRole('button', { name: 'Collapse Reports', exact: true }).click();
     fs.mkdirSync('artifacts/backend', {
       recursive: true
     });
@@ -195,7 +216,7 @@ const {
     }).waitFor();
     const owned = store.createAuction({ description: 'Seller-owned auction', payload: 'Owner data', minimum: 50, minutes: 25 }, user.id);
     await page.getByRole('button', { name: 'Refresh', exact: true }).click();
-    await page.getByRole('row').filter({ hasText: 'Research dataset' }).getByRole('link', { name: 'Place Bid', exact: true }).waitFor();
+    await page.getByRole('row').filter({ hasText: 'Research dataset' }).getByRole('link', { name: 'View Auction', exact: true }).waitFor();
     await page.getByRole('row').filter({ hasText: 'Seller-owned auction' }).getByRole('link', { name: 'View Auction', exact: true }).waitFor();
     await page.goto(`${base}/auction/${owned.id}`);
     await page.getByRole('button', { name: 'Edit minimum bid', exact: true }).click();
@@ -226,6 +247,11 @@ const {
     assert.equal(store.inspectAuction(owned.id, user.id, false).record.minimum, 60);
     await page.getByRole('button', { name: 'Discard', exact: true }).click();
     await page.getByRole('button', { name: 'Edit minimum bid', exact: true }).waitFor({ state: 'hidden' });
+    await page.getByRole('button', { name: 'Display Bidding History', exact: true }).click();
+    await page.getByRole('columnheader', { name: 'Cumulative Bid', exact: true }).waitFor();
+    assert.equal(await page.getByRole('columnheader', { name: /Budget/ }).count(), 0);
+    assert.equal(await page.getByRole('button', { name: 'Export Transactions', exact: true }).count(), 0);
+    await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click();
     await page.goto(`${base}/auction/${auction.id}`);
     assert.equal(await page.getByRole('button', { name: 'Export Transactions', exact: true }).count(), 0);
     assert.equal(await page.getByText('Your cumulative bid:', { exact: true }).count(), 0);
@@ -237,10 +263,11 @@ const {
       exact: true
     }).click();
     await page.getByText('Bid placed successfully!', { exact: true }).waitFor();
-    await page.getByRole('cell', {
-      name: 'Participant',
-      exact: true
-    }).waitFor();
+    assert.equal(await page.getByRole('table', { name: 'bids history', exact: true }).count(), 0);
+    assert.equal(await page.getByRole('button', { name: 'Display Bidding History', exact: true }).count(), 0);
+    const buyerResponse = await page.evaluate(async id => (await fetch(`/api/market/auctions/${id}`)).json(), auction.id);
+    assert.deepEqual(buyerResponse.bids, []);
+    assert.equal(JSON.stringify(buyerResponse).includes('budget_before'), false);
     assert.equal(store.user(user.id).budget, 1900);
     await page.getByLabel('Total Bid', { exact: true }).fill('120');
     await page.getByRole('button', { name: 'Submit your bid', exact: true }).click();
@@ -261,9 +288,11 @@ const {
     await page.unroute('**/api/market/auctions/*/bid');
     store.closeAuction(auction.id, admin.id);
     store.tick();
+    await page.getByRole('button', { name: 'View Data', exact: true }).click();
     await page.getByText('Purchased dataset', {
       exact: true
     }).waitFor();
+    await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click();
     await page.goto(base + '/manage-budget');
     await page.getByRole('heading', {
       name: 'Auctions',
@@ -287,7 +316,14 @@ const {
     await page.getByRole('button', { name: 'Sign out', exact: true }).click();
     await page.getByRole('button', { name: 'Quick dev sign-in', exact: true }).click();
     await page.goto(`${base}/auction/${auction.id}`);
+    await page.getByRole('button', { name: 'Display Bidding History', exact: true }).click();
     await page.getByRole('button', { name: 'Export Transactions', exact: true }).waitFor();
+    assert.equal(await page.getByRole('columnheader', { name: /Budget/ }).count(), 0);
+    await page.getByRole('columnheader', { name: 'Cumulative Bid', exact: true }).waitFor();
+    await page.screenshot({ path: 'artifacts/backend/history-mobile.png', fullPage: true, animations: 'disabled' });
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.screenshot({ path: 'artifacts/backend/history-desktop.png', fullPage: true, animations: 'disabled' });
+    await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click();
     await page.goto(base + '/manage-budget');
     await page.getByText('Bot 01', { exact: true }).first().waitFor();
     assert.equal(await page.getByLabel('Admin password').count(), 0);

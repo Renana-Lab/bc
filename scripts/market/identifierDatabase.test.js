@@ -7,6 +7,44 @@ const { DatabaseSync } = require('node:sqlite');
 const { MarketStore } = require('./store');
 const { createMarketServer } = require('./server');
 
+test('auction HTTP history is seller/admin only and never exposes bidder budgets outside admin reports', async t => {
+  const store = new MarketStore();
+  const admin = await store.createUser({ name: 'Admin', identifier: 'privacy-admin', role: 'admin' }, null, true);
+  const seller = store.registerIdentifier('privacy-seller').user;
+  const buyer = store.registerIdentifier('privacy-buyer').user;
+  const other = store.registerIdentifier('privacy-other').user;
+  const auction = store.createAuction({ description: 'Private bids', payload: 'data', minimum: 50, minutes: 25 }, seller.id);
+  store.bid(auction.id, 50, buyer.id, 'privacy-bid-01');
+  const origin = 'http://localhost:3010';
+  const server = createMarketServer(store, { origin });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(async () => { await new Promise(resolve => server.close(resolve)); store.close(); });
+  const base = `http://127.0.0.1:${server.address().port}/api/market`;
+  for (const user of [buyer, other, seller, admin]) {
+    const login = await fetch(base + '/login', { method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' }, body: JSON.stringify({ identifier: user.identifier }) });
+    const headers = { Cookie: login.headers.get('set-cookie').split(';')[0] };
+    const detail = await (await fetch(`${base}/auctions/${auction.id}`, { headers })).json();
+    const allowed = [seller.id, admin.id].includes(user.id);
+    assert.equal(detail.can_view_history, allowed);
+    assert.equal(detail.bids.length, allowed ? 1 : 0);
+    assert.equal(detail.my_bid, user.id === buyer.id ? 50 : 0);
+    assert(!JSON.stringify(detail).includes('budget_before'));
+    assert(!JSON.stringify(detail).includes('budget_after'));
+    if (user.id === seller.id) {
+      const record = await (await fetch(`${base}/auctions/${auction.id}/record`, { headers })).json();
+      assert.equal(record.bids.length, 1);
+      assert(!JSON.stringify(record).includes('budget_before'));
+    }
+    const reportResponse = await fetch(base + '/admin/report', { headers });
+    assert.equal(reportResponse.status, user.id === admin.id ? 200 : 403);
+    if (user.id === admin.id) assert.equal((await reportResponse.json()).bids[0].budget_before, 2000);
+  }
+  store.closeAuction(auction.id, admin.id);
+  store.tick();
+  assert.deepEqual(store.auction(auction.id, buyer.id).bids, []);
+  assert.equal(store.auction(auction.id, seller.id).bids.length, 1);
+});
+
 test('identifiers preserve legacy accounts, sessions, budgets and seller identity across restart', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'market-identity-'));
   let store = new MarketStore(path.join(dir, 'test.sqlite'));

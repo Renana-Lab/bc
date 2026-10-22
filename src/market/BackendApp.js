@@ -2,6 +2,10 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
   Alert,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
   AppBar,
   Toolbar,
   Typography,
@@ -60,7 +64,7 @@ import metaIcon from '../images/icons/meta1.png';
 import { faQuestionCircle } from '@fortawesome/free-solid-svg-icons';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 
-import { buildMarketWorkbook } from './reportExport';
+import { buildMarketWorkbook, formatReportValue } from './reportExport';
 import { analyzeMarketReport } from './analysis';
 import { synchronizeMarketClock, useMarketNow } from './clock';
 import './backend.css';
@@ -572,7 +576,7 @@ function AuctionsListView({ auctions, admin, user, act, refresh, allowPostSubmit
                         to={`/auction/${a.id}`}
                         onClick={e => e.stopPropagation()}
                       >
-                        {isOpen && a.seller_id !== user.id ? 'Place Bid' : 'View Auction'}
+                        View Auction
                       </Button>
                       </Tooltip>
                       {admin && <IconAction title={`Manage database record: ${a.description}`} onClick={e => { e.stopPropagation(); setRecordId(a.id); }}><StorageOutlinedIcon fontSize="small" /></IconAction>}
@@ -820,6 +824,8 @@ function AuctionDetailsView({ user, act, revision, allowPostSubmitEdit, canExpor
   const [bidPending, setBidPending] = useState(false);
   const [bidNotice, setBidNotice] = useState(null);
   const [totalBid, setTotalBid] = useState('');
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [dataOpen, setDataOpen] = useState(false);
   useEffect(() => { setTotalBid(''); setBidNotice(null); }, [address]);
 
   useEffect(() => {
@@ -983,12 +989,16 @@ function AuctionDetailsView({ user, act, revision, allowPostSubmitEdit, canExpor
               <div className="winnerTitle">Congrats!</div>
               <div className="winnerLabel">You won the auction and have now access to the data</div>
             </div>
-            <div style={{ background: '#f0f3f9', padding: '16px', borderRadius: '12px', border: '1px solid #d9dff2' }}>
-              <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#002884' }}>Data acquired</Typography>
+            <Button variant="contained" onClick={() => setDataOpen(true)}>View Data</Button>
+            <Dialog open={dataOpen} onClose={() => setDataOpen(false)} fullWidth maxWidth="sm" aria-labelledby="acquired-data-title">
+              <DialogTitle id="acquired-data-title">Data acquired</DialogTitle>
+              <DialogContent>
               <pre style={{ margin: '8px 0 0', whiteSpace: 'pre-wrap', wordBreak: 'break-all', fontFamily: 'inherit' }}>
                 {a.payload}
               </pre>
-            </div>
+              </DialogContent>
+              <DialogActions><Button onClick={() => setDataOpen(false)}>Close</Button></DialogActions>
+            </Dialog>
           </div>
         )}
 
@@ -1004,21 +1014,23 @@ function AuctionDetailsView({ user, act, revision, allowPostSubmitEdit, canExpor
         )}
       </div>
 
-      <div style={{ marginTop: '2.5rem', width: '100%' }}>
+      {a.can_view_history && <div style={{ marginTop: '2rem', textAlign: 'center' }}>
+        <Button variant="contained" onClick={() => setHistoryOpen(true)}>Display Bidding History</Button>
+        <Dialog open={historyOpen} onClose={() => setHistoryOpen(false)} fullWidth maxWidth="md" aria-labelledby="bidding-history-title">
+        <DialogTitle id="bidding-history-title">Bidding History</DialogTitle>
+        <DialogContent>
         <TableContainer component={Paper} className="auctionsTableShell">
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2, flexWrap: 'wrap', gap: 1 }}>
-            <Typography variant="h6" sx={{ color: '#002884', fontWeight: 700 }}>
-              Bidding History
-            </Typography>
+            <Typography variant="body2" sx={{ overflowWrap: 'anywhere' }}>Auction # {a.id}</Typography>
             {canExportTransactions && a.bids?.length > 0 && (
               <Button
                 size="small"
                 variant="outlined"
                 startIcon={<DownloadIcon />}
                 onClick={() => {
-                  const headers = ['Bidder', 'Time', 'Increment', 'Total bid', 'Budget before', 'Budget after'];
+                  const headers = ['Bidder identifier', 'Bid Time (UTC)', 'Tx Amount', 'Cumulative Bid'];
                   const cell = v => `"${String(v ?? '').replace(/^[=+@-]/, "'$&").replace(/"/g, '""')}"`;
-                  const rows = a.bids.map(b => [b.bidder, date(b.created_at), b.amount, b.cumulative, b.budget_before, b.budget_after]);
+                  const rows = a.bids.map(b => [b.bidder, formatReportValue('created_at', b.created_at), b.amount, b.cumulative]);
                   const csv = [headers, ...rows].map(r => r.map(cell).join(',')).join('\r\n');
                   const blob = new Blob([csv], { type: 'text/csv' });
                   const url = URL.createObjectURL(blob);
@@ -1038,7 +1050,7 @@ function AuctionDetailsView({ user, act, revision, allowPostSubmitEdit, canExpor
             <Table aria-label="bids history">
               <TableHead>
                 <TableRow>
-                  {['Bidder', 'Time', 'Increment', 'Total bid', 'Budget before', 'Budget after'].map((h, i) => (
+                  {['Bidder identifier', 'Bid Time', 'Tx Amount', 'Cumulative Bid'].map((h, i) => (
                     <TableCell key={i} align="center" style={{ color: '#0d0d4eff', fontWeight: 'bold' }}>
                       {h}
                     </TableCell>
@@ -1052,8 +1064,6 @@ function AuctionDetailsView({ user, act, revision, allowPostSubmitEdit, canExpor
                     <TableCell align="center">{date(b.created_at)}</TableCell>
                     <TableCell align="center">{b.amount}</TableCell>
                     <TableCell align="center" style={{ fontWeight: 700 }}>{b.cumulative}</TableCell>
-                    <TableCell align="center">{b.budget_before}</TableCell>
-                    <TableCell align="center">{b.budget_after}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -1065,7 +1075,10 @@ function AuctionDetailsView({ user, act, revision, allowPostSubmitEdit, canExpor
             </p>
           )}
         </TableContainer>
-      </div>
+        </DialogContent>
+        <DialogActions><Button onClick={() => setHistoryOpen(false)}>Close</Button></DialogActions>
+        </Dialog>
+      </div>}
 
       <div style={{ textAlign: 'center', marginTop: '2rem' }}>
         <Button
@@ -1216,9 +1229,11 @@ function BatchAuctionStudio({ act, notify }) {
 
   const getRowError = r => {
     if (!r.description?.trim()) return 'Description is required';
+    if (r.description.trim().length > 300) return 'Description must be at most 300 characters';
     if (!r.payload?.trim()) return 'Data is required';
-    if (!r.minimum || Number(r.minimum) <= 0) return 'Min bid must be > 0';
-    if (!r.minutes || Number(r.minutes) < 1 || Number(r.minutes) > 30) return 'Duration must be 1-30 mins';
+    if (r.payload.trim().length > 50000) return 'Data must be at most 50000 characters';
+    if (!Number.isSafeInteger(Number(r.minimum)) || Number(r.minimum) < 1 || Number(r.minimum) > 1000000000) return 'Min bid must be a whole number from 1 to 1000000000';
+    if (!Number.isSafeInteger(Number(r.minutes)) || Number(r.minutes) < 1 || Number(r.minutes) > 30) return 'Duration must be a whole number from 1 to 30 minutes';
     return '';
   };
 
@@ -1448,8 +1463,8 @@ function BatchAuctionStudio({ act, notify }) {
                         type="number"
                         value={row.minimum}
                         onChange={e => updateRow(idx, 'minimum', e.target.value)}
-                        error={!row.minimum || Number(row.minimum) <= 0}
-                        inputProps={{ min: 1 }}
+                        error={!Number.isSafeInteger(Number(row.minimum)) || Number(row.minimum) < 1 || Number(row.minimum) > 1000000000}
+                        inputProps={{ min: 1, max: 1000000000, step: 1, 'aria-label': `Minimum bid row ${idx + 1}` }}
                       />
                     </TableCell>
                     <TableCell>
@@ -1458,8 +1473,8 @@ function BatchAuctionStudio({ act, notify }) {
                         type="number"
                         value={row.minutes}
                         onChange={e => updateRow(idx, 'minutes', e.target.value)}
-                        error={!row.minutes || Number(row.minutes) < 1 || Number(row.minutes) > 30}
-                        inputProps={{ min: 1, max: 30 }}
+                        error={!Number.isSafeInteger(Number(row.minutes)) || Number(row.minutes) < 1 || Number(row.minutes) > 30}
+                        inputProps={{ min: 1, max: 30, step: 1, 'aria-label': `Duration row ${idx + 1}` }}
                       />
                     </TableCell>
                     <TableCell>
@@ -1575,17 +1590,17 @@ function AdminView({ auctions, act, revision, notify }) {
     if (kind === 'csv') {
       const headers = ['id', 'auction_id', 'user_id', 'amount', 'cumulative', 'budget_before', 'budget_after', 'created_at'];
       const cell = v => `"${String(v ?? '').replace(/^[=+@-]/, "'$&").replace(/"/g, '""')}"`;
-      return downloadBlob([headers, ...report.bids.map(r => headers.map(h => r[h]))].map(row => row.map(cell).join(',')).join('\r\n'), 'text/csv', 'market-bids.csv');
+      return downloadBlob([headers.map(h => h.endsWith('_at') ? `${h} (UTC)` : h), ...report.bids.map(r => headers.map(h => formatReportValue(h, r[h])))].map(row => row.map(cell).join(',')).join('\r\n'), 'text/csv', 'market-bids.csv');
     }
     const tables = ['users', 'auctions', 'bids', 'ledger', 'events', 'snapshots', 'rounds', 'activity', 'participants', 'payments', 'flags'].map(name => ({
       name,
-      rows: (report[name] || []).map(row => Object.fromEntries(Object.entries(row).map(([k, v]) => [k, typeof v === 'object' ? JSON.stringify(v) : v])))
+      rows: (report[name] || []).map(row => Object.fromEntries(Object.entries(row).map(([k, v]) => [k, v !== null && typeof v === 'object' ? JSON.stringify(v) : v])))
     }));
     if (kind === 'xls') return downloadBlob(buildMarketWorkbook(tables), 'application/vnd.ms-excel', 'market-workbook.xls');
 
     const escapeHtml = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
     const tableHtml = tables.map(({ name, rows }) =>
-      `<h2>${escapeHtml(name)}</h2><table><tr>${Object.keys(rows[0] || {}).map(h => `<th>${escapeHtml(h)}</th>`).join('')}</tr>${rows.map(r => `<tr>${Object.values(r).map(v => `<td>${escapeHtml(v)}</td>`).join('')}</tr>`).join('')}</table>`
+      `<h2>${escapeHtml(name)}</h2><table><tr>${Object.keys(rows[0] || {}).map(h => `<th>${escapeHtml(h.endsWith('_at') ? `${h} (UTC)` : h)}</th>`).join('')}</tr>${rows.map(r => `<tr>${Object.entries(r).map(([key, value]) => `<td>${escapeHtml(formatReportValue(key, value))}</td>`).join('')}</tr>`).join('')}</table>`
     ).join('');
     downloadBlob(`<!doctype html><html><meta charset="utf-8"><title>Data Marketplace report</title><style>body{font:14px system-ui;margin:24px}table{border-collapse:collapse;width:100%;font-size:11px}td,th{padding:6px;border:1px solid #ccc;overflow-wrap:anywhere}h2{break-before:auto}@media print{table{font-size:8px}}</style><h1>Data Marketplace Report</h1><p>${escapeHtml(date(report.generatedAt))}</p>${tableHtml}</html>`, 'text/html', 'data-marketplace-report.html');
   };

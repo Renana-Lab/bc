@@ -253,13 +253,15 @@ class MarketStore {
     this.user(actor);
     const item = this.auctions().find(a => a.id === id);
     check(item, 'Auction not found', 404);
-    const bids = this.all('SELECT b.*,u.name bidder FROM bids b JOIN users u ON u.id=b.user_id WHERE auction_id=? ORDER BY b.rowid', id);
+    const canViewHistory = item.seller_id === actor || this.user(actor).role === 'admin';
+    const bids = canViewHistory ? this.all('SELECT b.id,b.amount,b.cumulative,b.created_at,u.email bidder FROM bids b JOIN users u ON u.id=b.user_id WHERE auction_id=? ORDER BY b.rowid', id) : [];
     const payload = item.finalized_at && item.winner_id === actor ? this.one('SELECT payload FROM auctions WHERE id=?', id).payload : undefined;
     return {
       ...item,
       bids,
+      can_view_history: canViewHistory,
       payload,
-      my_bid: bids.filter(b => b.user_id === actor).reduce((sum, b) => sum + b.amount, 0)
+      my_bid: this.one('SELECT COALESCE(SUM(amount),0) total FROM bids WHERE auction_id=? AND user_id=?', id, actor).total
     };
   }
   createAuction(input, actor) {
@@ -272,7 +274,7 @@ class MarketStore {
     check(adminOnly || record.seller_id === actor, 'Only the seller can edit this auction', 403);
     const bids = this.all('SELECT b.*,u.email AS identifier FROM bids b JOIN users u ON u.id=b.user_id WHERE auction_id=? ORDER BY b.rowid', id);
     return {
-      record, revision: digest(JSON.stringify(record)), bids,
+      record, revision: digest(JSON.stringify(record)), bids: adminOnly ? bids : bids.map(({ budget_before, budget_after, ...bid }) => bid),
       seller_identifier: this.one('SELECT email FROM users WHERE id=?', record.seller_id).email,
       ledger: adminOnly ? this.all('SELECT * FROM ledger WHERE auction_id=? ORDER BY id', id) : [],
       events: adminOnly ? this.all("SELECT * FROM events WHERE json_extract(detail,'$.id')=? ORDER BY id DESC LIMIT 100", id) : [],
