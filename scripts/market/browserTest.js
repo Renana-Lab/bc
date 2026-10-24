@@ -249,6 +249,7 @@ const {
     await page.getByRole('button', { name: 'Edit minimum bid', exact: true }).waitFor({ state: 'hidden' });
     await page.getByRole('button', { name: 'Display Bidding History', exact: true }).click();
     await page.getByRole('columnheader', { name: 'Cumulative Bid', exact: true }).waitFor();
+    assert.deepEqual(await page.getByRole('table', { name: 'bids history', exact: true }).getByRole('columnheader').allTextContents(), ['Bidder Identifier', 'Tx Amount', 'Cumulative Bid', 'Bid Time']);
     assert.equal(await page.getByRole('columnheader', { name: /Budget/ }).count(), 0);
     assert.equal(await page.getByRole('button', { name: 'Export Transactions', exact: true }).count(), 0);
     await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click();

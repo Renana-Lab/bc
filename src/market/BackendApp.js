@@ -1028,9 +1028,9 @@ function AuctionDetailsView({ user, act, revision, allowPostSubmitEdit, canExpor
                 variant="outlined"
                 startIcon={<DownloadIcon />}
                 onClick={() => {
-                  const headers = ['Bidder identifier', 'Bid Time (UTC)', 'Tx Amount', 'Cumulative Bid'];
+                  const headers = ['Bidder Identifier', 'Tx Amount', 'Cumulative Bid', 'Bid Time (UTC)'];
                   const cell = v => `"${String(v ?? '').replace(/^[=+@-]/, "'$&").replace(/"/g, '""')}"`;
-                  const rows = a.bids.map(b => [b.bidder, formatReportValue('created_at', b.created_at), b.amount, b.cumulative]);
+                  const rows = a.bids.map(b => [b.bidder, b.amount, b.cumulative, formatReportValue('created_at', b.created_at)]);
                   const csv = [headers, ...rows].map(r => r.map(cell).join(',')).join('\r\n');
                   const blob = new Blob([csv], { type: 'text/csv' });
                   const url = URL.createObjectURL(blob);
@@ -1050,7 +1050,7 @@ function AuctionDetailsView({ user, act, revision, allowPostSubmitEdit, canExpor
             <Table aria-label="bids history">
               <TableHead>
                 <TableRow>
-                  {['Bidder identifier', 'Bid Time', 'Tx Amount', 'Cumulative Bid'].map((h, i) => (
+                  {['Bidder Identifier', 'Tx Amount', 'Cumulative Bid', 'Bid Time'].map((h, i) => (
                     <TableCell key={i} align="center" style={{ color: '#0d0d4eff', fontWeight: 'bold' }}>
                       {h}
                     </TableCell>
@@ -1061,9 +1061,9 @@ function AuctionDetailsView({ user, act, revision, allowPostSubmitEdit, canExpor
                 {a.bids.map(b => (
                   <TableRow key={b.id}>
                     <TableCell align="center" style={{ fontWeight: 600 }}>{b.bidder}</TableCell>
-                    <TableCell align="center">{date(b.created_at)}</TableCell>
                     <TableCell align="center">{b.amount}</TableCell>
                     <TableCell align="center" style={{ fontWeight: 700 }}>{b.cumulative}</TableCell>
+                    <TableCell align="center">{date(b.created_at)}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
