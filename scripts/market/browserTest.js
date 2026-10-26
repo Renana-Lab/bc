@@ -128,6 +128,8 @@ const {
     await page.getByText('Bot 01', {
       exact: true
     }).first().waitFor();
+    assert.equal(await page.getByText(/bids per hour/).count(), 0);
+    await page.getByText('Random auction', { exact: true }).waitFor();
     await page.getByRole('button', {
       name: 'Run manual cycle'
     }).click();
@@ -186,6 +188,17 @@ const {
       name: 'Create auction',
       exact: true
     }).waitFor();
+    assert.equal(await page.getByText('Auction destination', { exact: true }).count(), 0);
+    for (const [label, text] of [
+      ['Minimum Bid', 'The lowest price you are willing to accept for selling your information (in cents). You can change this price at any time before the first bid is placed.'],
+      ['Description of the Data', 'Describe the information you are selling (e.g., shoe size). This description will be visible to all buyers and cannot be changed after you create the auction.'],
+      ['Data For Sell', 'Enter the actual information you are selling (e.g., your shoe size). Only the winning buyer will receive this information after the auction ends. You cannot change it after creating the auction.'],
+      ['Auction Duration (1–30 minutes)', 'Enter how many minutes your auction will last. Bidding starts when you create the auction. You cannot change the duration afterward.']
+    ]) {
+      await page.getByRole('button', { name: `Info about ${label}`, exact: true }).click();
+      await page.getByText(text, { exact: true }).waitFor();
+      await page.getByRole('button', { name: `Info about ${label}`, exact: true }).click();
+    }
     await page.waitForTimeout(350);
     await page.screenshot({
       path: 'artifacts/backend/open-auction-current.png',
@@ -215,6 +228,27 @@ const {
       exact: true
     }).waitFor();
     const owned = store.createAuction({ description: 'Seller-owned auction', payload: 'Owner data', minimum: 50, minutes: 25 }, user.id);
+    const positionAuction = store.createAuction({ description: 'Position test', payload: 'Position data', minimum: 10, minutes: 1 }, admin.id);
+    store.bid(positionAuction.id, 20, user.id, 'position-leading-01');
+    await page.goto(`${base}/auction/${positionAuction.id}`);
+    await page.getByText('You are leading', { exact: true }).waitFor();
+    await page.goto(base + '/auctions-list');
+    const leadingRow = page.getByRole('row').filter({ hasText: 'Position test' });
+    await leadingRow.getByText('You are leading', { exact: true }).waitFor();
+    assert.equal(await leadingRow.locator('.table-countdown').evaluate(el => getComputedStyle(el).color), 'rgb(23, 107, 58)');
+    await page.screenshot({ path: 'artifacts/backend/leading-auction.png', fullPage: true, animations: 'disabled' });
+    const botId = store.one("SELECT id FROM users WHERE role='bot' LIMIT 1").id;
+    store.bid(positionAuction.id, 30, botId, 'position-outbid-01');
+    await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+    await leadingRow.getByText('You are leading', { exact: true }).waitFor({ state: 'hidden' });
+    assert.equal(await leadingRow.locator('.table-countdown').evaluate(el => getComputedStyle(el).color), 'rgb(237, 135, 55)');
+    await page.goto(`${base}/auction/${positionAuction.id}`);
+    await page.getByRole('heading', { name: 'Position test', exact: true }).waitFor();
+    assert.equal(await page.getByText('You are leading', { exact: true }).count(), 0);
+    store.closeAuction(positionAuction.id, admin.id);
+    store.tick();
+    assert.equal(store.user(user.id).budget, 2000);
+    await page.goto(base + '/auctions-list');
     await page.getByRole('button', { name: 'Refresh', exact: true }).click();
     await page.getByRole('row').filter({ hasText: 'Research dataset' }).getByRole('link', { name: 'View Auction', exact: true }).waitFor();
     await page.getByRole('row').filter({ hasText: 'Seller-owned auction' }).getByRole('link', { name: 'View Auction', exact: true }).waitFor();
@@ -264,6 +298,7 @@ const {
       exact: true
     }).click();
     await page.getByText('Bid placed successfully!', { exact: true }).waitFor();
+    await page.getByText('You are leading', { exact: true }).waitFor();
     assert.equal(await page.getByRole('table', { name: 'bids history', exact: true }).count(), 0);
     assert.equal(await page.getByRole('button', { name: 'Display Bidding History', exact: true }).count(), 0);
     const buyerResponse = await page.evaluate(async id => (await fetch(`/api/market/auctions/${id}`)).json(), auction.id);
@@ -289,6 +324,7 @@ const {
     await page.unroute('**/api/market/auctions/*/bid');
     store.closeAuction(auction.id, admin.id);
     store.tick();
+    await page.getByText('You won', { exact: true }).waitFor();
     await page.getByRole('button', { name: 'View Data', exact: true }).click();
     await page.getByText('Purchased dataset', {
       exact: true

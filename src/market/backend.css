@@ -1129,6 +1129,7 @@ button, input, select, textarea {
 .architectureResourceLinks { display: flex; flex-wrap: wrap; gap: 10px 20px; margin: 16px 0 10px; font-size: 0.82rem; }
 .architectureResourceLinks a, .architectureComponentRow > a, .architectureAccessHeading > a, .architectureDetails a { color: #214ba9; text-decoration: underline; text-underline-offset: 3px; overflow-wrap: anywhere; }
 .bidFieldHeading { display: flex; align-items: center; gap: 6px; margin: 18px 0 8px; color: #002884; font-size: 1rem; font-weight: 600; }
+.marketBidPosition { display: inline-flex; align-items: center; justify-content: center; gap: 5px; color: #176b3a; font-size: 0.78rem; font-weight: 600; margin: 5px 8px 0; vertical-align: middle; }
 .bidFieldHeading .MuiIconButton-root { width: 28px; height: 28px; font-size: 0.9rem; color: #002884; background: #d8dcf0; }
 .totalBidInput { border-radius: 8px; background: #d8dcf0; }
 .totalBidInput .MuiOutlinedInput-root { color: #002884; border-radius: 8px; }

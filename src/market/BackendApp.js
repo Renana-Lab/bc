@@ -51,6 +51,7 @@ import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 
 import welPic from '../pages/Home/Illustration_Wel.png';
 import loginPic from './assets/tutorial.png';
@@ -117,15 +118,23 @@ function ClockDisplay() {
   );
 }
 
-function Countdown({ end, plain = false }) {
+function Countdown({ end, plain = false, leading = false }) {
   const now = useMarketNow();
   const seconds = Math.max(0, Math.ceil((end - now) / 1000));
   return (
-    <span className={plain ? 'table-countdown' : 'liveCountdown'}>
+    <span className={plain ? 'table-countdown' : 'liveCountdown'} style={plain && seconds && leading ? { color: '#176b3a' } : undefined}>
       {!plain && <span className="liveCountdownDot" aria-hidden="true" />}
       <span>{seconds ? `${Math.floor(seconds / 3600).toString().padStart(2, '0')}:${Math.floor(seconds / 60 % 60).toString().padStart(2, '0')}:${(seconds % 60).toString().padStart(2, '0')}` : 'Closed'}</span>
     </span>
   );
+}
+
+function BidPosition({ auction, userId }) {
+  const now = useMarketNow();
+  if (!auction.highest || auction.winner_id !== userId) return null;
+  const open = auction.end_at > now;
+  if (!open && !auction.finalized_at) return null;
+  return <span className="marketBidPosition" role="status"><CheckCircleOutlineIcon fontSize="inherit" aria-hidden="true" />{open ? 'You are leading' : 'You won'}</span>;
 }
 
 function AdminCard({ title, children, defaultOpen = false, action = null }) {
@@ -529,6 +538,8 @@ function AuctionsListView({ auctions, admin, user, act, refresh, allowPostSubmit
                 const isOpen = a.end_at > Date.now();
                 const isPaid = Boolean(a.finalized_at);
                 const userWon = isPaid && a.winner_id === user.id;
+                const isLeading = isOpen && a.highest > 0 && a.winner_id === user.id;
+                const rowText = isLeading ? '#176b3a' : '#0d0d4e';
                 const bgColor = userWon ? '#90EE90' : isOpen ? '#BBDEFB' : '#E9E9F6';
                 return (
                   <TableRow
@@ -543,20 +554,21 @@ function AuctionsListView({ auctions, admin, user, act, refresh, allowPostSubmit
                     }}
                     onClick={() => navigate(`/auction/${a.id}`)}
                   >
-                    <TableCell align="center" style={{ color: '#0d0d4e', fontWeight: 600 }}>
+                    <TableCell align="center" style={{ color: rowText, fontWeight: 600 }}>
                       <div>{a.description}</div>
                       <small style={{ color: '#5e638a', display: 'block' }}>{a.seller}</small>
+                      <BidPosition auction={a} userId={user.id} />
                     </TableCell>
-                    <TableCell align="center" style={{ color: '#0d0d4e' }}>
+                    <TableCell align="center" style={{ color: rowText }}>
                       <span className={auctionStyles.dateCell}><span>{new Date(a.end_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}</span><small>{new Date(a.end_at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}</small></span>
                     </TableCell>
                     <TableCell align="center">
-                      <Countdown end={a.end_at} plain />
+                      <Countdown end={a.end_at} plain leading={isLeading} />
                     </TableCell>
-                    <TableCell align="center" style={{ color: '#0d0d4e', fontWeight: 700 }}>
+                    <TableCell align="center" style={{ color: rowText, fontWeight: 700 }}>
                       {a.highest.toLocaleString()}
                     </TableCell>
-                    <TableCell align="center" style={{ color: '#0d0d4e' }}>
+                    <TableCell align="center" style={{ color: rowText }}>
                       {a.bidders}
                     </TableCell>
                     <TableCell align="center">
@@ -672,57 +684,8 @@ function NewAuctionView({ act }) {
             Create Auction
           </h1>
 
-          <Box
-            sx={{
-              width: '85%',
-              px: 1.25,
-              py: 1,
-              border: '1px solid rgba(16, 48, 144, 0.12)',
-              borderRadius: 1.5,
-              backgroundColor: 'rgba(248, 250, 255, 0.58)',
-            }}
-          >
-            <Typography variant="body2" sx={{ fontWeight: 700, color: '#002884' }}>
-              Auction destination
-            </Typography>
-            <Typography
-              variant="caption"
-              color="text.secondary"
-              display="block"
-              sx={{ mt: 0.15 }}
-            >
-              This auction will be opened in this marketplace instance.
-            </Typography>
-            <Box
-              component="span"
-              sx={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                mt: 0.75,
-                px: 1,
-                py: 0.25,
-                border: '1px solid rgba(16, 48, 144, 0.14)',
-                borderRadius: 999,
-                backgroundColor: 'rgba(255, 255, 255, 0.55)',
-                color: '#0d0d4e',
-                fontSize: '0.82rem',
-                fontWeight: 600,
-                lineHeight: 1.35,
-              }}
-            >
-              Live
-            </Box>
-            <Typography
-              variant="caption"
-              color="text.secondary"
-              display="block"
-              sx={{ mt: 0.55, overflowWrap: 'anywhere', opacity: 0.76 }}
-            >
-              Marketplace instance active
-            </Typography>
-          </Box>
 
-          {renderTooltip('minBid', 'Minimum Bid', 'The lowest total bid accepted for this auction. You can adjust only this value before the first bid, if editing is enabled.')}
+          {renderTooltip('minBid', 'Minimum Bid', 'The lowest price you are willing to accept for selling your information (in cents). You can change this price at any time before the first bid is placed.')}
           <TextField
             type="number"
             sx={{ width: '85%' }}
@@ -732,7 +695,7 @@ function NewAuctionView({ act }) {
             inputProps={{ min: 1, max: 1000000000, 'aria-label': 'Minimum Bid' }}
           />
 
-          {renderTooltip('dataDescription', 'Description of the Data', 'Describe what buyers receive. This description is visible to everyone and cannot be changed after submission.')}
+          {renderTooltip('dataDescription', 'Description of the Data', 'Describe the information you are selling (e.g., shoe size). This description will be visible to all buyers and cannot be changed after you create the auction.')}
           <TextField
             sx={{ width: '85%' }}
             name="dataDescription"
@@ -740,7 +703,7 @@ function NewAuctionView({ act }) {
             inputProps={{ maxLength: 300, 'aria-label': 'Description of the Data' }}
           />
 
-          {renderTooltip('dataForSale', 'Data For Sell', 'Enter the data being sold. It is released to the winning bidder after the auction closes. This cannot be changed after submission.')}
+          {renderTooltip('dataForSale', 'Data For Sell', 'Enter the actual information you are selling (e.g., your shoe size). Only the winning buyer will receive this information after the auction ends. You cannot change it after creating the auction.')}
           <TextField
             sx={{ width: '85%' }}
             name="dataForSell"
@@ -748,14 +711,14 @@ function NewAuctionView({ act }) {
             inputProps={{ maxLength: 50000, 'aria-label': 'Data for sale' }}
           />
 
-          {renderTooltip('auctionTime', 'Auction Duration (1-30 min)', 'Bidding starts on submission and ends after this many minutes. The duration cannot be changed after submission.')}
+          {renderTooltip('auctionTime', 'Auction Duration (1–30 minutes)', 'Enter how many minutes your auction will last. Bidding starts when you create the auction. You cannot change the duration afterward.')}
           <TextField
             sx={{ width: '85%' }}
             type="number"
             name="auctionDuration"
             defaultValue={25}
             required
-            inputProps={{ min: 1, max: 30, 'aria-label': 'Auction Duration (1-30 min)' }}
+            inputProps={{ min: 1, max: 30, 'aria-label': 'Auction Duration (1–30 minutes)' }}
           />
 
           <div
@@ -900,6 +863,7 @@ function AuctionDetailsView({ user, act, revision, allowPostSubmitEdit, canExpor
           <div className="introductionDetail">
             <span className="introductionLabel">Highest bid recorded: </span>
             <span className="introductionText">{a.highest}</span>
+            <BidPosition auction={a} userId={user.id} />
           </div>
 
           <div className="introductionDetail">
@@ -1101,7 +1065,6 @@ function AuctionDetailsView({ user, act, revision, allowPostSubmitEdit, canExpor
 }
 
 function BotItem({ bot, act }) {
-  const hourlyLimit = Math.ceil(3600 / bot.interval_seconds);
   return (
     <form
       className="backendBotRow"
@@ -1166,7 +1129,7 @@ function BotItem({ bot, act }) {
         >
           <DeleteOutlineIcon color="error" fontSize="small" />
         </IconAction>
-        <small className="backendBotUsage">Random auction / up to {hourlyLimit} bids per hour</small>
+        <small className="backendBotUsage">Random auction</small>
       </div>
     </form>
   );
