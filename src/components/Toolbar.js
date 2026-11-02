@@ -15,6 +15,7 @@ import {
   subscribeToMarketChanges,
 } from "../real_ethereum/marketConfig";
 import { getEthereumAccounts } from "../real_ethereum/ethereumProvider";
+import { useMetaMask } from "../Context/Context";
 import componentStyles from "./../styles/components.module.scss";
 
 const ClockDisplay = memo(() => {
@@ -62,6 +63,10 @@ ClockDisplay.displayName = "ClockDisplay";
 
 const ToolbarComponent = (props) => {
   const navigate = useNavigate();
+  const { status, account } = useMetaMask();
+  const authenticated = status === "connected" && Boolean(account);
+  const accountRef = useRef("");
+  accountRef.current = authenticated ? account : "";
   const [budget, setBudget] = useState(null);
   const [budgetRefreshing, setBudgetRefreshing] = useState(false);
   const [activeMarket, setActiveMarketState] = useState(getActiveMarket());
@@ -72,6 +77,8 @@ const ToolbarComponent = (props) => {
   const environmentStatusText = isProductionEnvironment ? "Live" : "Development";
 
   const fetchBudget = useCallback(async ({ force = false } = {}) => {
+    const accountForRequest = accountRef.current;
+    if (!accountForRequest) return;
     const marketIdForRequest = activeMarketIdRef.current;
     const requestId = budgetRequestIdRef.current + 1;
     budgetRequestIdRef.current = requestId;
@@ -81,6 +88,7 @@ const ToolbarComponent = (props) => {
       const result = await getDefaultBudget({ force });
       if (
         requestId === budgetRequestIdRef.current &&
+        accountForRequest === accountRef.current &&
         marketIdForRequest === activeMarketIdRef.current
       ) {
         setBudget(result);
@@ -98,11 +106,15 @@ const ToolbarComponent = (props) => {
   }, []);
 
   useEffect(() => {
-    fetchBudget();
-  }, [fetchBudget]);
+    budgetRequestIdRef.current += 1;
+    setBudget(null);
+    setBudgetRefreshing(false);
+    if (authenticated) fetchBudget();
+  }, [fetchBudget, authenticated, account]);
 
   useEffect(() => {
     return subscribeToBudgetChanges(async ({ userAddress, factoryAddress, budget: nextBudget }) => {
+      if (!accountRef.current) return;
       const activeFactoryAddress = String(getActiveFactoryAddress() || "").toLowerCase();
 
       if (factoryAddress && factoryAddress !== activeFactoryAddress) return;
@@ -212,7 +224,7 @@ const ToolbarComponent = (props) => {
               </span>
             </div>
 
-            <div
+            {authenticated && <div
               className={`${componentStyles.toolbarPill} ${
                 budgetRefreshing ? componentStyles.toolbarPillRefreshing : ""
               }`}
@@ -233,7 +245,7 @@ const ToolbarComponent = (props) => {
                   aria-label="Refreshing budget"
                 />
               )}
-            </div>
+            </div>}
 
             <ClockDisplay />
           </div>

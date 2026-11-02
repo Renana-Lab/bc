@@ -2396,11 +2396,11 @@ export default function BackendApp() {
               <span className={shellStyles.toolbarPillValue}>Live</span>
             </div>
 
-            <div className={shellStyles.toolbarPill} title="Current budget">
+            {user && <div className={shellStyles.toolbarPill} title="Current budget">
               <TollOutlinedIcon className={shellStyles.toolbarPillIcon} fontSize="small" aria-hidden="true" />
               <span className={shellStyles.toolbarPillLabel}>Budget:</span>
-              <span className={shellStyles.toolbarPillValue}>{user?.budget ?? '2000'}</span>
-            </div>
+              <span className={shellStyles.toolbarPillValue}>{user.budget}</span>
+            </div>}
 
             <ClockDisplay />
 

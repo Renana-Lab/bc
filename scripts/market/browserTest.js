@@ -79,6 +79,7 @@ const {
     page.on('pageerror', e => errors.push(e.message));
     page.on('request', r => requests.push(r.url()));
     await page.goto(base + '/manage-budget');
+    assert.equal(await page.getByTitle('Current budget', { exact: true }).count(), 0);
     await page.getByRole('button', {
       name: 'Log in',
       exact: true
@@ -105,6 +106,7 @@ const {
       name: 'Admin Zone'
     }).waitFor();
     await page.getByText('Architecture & Operations', { exact: true }).waitFor();
+    await page.getByTitle('Current budget', { exact: true }).waitFor();
     await page.getByText('AWS Amplify', { exact: true }).first().waitFor();
     await page.getByText('AWS EC2', { exact: false }).first().waitFor();
     await page.getByText(':memory:', { exact: true }).waitFor();
