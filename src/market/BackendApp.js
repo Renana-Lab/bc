@@ -186,6 +186,10 @@ function PlatformGuideView() {
         </div>
 
         <div className="guideVideo">
+          <div style={{ aspectRatio: '16 / 9', width: '100%', marginBottom: '24px' }}>
+            <iframe src="https://www.youtube-nocookie.com/embed/jTACN_wSoCA" title="Data Marketplace video guide" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen style={{ width: '100%', height: '100%', border: 0 }} />
+          </div>
+          <p><a href="https://www.youtube.com/watch?v=jTACN_wSoCA" target="_blank" rel="noreferrer">Watch on YouTube</a></p>
           <Accordion defaultExpanded slots={{ heading: "h2" }}>
             <AccordionSummary expandIcon={<ExpandMoreIcon />}>
               <Typography variant="h6" component="span" sx={{ fontWeight: 600, color: '#002884' }}>
@@ -227,7 +231,7 @@ function PlatformGuideView() {
             </AccordionSummary>
             <AccordionDetails>
               <Typography className="accountText" sx={{ textAlign: 'left !important', padding: '0 0 1rem' }}>
-                Choose Start an Auction, add the data description and payload, set the minimum bid and closing time, then submit it. Before the first bid, you may adjust only the minimum bid.
+                Choose Start an Auction, add the data description and payload, set the minimum bid and duration (1–30 minutes, default 10), then submit it. Before the first bid, you may adjust only the minimum bid.
               </Typography>
               <Button
                 variant="contained"
@@ -716,7 +720,7 @@ function NewAuctionView({ act }) {
             sx={{ width: '85%' }}
             type="number"
             name="auctionDuration"
-            defaultValue={25}
+            defaultValue={10}
             required
             inputProps={{ min: 1, max: 30, 'aria-label': 'Auction Duration (1–30 minutes)' }}
           />
@@ -1141,12 +1145,12 @@ function BatchAuctionStudio({ act, notify }) {
     descriptionPrefix: 'Research dataset',
     dataPrefix: 'Personal research records',
     minimumContribution: 50,
-    auctionDuration: 25,
+    auctionDuration: 10,
   });
   const [rows, setRows] = useState([
-    { id: 1, description: 'Research dataset 01', payload: 'Personal research records 01', minimum: 50, minutes: 25 },
-    { id: 2, description: 'Research dataset 02', payload: 'Personal research records 02', minimum: 50, minutes: 25 },
-    { id: 3, description: 'Research dataset 03', payload: 'Personal research records 03', minimum: 50, minutes: 25 },
+    { id: 1, description: 'Research dataset 01', payload: 'Personal research records 01', minimum: 50, minutes: 10 },
+    { id: 2, description: 'Research dataset 02', payload: 'Personal research records 02', minimum: 50, minutes: 10 },
+    { id: 3, description: 'Research dataset 03', payload: 'Personal research records 03', minimum: 50, minutes: 10 },
   ]);
   const [showJson, setShowJson] = useState(false);
   const [jsonText, setJsonText] = useState('');
@@ -1161,7 +1165,7 @@ function BatchAuctionStudio({ act, notify }) {
         description: `${defaults.descriptionPrefix} ${pad}`,
         payload: `${defaults.dataPrefix} ${pad}`,
         minimum: Number(defaults.minimumContribution) || 50,
-        minutes: Number(defaults.auctionDuration) || 25,
+        minutes: Number(defaults.auctionDuration) || 10,
       });
     }
     setRows(next);
@@ -1177,7 +1181,7 @@ function BatchAuctionStudio({ act, notify }) {
         description: `${defaults.descriptionPrefix} ${pad}`,
         payload: `${defaults.dataPrefix} ${pad}`,
         minimum: Number(defaults.minimumContribution) || 50,
-        minutes: Number(defaults.auctionDuration) || 25,
+        minutes: Number(defaults.auctionDuration) || 10,
       }
     ]);
   };
@@ -1264,7 +1268,7 @@ function BatchAuctionStudio({ act, notify }) {
               description: parts[0] || '',
               payload: parts[1] || '',
               minimum: parts[2] || defaults.minimumContribution || 50,
-              minutes: parts[3] || defaults.auctionDuration || 25,
+              minutes: parts[3] || defaults.auctionDuration || 10,
             };
           });
       }
@@ -1275,7 +1279,7 @@ function BatchAuctionStudio({ act, notify }) {
         description: item.description || item.dataDescription || '',
         payload: item.payload || item.dataForSell || '',
         minimum: Number(item.minimum || item.minimumContribution || defaults.minimumContribution || 50),
-        minutes: Number(item.minutes || item.auctionDuration || defaults.auctionDuration || 25)
+        minutes: Number(item.minutes || item.auctionDuration || defaults.auctionDuration || 10)
       })));
       setShowJson(false);
     } catch (err) {
@@ -1372,7 +1376,7 @@ function BatchAuctionStudio({ act, notify }) {
             value={jsonText}
             onChange={e => setJsonText(e.target.value)}
             fullWidth
-            placeholder='[{"description":"Research dataset 01","payload":"Private data","minimum":50,"minutes":25}]'
+            placeholder='[{"description":"Research dataset 01","payload":"Private data","minimum":50,"minutes":10}]'
           />
           <Box sx={{ display: 'flex', gap: 1 }}>
             <Button size="small" variant="contained" onClick={applyJson} style={{ backgroundColor: '#103090', borderRadius: '20px' }}>
@@ -1581,7 +1585,7 @@ function AdminView({ auctions, act, revision, notify }) {
     frontend: 'https://us-east-1.console.aws.amazon.com/amplify/apps/d1480nbd1jz398/branches/main',
     server: 'https://us-east-1.console.aws.amazon.com/ec2/home?region=us-east-1#InstanceDetails:instanceId=i-0dced63de1425ce81',
     database: 'https://us-east-1.console.aws.amazon.com/systems-manager/session-manager/i-0dced63de1425ce81?region=us-east-1',
-    source: 'https://github.com/Renana-Lab/bc/tree/codex/backend-marketplace-release',
+    source: 'https://github.com/Renana-Lab/bc/tree/marketplace-release',
     api: 'https://54.83.80.133.nip.io/api/market/session'
   };
   const componentLinks = {
@@ -1720,7 +1724,7 @@ function AdminView({ auctions, act, revision, notify }) {
             <section>
               <div className="architectureSectionTitle"><AccountTreeOutlinedIcon fontSize="small" /><strong>Deployment path</strong></div>
               <ol className="deploymentSteps">
-                <li><strong>Source</strong><span>GitHub `master` and `codex/backend-marketplace-release` branches.</span></li>
+                <li><strong>Source</strong><span>GitHub `master` and `marketplace-release` branches.</span></li>
                 <li><strong>Verification</strong><span>Backend tests, browser E2E checks, and the Vite production build run before release.</span></li>
                 <li><strong>Frontend</strong><span>The compiled static bundle is uploaded to AWS Amplify.</span></li>
                 <li><strong>Backend</strong><span>EC2 pulls the release branch and restarts the `bc-marketplace` systemd service.</span></li>

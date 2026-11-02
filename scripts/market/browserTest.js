@@ -75,6 +75,7 @@ const {
       }
     });
     page = await context.newPage();
+    await page.route('https://www.youtube-nocookie.com/embed/jTACN_wSoCA', route => route.fulfill({ contentType: 'text/html', body: '<html><body>Video fixture</body></html>' }));
     page.on('pageerror', e => errors.push(e.message));
     page.on('request', r => requests.push(r.url()));
     await page.goto(base + '/manage-budget');
@@ -189,6 +190,7 @@ const {
       exact: true
     }).waitFor();
     assert.equal(await page.getByText('Auction destination', { exact: true }).count(), 0);
+    assert.equal(await page.getByLabel('Auction Duration (1–30 minutes)', { exact: true }).inputValue(), '10');
     for (const [label, text] of [
       ['Minimum Bid', 'The lowest price you are willing to accept for selling your information (in cents). You can change this price at any time before the first bid is placed.'],
       ['Description of the Data', 'Describe the information you are selling (e.g., shoe size). This description will be visible to all buyers and cannot be changed after you create the auction.'],
@@ -365,7 +367,10 @@ const {
     await page.getByText('Bot 01', { exact: true }).first().waitFor();
     assert.equal(await page.getByLabel('Admin password').count(), 0);
     assert.deepEqual(errors, []);
-    assert(!requests.some(url => !url.startsWith(base)), 'Unexpected external request');
+    await page.goto(base + '/guide');
+    assert.equal(await page.getByTitle('Data Marketplace video guide').getAttribute('src'), 'https://www.youtube-nocookie.com/embed/jTACN_wSoCA');
+    await page.getByRole('link', { name: 'Watch on YouTube', exact: true }).waitFor();
+    assert(!requests.some(url => !url.startsWith(base) && url !== 'https://www.youtube-nocookie.com/embed/jTACN_wSoCA'), 'Unexpected external request');
     console.log('Browser checks passed: one-step login, admin gate, bots, minimum-only seller edits, creation, bidding, finalization, purchased data, desktop/mobile overflow, and local-only requests.');
     await context.close();
   } catch (error) {
