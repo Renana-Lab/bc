@@ -629,6 +629,7 @@ function AuctionsListView({ auctions, admin, user, act, refresh, allowPostSubmit
   );
 }
 
+// Keep in sync with DESCRIPTION_WORDS_MESSAGE in scripts/market/store.js (the server rule is the real enforcement).
 const DESCRIPTION_WORDS_MESSAGE = 'The data description must include words, not only numbers';
 
 function NewAuctionView({ act }) {
@@ -681,6 +682,7 @@ function NewAuctionView({ act }) {
               setDescriptionError(DESCRIPTION_WORDS_MESSAGE);
               return;
             }
+            // Safety net behind the `required` attribute: never send 0/NaN for an empty minimum.
             if (String(min ?? '').trim() === '' || !Number.isFinite(Number(min))) {
               form.reportValidity();
               return;

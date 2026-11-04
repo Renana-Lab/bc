@@ -213,6 +213,8 @@ const {
     await page.getByLabel('Minimum Bid', { exact: true }).fill('50');
     await page.getByRole('button', { name: 'Create auction', exact: true }).click();
     await page.getByText('The data description must include words, not only numbers', { exact: true }).waitFor();
+    assert.equal(page.url().includes('/auction/'), false);
+    // Clear the minimum again so the next submit proves the required-field check.
     await page.getByLabel('Minimum Bid', { exact: true }).fill('');
     await page.getByLabel(/^Description/).fill('Browser-created dataset');
     await page.getByLabel(/^Data for sale/).fill('Private browser-created data');

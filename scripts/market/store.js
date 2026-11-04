@@ -34,6 +34,7 @@ function label(value, max = 200) {
   check(typeof value === 'string' && value.trim().length > 0 && value.length <= max, `Text is required (maximum ${max} characters)`);
   return value.trim();
 }
+// Keep in sync with DESCRIPTION_WORDS_MESSAGE in src/market/BackendApp.js.
 const DESCRIPTION_WORDS_MESSAGE = 'The data description must include words, not only numbers';
 function dataDescription(value) {
   const text = label(value, 300);
