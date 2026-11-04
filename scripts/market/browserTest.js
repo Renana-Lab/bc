@@ -126,6 +126,21 @@ const {
     }
     await batchMinimum.fill('50');
     await batchRow.getByText('Ready', { exact: true }).waitFor();
+    // A numbers-only description is flagged like any other invalid row and no batch request is sent.
+    const batchRequests = [];
+    const onRequest = request => { if (request.url().includes('/admin/batch')) batchRequests.push(request.url()); };
+    page.on('request', onRequest);
+    const batchDescription = page.getByRole('textbox', { name: 'Description row 1', exact: true });
+    await batchDescription.fill('123');
+    await batchRow.getByText('Fix', { exact: true }).waitFor();
+    assert.equal(await batchRow.getByText('Fix', { exact: true }).getAttribute('title'), 'The data description must include words, not only numbers');
+    await page.getByRole('button', { name: /^Create batch/ }).click();
+    await page.getByText('Row issue: The data description must include words, not only numbers', { exact: false }).waitFor();
+    await page.waitForTimeout(200);
+    assert.equal(batchRequests.length, 0);
+    page.off('request', onRequest);
+    await batchDescription.fill('Words 123');
+    await batchRow.getByText('Ready', { exact: true }).waitFor();
     await page.getByRole('button', { name: 'Collapse Batch Auction Studio', exact: true }).click();
     await page.getByText('Bot observatory', { exact: false }).first().waitFor();
     await page.getByText('Bot 01', {

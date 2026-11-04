@@ -631,6 +631,7 @@ function AuctionsListView({ auctions, admin, user, act, refresh, allowPostSubmit
 
 // Keep in sync with DESCRIPTION_WORDS_MESSAGE in scripts/market/store.js (the server rule is the real enforcement).
 const DESCRIPTION_WORDS_MESSAGE = 'The data description must include words, not only numbers';
+const hasDescriptionWords = text => /\p{L}/u.test(String(text ?? ''));
 
 function NewAuctionView({ act }) {
   const navigate = useNavigate();
@@ -678,7 +679,7 @@ function NewAuctionView({ act }) {
             const dur = data.minutes ?? data.auctionDuration;
             const desc = data.description ?? data.dataDescription;
             const pay = data.payload ?? data.dataForSell;
-            if (!/\p{L}/u.test(String(desc ?? ''))) {
+            if (!hasDescriptionWords(desc)) {
               setDescriptionError(DESCRIPTION_WORDS_MESSAGE);
               return;
             }
@@ -1212,6 +1213,7 @@ function BatchAuctionStudio({ act, notify }) {
   const getRowError = r => {
     if (!r.description?.trim()) return 'Description is required';
     if (r.description.trim().length > 300) return 'Description must be at most 300 characters';
+    if (!hasDescriptionWords(r.description)) return DESCRIPTION_WORDS_MESSAGE;
     if (!r.payload?.trim()) return 'Data is required';
     if (r.payload.trim().length > 50000) return 'Data must be at most 50000 characters';
     if (!Number.isSafeInteger(Number(r.minimum)) || Number(r.minimum) < 1 || Number(r.minimum) > 1000000000) return 'Min bid must be a whole number from 1 to 1000000000';
@@ -1427,7 +1429,8 @@ function BatchAuctionStudio({ act, notify }) {
                         fullWidth
                         value={row.description}
                         onChange={e => updateRow(idx, 'description', e.target.value)}
-                        error={!row.description.trim()}
+                        error={!row.description.trim() || !hasDescriptionWords(row.description)}
+                        inputProps={{ 'aria-label': `Description row ${idx + 1}` }}
                       />
                     </TableCell>
                     <TableCell>
