@@ -674,6 +674,10 @@ function NewAuctionView({ act }) {
             const dur = data.minutes ?? data.auctionDuration;
             const desc = data.description ?? data.dataDescription;
             const pay = data.payload ?? data.dataForSell;
+            if (String(min ?? '').trim() === '' || !Number.isFinite(Number(min))) {
+              form.reportValidity();
+              return;
+            }
             const result = await act('/auctions', {
               ...data,
               description: desc,
@@ -710,7 +714,6 @@ function NewAuctionView({ act }) {
             type="number"
             sx={{ width: '85%' }}
             name="minimumContribution"
-            defaultValue={50}
             required
             inputProps={{ min: 1, max: 1000000000, 'aria-label': 'Minimum Bid' }}
           />

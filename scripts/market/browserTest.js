@@ -210,6 +210,12 @@ const {
     });
     await page.getByLabel(/^Description/).fill('Browser-created dataset');
     await page.getByLabel(/^Data for sale/).fill('Private browser-created data');
+    assert.equal(await page.getByLabel('Minimum Bid', { exact: true }).inputValue(), '');
+    assert.equal(await page.getByLabel('Minimum Bid', { exact: true }).getAttribute('placeholder'), null);
+    await page.getByRole('button', { name: 'Create auction', exact: true }).click();
+    assert.equal(await page.getByLabel('Minimum Bid', { exact: true }).evaluate(el => el.validity.valueMissing), true);
+    assert.equal(page.url().includes('/auction/'), false);
+    await page.getByLabel('Minimum Bid', { exact: true }).fill('50');
     await page.getByRole('button', {
       name: 'Create auction',
       exact: true
