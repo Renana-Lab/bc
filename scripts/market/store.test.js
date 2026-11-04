@@ -361,3 +361,26 @@ test('historical list lookup chooses latest observation at or before requested t
   assert.equal(s.listStateAt(opened, admin.id).state[0].id, id);
   assert.equal(s.listStateAt(s.now(), admin.id).state.length, 0);
 });
+test('data description must contain a letter, numbers alone are rejected', async t => {
+  const { s, seller, admin } = await fixture(t);
+  const create = description => s.createAuction({ description, payload: '39', minimum: 50, minutes: 1 }, seller.id);
+  for (const ok of ['my shoe size is 39', 'מידה 39', 'Größe 39', '39 cm']) assert.ok(create(ok).id, ok);
+  for (const bad of ['39', '39.5', '  42  ', '', '   ', '12-34', 39, null, undefined]) {
+    assert.throws(() => create(bad), bad === '' || bad == null || bad === '   ' || typeof bad === 'number' ? /Text is required|words/ : /words, not only numbers/, String(bad));
+  }
+  // dataDescription alias is validated too
+  assert.throws(() => s.createAuction({ dataDescription: '39', payload: 'x', minimum: 50, minutes: 1 }, seller.id), /words, not only numbers/);
+  // admin batch create goes through the same rule and is atomic
+  assert.throws(() => s.batch([{ description: 'Valid words', payload: 'p', minimum: 50, minutes: 1 }, { description: '123', payload: 'p', minimum: 50, minutes: 1 }], admin.id), /words, not only numbers/);
+  assert.equal(s.all("SELECT id FROM auctions WHERE description='Valid words'").length, 0);
+  // Data For Sell may be numbers only
+  assert.ok(create('shoe size').id);
+});
+test('existing numbers-only descriptions keep working and stay editable', async t => {
+  const { s, seller, a } = await fixture(t);
+  const legacy = s.createAuction({ description: 'placeholder', payload: 'p', minimum: 50, minutes: 5 }, seller.id).id;
+  s.run('UPDATE auctions SET description=? WHERE id=?', '12345', legacy);
+  const bid = s.bid(legacy, 60, a.id, randomUUID());
+  assert.equal(bid.cumulative, 60);
+  assert.equal(s.auction(legacy, a.id).description, '12345');
+});

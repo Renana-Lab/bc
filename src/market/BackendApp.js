@@ -629,9 +629,12 @@ function AuctionsListView({ auctions, admin, user, act, refresh, allowPostSubmit
   );
 }
 
+const DESCRIPTION_WORDS_MESSAGE = 'The data description must include words, not only numbers';
+
 function NewAuctionView({ act }) {
   const navigate = useNavigate();
   const [explanation, setExplanation] = useState(null);
+  const [descriptionError, setDescriptionError] = useState('');
 
   const handleTooltip = (field) => {
     setExplanation(explanation === field ? null : field);
@@ -674,6 +677,10 @@ function NewAuctionView({ act }) {
             const dur = data.minutes ?? data.auctionDuration;
             const desc = data.description ?? data.dataDescription;
             const pay = data.payload ?? data.dataForSell;
+            if (!/\p{L}/u.test(String(desc ?? ''))) {
+              setDescriptionError(DESCRIPTION_WORDS_MESSAGE);
+              return;
+            }
             if (String(min ?? '').trim() === '' || !Number.isFinite(Number(min))) {
               form.reportValidity();
               return;
@@ -693,11 +700,14 @@ function NewAuctionView({ act }) {
           </h1>
 
 
-          {renderTooltip('dataDescription', 'Description of the Data', 'Describe the information you are selling (e.g., shoe size). This description will be visible to all buyers and cannot be changed after you create the auction.')}
+          {renderTooltip('dataDescription', 'Description of the Data', 'Describe the information in words (e.g., my shoe size); a number alone is not allowed. This description will be visible to all buyers and cannot be changed after you create the auction.')}
           <TextField
             sx={{ width: '85%' }}
             name="dataDescription"
             required
+            error={Boolean(descriptionError)}
+            helperText={descriptionError || undefined}
+            onChange={() => descriptionError && setDescriptionError('')}
             inputProps={{ maxLength: 300, 'aria-label': 'Description of the Data' }}
           />
 
