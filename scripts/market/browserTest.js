@@ -194,9 +194,9 @@ const {
     assert.equal(await page.getByText('Auction destination', { exact: true }).count(), 0);
     assert.equal(await page.getByLabel('Auction Duration (1–30 minutes)', { exact: true }).inputValue(), '10');
     for (const [label, text] of [
-      ['Minimum Bid', 'The lowest price you are willing to accept for selling your information (in cents). You can change this price at any time before the first bid is placed.'],
       ['Description of the Data', 'Describe the information you are selling (e.g., shoe size). This description will be visible to all buyers and cannot be changed after you create the auction.'],
       ['Data For Sell', 'Enter the actual information you are selling (e.g., your shoe size). Only the winning buyer will receive this information after the auction ends. You cannot change it after creating the auction.'],
+      ['Minimum Bid', 'The lowest price you are willing to accept for selling your information (in cents). You can change this price at any time before the first bid is placed.'],
       ['Auction Duration (1–30 minutes)', 'Enter how many minutes your auction will last. Bidding starts when you create the auction. You cannot change the duration afterward.']
     ]) {
       await page.getByRole('button', { name: `Info about ${label}`, exact: true }).click();

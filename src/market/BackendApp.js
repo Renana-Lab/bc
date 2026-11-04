@@ -689,16 +689,6 @@ function NewAuctionView({ act }) {
           </h1>
 
 
-          {renderTooltip('minBid', 'Minimum Bid', 'The lowest price you are willing to accept for selling your information (in cents). You can change this price at any time before the first bid is placed.')}
-          <TextField
-            type="number"
-            sx={{ width: '85%' }}
-            name="minimumContribution"
-            defaultValue={50}
-            required
-            inputProps={{ min: 1, max: 1000000000, 'aria-label': 'Minimum Bid' }}
-          />
-
           {renderTooltip('dataDescription', 'Description of the Data', 'Describe the information you are selling (e.g., shoe size). This description will be visible to all buyers and cannot be changed after you create the auction.')}
           <TextField
             sx={{ width: '85%' }}
@@ -713,6 +703,16 @@ function NewAuctionView({ act }) {
             name="dataForSell"
             required
             inputProps={{ maxLength: 50000, 'aria-label': 'Data for sale' }}
+          />
+
+          {renderTooltip('minBid', 'Minimum Bid', 'The lowest price you are willing to accept for selling your information (in cents). You can change this price at any time before the first bid is placed.')}
+          <TextField
+            type="number"
+            sx={{ width: '85%' }}
+            name="minimumContribution"
+            defaultValue={50}
+            required
+            inputProps={{ min: 1, max: 1000000000, 'aria-label': 'Minimum Bid' }}
           />
 
           {renderTooltip('auctionTime', 'Auction Duration (1–30 minutes)', 'Enter how many minutes your auction will last. Bidding starts when you create the auction. You cannot change the duration afterward.')}
