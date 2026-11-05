@@ -361,3 +361,37 @@ test('historical list lookup chooses latest observation at or before requested t
   assert.equal(s.listStateAt(opened, admin.id).state[0].id, id);
   assert.equal(s.listStateAt(s.now(), admin.id).state.length, 0);
 });
+test('data description must contain a letter, numbers alone are rejected', async t => {
+  const { s, seller, admin } = await fixture(t);
+  const create = (description, payload = '39') => s.createAuction({ description, payload, minimum: 50, minutes: 1 }, seller.id);
+  for (const ok of ['my shoe size is 39', 'מידה 39', 'Größe 39', '39 cm', '一二三']) assert.ok(create(ok).id, ok);
+  for (const bad of ['39', '39.5', '  42  ', '12-34', '٣٩', '３９', '😀', '😀 39', '9'.repeat(100)]) {
+    assert.throws(() => create(bad), /words, not only numbers/, bad);
+  }
+  for (const bad of ['', '   ', 39, null, undefined, '9'.repeat(301)]) {
+    assert.throws(() => create(bad), /Text is required/, String(bad));
+  }
+  // the dataDescription field name is validated too
+  assert.throws(() => s.createAuction({ dataDescription: '39', payload: 'x', minimum: 50, minutes: 1 }, seller.id), /words, not only numbers/);
+  assert.ok(s.createAuction({ dataDescription: 'shoe size', payload: 'x', minimum: 50, minutes: 1 }, seller.id).id);
+  // Data For Sell may be numbers only
+  assert.ok(create('shoe size', '39').id);
+  // a missing or invalid minimum is still rejected by the server
+  for (const minimum of ['', '  ', null, undefined, 0, 'abc', 1.5]) {
+    assert.throws(() => s.createAuction({ description: 'shoe size', payload: 'p', minimum, minutes: 1 }, seller.id), /Expected an integer/, String(minimum));
+  }
+  // admin batch create goes through the same rule and is atomic
+  assert.throws(() => s.batch([{ description: 'Valid words', payload: 'p', minimum: 50, minutes: 1 }, { description: '123', payload: 'p', minimum: 50, minutes: 1 }], admin.id), /words, not only numbers/);
+  assert.equal(s.all("SELECT id FROM auctions WHERE description='Valid words'").length, 0);
+});
+test('existing numbers-only descriptions keep working, stay editable and biddable', async t => {
+  const { s, seller, admin, a } = await fixture(t);
+  const legacy = s.createAuction({ description: 'placeholder', payload: 'p', minimum: 50, minutes: 5 }, seller.id).id;
+  s.run('UPDATE auctions SET description=? WHERE id=?', '12345', legacy);
+  const edited = s.editAuction(legacy, { revision: s.inspectAuction(legacy, admin.id).revision, minimum: 70 }, admin.id);
+  assert.equal(edited.record.minimum, 70);
+  assert.equal(edited.record.description, '12345');
+  const bid = s.bid(legacy, 80, a.id, randomUUID());
+  assert.equal(bid.cumulative, 80);
+  assert.equal(s.auction(legacy, a.id).description, '12345');
+});

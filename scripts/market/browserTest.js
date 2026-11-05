@@ -126,6 +126,21 @@ const {
     }
     await batchMinimum.fill('50');
     await batchRow.getByText('Ready', { exact: true }).waitFor();
+    // A numbers-only description is flagged like any other invalid row and no batch request is sent.
+    const batchRequests = [];
+    const onRequest = request => { if (request.url().includes('/admin/batch')) batchRequests.push(request.url()); };
+    page.on('request', onRequest);
+    const batchDescription = page.getByRole('textbox', { name: 'Description row 1', exact: true });
+    await batchDescription.fill('123');
+    await batchRow.getByText('Fix', { exact: true }).waitFor();
+    assert.equal(await batchRow.getByText('Fix', { exact: true }).getAttribute('title'), 'The data description must include words, not only numbers');
+    await page.getByRole('button', { name: /^Create batch/ }).click();
+    await page.getByText('Row issue: The data description must include words, not only numbers', { exact: false }).waitFor();
+    await page.waitForTimeout(200);
+    assert.equal(batchRequests.length, 0);
+    page.off('request', onRequest);
+    await batchDescription.fill('Words 123');
+    await batchRow.getByText('Ready', { exact: true }).waitFor();
     await page.getByRole('button', { name: 'Collapse Batch Auction Studio', exact: true }).click();
     await page.getByText('Bot observatory', { exact: false }).first().waitFor();
     await page.getByText('Bot 01', {
@@ -194,9 +209,9 @@ const {
     assert.equal(await page.getByText('Auction destination', { exact: true }).count(), 0);
     assert.equal(await page.getByLabel('Auction Duration (1–30 minutes)', { exact: true }).inputValue(), '10');
     for (const [label, text] of [
-      ['Minimum Bid', 'The lowest price you are willing to accept for selling your information (in cents). You can change this price at any time before the first bid is placed.'],
-      ['Description of the Data', 'Describe the information you are selling (e.g., shoe size). This description will be visible to all buyers and cannot be changed after you create the auction.'],
+      ['Description of the Data', 'Describe the information in words (e.g., my shoe size); a number alone is not allowed. This description will be visible to all buyers and cannot be changed after you create the auction.'],
       ['Data For Sell', 'Enter the actual information you are selling (e.g., your shoe size). Only the winning buyer will receive this information after the auction ends. You cannot change it after creating the auction.'],
+      ['Minimum Bid', 'The lowest price you are willing to accept for selling your information (in cents). You can change this price at any time before the first bid is placed.'],
       ['Auction Duration (1–30 minutes)', 'Enter how many minutes your auction will last. Bidding starts when you create the auction. You cannot change the duration afterward.']
     ]) {
       await page.getByRole('button', { name: `Info about ${label}`, exact: true }).click();
@@ -208,8 +223,22 @@ const {
       path: 'artifacts/backend/open-auction-current.png',
       fullPage: true
     });
+    await page.getByLabel(/^Description/).fill('39');
+    await page.getByLabel(/^Data for sale/).fill('39');
+    await page.getByLabel('Minimum Bid', { exact: true }).fill('50');
+    await page.getByRole('button', { name: 'Create auction', exact: true }).click();
+    await page.getByText('The data description must include words, not only numbers', { exact: true }).waitFor();
+    assert.equal(page.url().includes('/auction/'), false);
+    // Clear the minimum again so the next submit proves the required-field check.
+    await page.getByLabel('Minimum Bid', { exact: true }).fill('');
     await page.getByLabel(/^Description/).fill('Browser-created dataset');
     await page.getByLabel(/^Data for sale/).fill('Private browser-created data');
+    assert.equal(await page.getByLabel('Minimum Bid', { exact: true }).inputValue(), '');
+    assert.equal(await page.getByLabel('Minimum Bid', { exact: true }).getAttribute('placeholder'), null);
+    await page.getByRole('button', { name: 'Create auction', exact: true }).click();
+    assert.equal(await page.getByLabel('Minimum Bid', { exact: true }).evaluate(el => el.validity.valueMissing), true);
+    assert.equal(page.url().includes('/auction/'), false);
+    await page.getByLabel('Minimum Bid', { exact: true }).fill('50');
     await page.getByRole('button', {
       name: 'Create auction',
       exact: true

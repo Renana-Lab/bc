@@ -34,6 +34,13 @@ function label(value, max = 200) {
   check(typeof value === 'string' && value.trim().length > 0 && value.length <= max, `Text is required (maximum ${max} characters)`);
   return value.trim();
 }
+// Keep in sync with DESCRIPTION_WORDS_MESSAGE in src/market/BackendApp.js.
+const DESCRIPTION_WORDS_MESSAGE = 'The data description must include words, not only numbers';
+function dataDescription(value) {
+  const text = label(value, 300);
+  check(/\p{L}/u.test(text), DESCRIPTION_WORDS_MESSAGE);
+  return text;
+}
 const digest = token => createHash('sha256').update(token).digest('hex');
 function identifier(value) {
   const normalized = label(value, 200).toLowerCase();
@@ -309,7 +316,7 @@ class MarketStore {
   }
   insertAuction(input, actor) {
     this.user(actor);
-    const description = label(input.description ?? input.dataDescription, 300),
+    const description = dataDescription(input.description ?? input.dataDescription),
       payload = label(input.payload ?? input.dataForSell, 50000);
     const minimum = integer(input.minimum ?? input.minimumContribution),
       minutes = integer(input.minutes ?? input.auctionDuration, 1, 30);
@@ -759,5 +766,6 @@ module.exports = {
   MarketStore,
   MarketError,
   check,
-  integer
+  integer,
+  dataDescription
 };

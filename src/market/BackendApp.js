@@ -629,9 +629,14 @@ function AuctionsListView({ auctions, admin, user, act, refresh, allowPostSubmit
   );
 }
 
+// Keep in sync with DESCRIPTION_WORDS_MESSAGE in scripts/market/store.js (the server rule is the real enforcement).
+const DESCRIPTION_WORDS_MESSAGE = 'The data description must include words, not only numbers';
+const hasDescriptionWords = text => /\p{L}/u.test(String(text ?? ''));
+
 function NewAuctionView({ act }) {
   const navigate = useNavigate();
   const [explanation, setExplanation] = useState(null);
+  const [descriptionError, setDescriptionError] = useState('');
 
   const handleTooltip = (field) => {
     setExplanation(explanation === field ? null : field);
@@ -674,6 +679,15 @@ function NewAuctionView({ act }) {
             const dur = data.minutes ?? data.auctionDuration;
             const desc = data.description ?? data.dataDescription;
             const pay = data.payload ?? data.dataForSell;
+            if (!hasDescriptionWords(desc)) {
+              setDescriptionError(DESCRIPTION_WORDS_MESSAGE);
+              return;
+            }
+            // Safety net behind the `required` attribute: never send 0/NaN for an empty minimum.
+            if (String(min ?? '').trim() === '' || !Number.isFinite(Number(min))) {
+              form.reportValidity();
+              return;
+            }
             const result = await act('/auctions', {
               ...data,
               description: desc,
@@ -689,21 +703,14 @@ function NewAuctionView({ act }) {
           </h1>
 
 
-          {renderTooltip('minBid', 'Minimum Bid', 'The lowest price you are willing to accept for selling your information (in cents). You can change this price at any time before the first bid is placed.')}
-          <TextField
-            type="number"
-            sx={{ width: '85%' }}
-            name="minimumContribution"
-            defaultValue={50}
-            required
-            inputProps={{ min: 1, max: 1000000000, 'aria-label': 'Minimum Bid' }}
-          />
-
-          {renderTooltip('dataDescription', 'Description of the Data', 'Describe the information you are selling (e.g., shoe size). This description will be visible to all buyers and cannot be changed after you create the auction.')}
+          {renderTooltip('dataDescription', 'Description of the Data', 'Describe the information in words (e.g., my shoe size); a number alone is not allowed. This description will be visible to all buyers and cannot be changed after you create the auction.')}
           <TextField
             sx={{ width: '85%' }}
             name="dataDescription"
             required
+            error={Boolean(descriptionError)}
+            helperText={descriptionError || undefined}
+            onChange={() => descriptionError && setDescriptionError('')}
             inputProps={{ maxLength: 300, 'aria-label': 'Description of the Data' }}
           />
 
@@ -713,6 +720,15 @@ function NewAuctionView({ act }) {
             name="dataForSell"
             required
             inputProps={{ maxLength: 50000, 'aria-label': 'Data for sale' }}
+          />
+
+          {renderTooltip('minBid', 'Minimum Bid', 'The lowest price you are willing to accept for selling your information (in cents). You can change this price at any time before the first bid is placed.')}
+          <TextField
+            type="number"
+            sx={{ width: '85%' }}
+            name="minimumContribution"
+            required
+            inputProps={{ min: 1, max: 1000000000, 'aria-label': 'Minimum Bid' }}
           />
 
           {renderTooltip('auctionTime', 'Auction Duration (1–30 minutes)', 'Enter how many minutes your auction will last. Bidding starts when you create the auction. You cannot change the duration afterward.')}
@@ -1197,6 +1213,7 @@ function BatchAuctionStudio({ act, notify }) {
   const getRowError = r => {
     if (!r.description?.trim()) return 'Description is required';
     if (r.description.trim().length > 300) return 'Description must be at most 300 characters';
+    if (!hasDescriptionWords(r.description)) return DESCRIPTION_WORDS_MESSAGE;
     if (!r.payload?.trim()) return 'Data is required';
     if (r.payload.trim().length > 50000) return 'Data must be at most 50000 characters';
     if (!Number.isSafeInteger(Number(r.minimum)) || Number(r.minimum) < 1 || Number(r.minimum) > 1000000000) return 'Min bid must be a whole number from 1 to 1000000000';
@@ -1412,7 +1429,8 @@ function BatchAuctionStudio({ act, notify }) {
                         fullWidth
                         value={row.description}
                         onChange={e => updateRow(idx, 'description', e.target.value)}
-                        error={!row.description.trim()}
+                        error={!row.description.trim() || !hasDescriptionWords(row.description)}
+                        inputProps={{ 'aria-label': `Description row ${idx + 1}` }}
                       />
                     </TableCell>
                     <TableCell>
