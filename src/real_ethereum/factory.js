@@ -7,6 +7,11 @@ const normalizeAddress = (address) => String(address || "").toLowerCase();
 
 export const getFactoryContract = () => {
   const factoryAddress = getActiveFactoryAddress();
+  if (!factoryAddress) {
+    throw new Error(
+      "Factory address is not configured. Set REACT_APP_FACTORY_ADDRESS to the CampaignFactory deployed on the configured Sapphire network."
+    );
+  }
   const cacheKey = normalizeAddress(factoryAddress);
 
   if (!factoryContractCache.has(cacheKey)) {

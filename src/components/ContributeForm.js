@@ -67,7 +67,7 @@ class ContributeForm extends Component {
     const minimumContribution = summary[0];
     const manager = summary[3];
     const highestBid = summary[4];
-    const endTime = summaryIsLight ? summary[7] : summary[9];
+    const endTime = summaryIsLight ? summary[7] : summary[8];
     const accounts = await getEthereumAccounts();
     const connectedAccount = accounts[0];
 

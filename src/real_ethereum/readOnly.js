@@ -3,6 +3,7 @@ import CampaignFactory from "./build/CampaignFactory.json";
 import Campaign from "./build/Campaign.json";
 import { getActiveFactoryAddress } from "./marketConfig";
 import { getEthereumProvider } from "./ethereumProvider";
+import { getSapphireProvider } from "./sapphireProvider";
 import {
   createRpcPoolError,
   getConfiguredRpcUrls,
@@ -47,7 +48,7 @@ const getInjectedWeb3 = () => {
 
   if (injectedProviderRef !== provider || !injectedWeb3) {
     injectedProviderRef = provider;
-    injectedWeb3 = new Web3(provider);
+    injectedWeb3 = new Web3(getSapphireProvider(provider));
   }
 
   return injectedWeb3;

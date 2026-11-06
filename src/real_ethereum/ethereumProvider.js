@@ -1,3 +1,4 @@
+import { ensureTargetChain } from "./sapphireNetworks";
 import { discoverWalletProvider, requireWalletAccess, verifyWalletAccess } from "./walletAccess";
 
 export const getEthereumProvider = discoverWalletProvider;
@@ -19,6 +20,7 @@ export const requestEthereumAccounts = async () => {
   const provider = await waitForEthereumProvider({ timeoutMs: 6500 });
   if (!provider) throw new Error("MetaMask was not detected. Enable the extension for this site and retry.");
   await provider.request({ method: "eth_requestAccounts" });
+  await ensureTargetChain(provider);
   if (provider !== discoverWalletProvider()) throw new Error("Wallet provider changed. Retry the connection.");
   const session = await requireWalletAccess();
   return [session.account];

@@ -158,15 +158,15 @@ async function readAuction(address, userAddress = "") {
     const details = await withRpcRetry((web3) =>
       campaignFor(web3, address).methods.getSummary().call()
     );
-    const addresses = details[8] || [];
-    const auctionEnded = Number(details[9]) * 1000 < Date.now();
+    const addresses = details[7] || [];
+    const auctionEnded = Number(details[8]) * 1000 < Date.now();
     const closed = auctionEnded
       ? await withRpcRetry((web3) =>
           campaignFor(web3, address).methods.getStatus().call()
         )
       : false;
     const isHighestBidder =
-      normalizedUser && details[7].toLowerCase() === normalizedUser;
+      normalizedUser && details[6].toLowerCase() === normalizedUser;
     const isManager = normalizedUser && details[3].toLowerCase() === normalizedUser;
     const userInAuction =
       normalizedUser &&
@@ -188,11 +188,10 @@ async function readAuction(address, userAddress = "") {
       approversCount: details[2],
       manager: details[3],
       highestBid: details[4],
-      dataForSell: details[5],
-      dataDescription: details[6],
-      highestBidder: details[7],
+      dataDescription: details[5],
+      highestBidder: details[6],
       addresses,
-      endTime: Number(details[9]) * 1000,
+      endTime: Number(details[8]) * 1000,
       isRefunded,
       closed: Boolean(closed),
     };

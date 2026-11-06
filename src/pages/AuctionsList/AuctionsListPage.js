@@ -752,8 +752,8 @@ const readAuctionFromChain = async (
       undefined,
       readOptions,
     );
-    const addresses = details[8];
-    const auctionEnded = Number(details[9]) * 1000 < Date.now();
+    const addresses = details[7];
+    const auctionEnded = Number(details[8]) * 1000 < Date.now();
     const closed = auctionEnded
       ? await readOnlyCall(
           ({ campaign }) => campaign(address).methods.getStatus(),
@@ -764,7 +764,7 @@ const readAuctionFromChain = async (
 
     let isRefunded = false;
     const isHighestBidder =
-      currentUserAddress && details[7].toLowerCase() === currentUserAddress;
+      currentUserAddress && details[6].toLowerCase() === currentUserAddress;
     const isManager =
       currentUserAddress && details[3].toLowerCase() === currentUserAddress;
     const userInAuction =
@@ -788,11 +788,10 @@ const readAuctionFromChain = async (
       approversCount: details[2],
       manager: details[3],
       highestBid: details[4],
-      dataForSell: details[5],
-      dataDescription: details[6],
-      highestBidder: details[7],
+      dataDescription: details[5],
+      highestBidder: details[6],
       addresses,
-      endTime: Number(details[9]) * 1000,
+      endTime: Number(details[8]) * 1000,
       isRefunded,
       closed,
     });

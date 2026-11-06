@@ -12,9 +12,9 @@ export const shouldFinalizeAuction = async (auction) => {
 
   return {
     closed,
-    endTime: summary[9],
-    hasBids: summary[7] !== ZERO_ADDRESS,
-    shouldFinalize: !closed && isAuctionEnded(summary[9]),
+    endTime: summary[8],
+    hasBids: summary[6] !== ZERO_ADDRESS,
+    shouldFinalize: !closed && isAuctionEnded(summary[8]),
   };
 };
 
