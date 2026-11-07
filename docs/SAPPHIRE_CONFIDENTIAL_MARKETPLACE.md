@@ -36,10 +36,20 @@ signature per session instead of one per read.
 | `REACT_APP_NETWORK` | `sapphire-testnet` (default) or `sapphire-localnet` |
 | `REACT_APP_FACTORY_ADDRESS` | CampaignFactory on that network (no factory is committed) |
 | `REACT_APP_RPC_URLS` / `REACT_APP_RPC_URL` | optional RPC override |
-| `DEPLOY_NETWORK`, `DEPLOY_PRIVATE_KEY`, `FACTORY_SIWE_DOMAIN`, `DEPLOY_MARKET` | `src/real_ethereum/deploy.js` (localnet/testnet only) |
+| `DEPLOY_NETWORK`, `DEPLOY_PRIVATE_KEY`, `FACTORY_SIWE_DOMAIN` (see above), `DEPLOY_MARKET` | `src/real_ethereum/deploy.js` (localnet/testnet only) |
 
-The SIWE domain given to the factory must match the host users open the app on. MetaMask warns if the
-signing domain differs from the page origin.
+### SIWE domain
+
+The domain is set once, in the `CampaignFactory` constructor, by `src/real_ethereum/deploy.js` from the
+`FACTORY_SIWE_DOMAIN` env var (host plus port, no scheme, e.g. `localhost:3000` or `market.example.org`).
+It is stored in the contract and cannot be changed; a different host needs a new factory.
+
+- `sapphire-localnet`: defaults to `localhost:3000` when `FACTORY_SIWE_DOMAIN` is unset.
+- `sapphire-testnet`: no default. The script refuses to deploy without `FACTORY_SIWE_DOMAIN`, so a
+  localhost value cannot be baked into a deployed factory by accident.
+- The app reads it with `factory.domain()` and compares it to `window.location.host` before asking
+  MetaMask to sign. On a mismatch it shows an error naming both hosts instead of a signature prompt the
+  contract would reject. Vite's dev server uses port 3000, so `localhost:3000` matches `npm start`.
 
 ## Compile, run localnet, test
 
@@ -72,7 +82,39 @@ only the winner (SIWE token) reads it, while loser, seller, outsider, empty and 
   the new contracts (no Sapphire precompiles on ganache) and still call `createCampaign` in cleartext.
   `scripts/experiment/*` is pinned to Sepolia and sends raw signed transactions without the wrapper.
   Port these to the localnet before using them with this contract.
-- `yarn.lock` was not regenerated (yarn is not installed here); run `yarn install` to refresh it.
 - The old Sepolia factory (previously the hardcoded fallback) is incompatible and was removed.
-- Not verified in a real browser with MetaMask (no browser wallet in this environment). The wrapper is
-  exercised through ethers on localnet and the production bundle builds.
+- The MetaMask browser flow has not been run by an automated agent (it needs the extension unlocked and
+  an account imported). Run the checklist below before relying on it.
+
+## Manual MetaMask checklist (sapphire-localnet only)
+
+Prepare (terminal, repo root):
+
+1. `docker run -d --name sapphire-localnet -p8544-8548:8544-8548 ghcr.io/oasisprotocol/sapphire-localnet`
+   and wait for "Web3 RPC listening on http://localhost:8545" in `docker logs sapphire-localnet`.
+2. In MetaMask import three localnet accounts from the public localnet mnemonic printed in the docker
+   logs (`test test ... junk`, indexes 0, 1, 2 = seller, winner, loser). Use a throwaway MetaMask profile;
+   never import this phrase into a wallet that holds real funds.
+3. Deploy the factory (key from the localnet account 0, set in your shell only):
+   `DEPLOY_NETWORK=sapphire-localnet DEPLOY_MARKET=real DEPLOY_PRIVATE_KEY=<account 0 key> node src/real_ethereum/deploy.js`
+   This writes `REACT_APP_REAL_FACTORY_ADDRESS` to the git-ignored `.env`.
+4. `REACT_APP_NETWORK=sapphire-localnet npm start`, open `http://localhost:3000` (must be exactly
+   `localhost:3000`; the factory domain defaults to that).
+
+Steps and expected results:
+
+| # | Action | Expected |
+| - | ------ | -------- |
+| 1 | Connect MetaMask as the seller. | Connection prompt, then a "Switch network / Allow this site to add a network" prompt for "Oasis Sapphire Localnet" (chain 23293). After approving, MetaMask shows that network. |
+| 2 | Create an auction (any description, payload `SECRET-123`, 1 minute, small minimum bid). | One transaction confirmation. In MetaMask's activity the data field is not readable text. Auction appears in the list with its description only. |
+| 3 | Switch MetaMask to the loser account and open the auction page. | The payload `SECRET-123` is not shown anywhere on the page. No signature prompt appears. |
+| 4 | As loser then winner, place bids (loser first, winner higher), e.g. 50 and 100 wei. | One transaction confirmation per bid. |
+| 5 | Wait for the auction to end and finalize (use the auction page / auto-finalize). | Auction shows closed. |
+| 6 | As the loser open the closed auction. | Still no payload. If a sign-in prompt appears and you approve it, the page still shows no payload. |
+| 7 | As the winner open the closed auction. | Exactly one MetaMask "Sign message" popup: text starts with `localhost:3000 wants you to sign in with your Ethereum account`, shows Chain ID 23293 and an expiry about 1 hour out. After approving, "Data acquired" shows `SECRET-123`. |
+| 8 | Navigate to another page and back, or wait for the page to refresh data (still no browser reload). | No new signature popup; payload still shown (token and payload are cached in memory). |
+| 9 | Hard-reload the tab (F5) and open the same auction as the winner. | A new SIWE signature popup appears (the in-memory token is gone). Approve it and the payload shows. |
+| 10 | Reload again, open the auction and click Reject on the signature popup. | The payload is not shown and the popup does not reappear on every refresh for about a minute. |
+| 11 | Open the app on `http://127.0.0.1:3000` instead of `localhost:3000` and open the closed auction as the winner. | No signature popup; an error says the factory only accepts sign-in on `localhost:3000`. |
+
+Cleanup: `docker rm -f sapphire-localnet`.

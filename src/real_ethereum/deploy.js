@@ -24,10 +24,14 @@ const privateKey =
   process.env.PRIVATE_KEY ||
   process.env.AUTO_FINALIZE_PRIVATE_KEY;
 const deploymentMarket = String(process.env.DEPLOY_MARKET || "dev").toLowerCase();
-const siweDomain = process.env.FACTORY_SIWE_DOMAIN || "localhost:3000";
+// Host (and port) users open the app on, e.g. "localhost:3000". Only localnet gets a default:
+// a deployed host must be stated explicitly because it is fixed in the factory forever.
+const siweDomain =
+  process.env.FACTORY_SIWE_DOMAIN || (networkId === "sapphire-localnet" ? "localhost:3000" : "");
 const rpcUrl = process.env.DEPLOY_RPC_URL || network?.rpcUrl;
 
 if (!network) throw new Error(`DEPLOY_NETWORK must be one of ${Object.keys(NETWORKS).join(", ")}`);
+if (!siweDomain) throw new Error("Set FACTORY_SIWE_DOMAIN to the host users open the app on (no default outside localnet)");
 if (!privateKey) throw new Error("Set DEPLOY_PRIVATE_KEY (or PRIVATE_KEY) in .env");
 if (!["dev", "real"].includes(deploymentMarket)) {
   throw new Error("DEPLOY_MARKET must be either dev or real");

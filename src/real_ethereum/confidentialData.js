@@ -26,6 +26,13 @@ export const getConfidentialToken = async (account) => {
   const network = await ensureTargetChain(session.provider, getTargetNetwork());
   const factory = getFactoryContract();
   const domain = await factory.methods.domain().call();
+  // The factory only accepts SIWE messages for its configured domain; fail clearly
+  // instead of showing MetaMask a message the contract will reject.
+  if (typeof window !== "undefined" && domain !== window.location.host) {
+    throw new Error(
+      `This factory only accepts sign-in on "${domain}" but the app is open on "${window.location.host}". Open the app on that host or redeploy the factory with FACTORY_SIWE_DOMAIN=${window.location.host}.`
+    );
+  }
   const now = new Date();
   const message = buildSiweMessage({
     domain,
