@@ -1149,7 +1149,7 @@ function BotItem({ bot, act }) {
         >
           <DeleteOutlineIcon color="error" fontSize="small" />
         </IconAction>
-        <small className="backendBotUsage">Random auction</small>
+        <small className="backendBotUsage">Cheapest auction</small>
       </div>
     </form>
   );
@@ -1631,7 +1631,7 @@ function AdminView({ auctions, act, revision, notify }) {
     { name: 'API service', role: 'Authentication and marketplace rules', host: `AWS EC2 / Node.js ${system.runtime.node}`, status: system.runtime.status, detail: `Process uptime ${formatUptime(system.runtime.uptime_seconds)}` },
     { name: 'Database', role: 'Users, auctions, bids, budgets and audit evidence', host: `${system.database.engine} / WAL`, status: system.database.status, detail: formatBytes(system.database.size_bytes) },
     { name: 'Scheduler', role: 'Auction boundaries, finalization and bot cycles', host: `Server tick every ${system.scheduler.tick_interval_ms / 1000}s`, status: system.scheduler.status, detail: system.scheduler.last_activity_at ? `Last activity ${date(system.scheduler.last_activity_at)}` : 'Waiting for first activity record' },
-    { name: 'Bot engine', role: 'Random auction selection and controlled bidding', host: 'Coordinated inside the API service', status: botSummary.running ? 'active' : 'idle', detail: `${botSummary.registered} registered / ${botSummary.running} running` },
+    { name: 'Bot engine', role: 'Cheapest-auction selection and controlled bidding', host: 'Coordinated inside the API service', status: botSummary.running ? 'active' : 'idle', detail: `${botSummary.registered} registered / ${botSummary.running} running` },
     { name: 'Evidence and reports', role: 'Ledger, events, snapshots and exports', host: 'SQLite + Admin report generator', status: 'online', detail: `${system.counts.ledger_entries} ledger entries / ${system.counts.snapshots} snapshots` }
   ];
   const accessRows = [

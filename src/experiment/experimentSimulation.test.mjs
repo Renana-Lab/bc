@@ -5,6 +5,7 @@ import {
   AUCTION_SPECS,
   assignExperimentRoles,
   buildHumanSchedule,
+  createSeededRandom,
 } from "./experimentCore.mjs";
 import { allocateCycleCandidates, getBidDecision } from "../botnet/cyclePlanner.mjs";
 
@@ -48,6 +49,7 @@ const runSimulation = (seed) => {
   const seenSellerBids = [];
   const duplicateBotAssignments = [];
   let cursor = 0;
+  const botRandom = createSeededRandom(`${seed}:bot-auction-ties`);
   let bidCount = 0;
 
   const attempt = (actor, auction, strategy, atMs) => {
@@ -86,10 +88,11 @@ const runSimulation = (seed) => {
     });
     if (elapsedSeconds % 60 === 0) {
       const allocation = allocateCycleCandidates({
-        bots: bots.map((actor) => ({ id: actor.actorId, wallet: actor.address, strategy: strategyFor(actor) })),
+        bots: bots.map((actor) => ({ id: actor.actorId, wallet: actor.address, strategy: strategyFor(actor), budgetWei: budgets.get(actor.address) })),
         auctions,
         cursor,
         nowSec: Math.floor(nowMs / 1000),
+        random: botRandom,
       });
       cursor = allocation.nextCursor;
       const roundAddresses = [];

@@ -482,6 +482,7 @@ class ExperimentRunner {
     const scheduleCursors = new Map(humans.map((actor) => [actor.actorId, 0]));
     const nextBotAt = new Map(bots.map((bot) => [bot.actorId, startAtMs]));
     let allocationCursor = 0;
+    const botRandom = this.core.createSeededRandom(`${this.config.seed}:bot-auction-ties`);
     let nextHeartbeatAt = startAtMs;
     this.log("run-start", { startAtMs, stopAtMs, actors: 30 });
     this.saveState({ phase: "running", startAtMs, stopAtMs });
@@ -519,6 +520,7 @@ class ExperimentRunner {
         })),
         auctions: active,
         cursor: allocationCursor,
+        random: botRandom,
       });
       allocationCursor = allocation.nextCursor;
       const work = [

@@ -58,8 +58,9 @@ async function verifyPassword(password, hash) {
   return timingSafeEqual(actual, Buffer.from(expected, 'hex'));
 }
 class MarketStore {
-  constructor(filename = ':memory:', clock = Date.now) {
+  constructor(filename = ':memory:', clock = Date.now, random = randomInt) {
     this.now = clock;
+    this.random = random;
     this.filename = filename === ':memory:' ? filename : path.resolve(filename);
     this.db = new DatabaseSync(filename);
     this.db.exec(`PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;
@@ -525,7 +526,7 @@ class MarketStore {
         id,
         interval,
         budget: input.budget ?? user.budget,
-        strategy: 'random-auction',
+        strategy: 'cheapest-auction-random-tie',
         running,
         enabled
       });
@@ -560,23 +561,22 @@ class MarketStore {
     const active = this.active(),
       assigned = new Set(),
       decisions = [];
-    // All bots share one active-only read. Each bot receives one random eligible auction.
+    // Choose the cheapest eligible unassigned auction; randomize only tied prices.
     const roundNumber = this.one('SELECT COUNT(*) n FROM rounds').n;
     const rotate = items => items.length ? [...items.slice(roundNumber % items.length), ...items.slice(0, roundNumber % items.length)] : [];
     for (const bot of rotate(bots)) {
       let sent = 0;
       const budget = this.user(bot.user_id).budget;
+      const price = a => Math.max(a.minimum, a.highest + 10);
       const candidates = active.filter(a => {
         if (assigned.has(a.id) || a.seller_id === bot.user_id || a.winner_id === bot.user_id || a.end_at - this.now() < 20000) return false;
-        return Math.max(a.minimum, a.highest + 10) <= budget;
+        return price(a) <= budget;
       });
-      for (let index = candidates.length - 1; index > 0; index--) {
-        const swap = randomInt(index + 1);
-        [candidates[index], candidates[swap]] = [candidates[swap], candidates[index]];
-      }
-      const a = candidates[0];
+      const cheapest = candidates.reduce((minimum, a) => Math.min(minimum, price(a)), Infinity);
+      const tied = candidates.filter(a => price(a) === cheapest);
+      const a = tied.length > 1 ? tied[this.random(tied.length)] : tied[0];
       if (a) {
-        const target = Math.max(a.minimum, a.highest + 10);
+        const target = price(a);
         const own = this.one('SELECT COALESCE(SUM(amount),0) n FROM bids WHERE auction_id=? AND user_id=?', a.id, bot.user_id).n;
         assigned.add(a.id);
         try {

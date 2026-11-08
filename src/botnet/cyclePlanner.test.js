@@ -61,6 +61,7 @@ describe("coordinated bot cycle planner", () => {
     const currentBot = bot(1);
     const result = allocateCycleCandidates({
       bots: [currentBot],
+      random: () => 0.999,
       auctions: [
         auction(1, { manager: currentBot.wallet }),
         auction(2, { highestBidder: currentBot.wallet, approversCount: 1, highestBid: "100" }),
@@ -79,14 +80,15 @@ describe("coordinated bot cycle planner", () => {
     ]);
   });
 
-  test("rotates coverage fairly between rounds", () => {
+  test("randomizes equal-price auctions without preferring expiry or address", () => {
     const auctions = Array.from({ length: 8 }, (_, index) => auction(index + 1));
-    const first = allocateCycleCandidates({ bots: [bot(1)], auctions, cursor: 0, nowSec: 2000000000 });
+    const first = allocateCycleCandidates({ bots: [bot(1)], auctions, random: () => 0.999, cursor: 0, nowSec: 2000000000 });
     const second = allocateCycleCandidates({
       bots: [bot(1)],
       auctions,
       cursor: first.nextCursor,
       nowSec: 2000000000,
+      random: () => 0,
     });
     expect(second.assignments["bot-1"].primary[0].address).not.toBe(
       first.assignments["bot-1"].primary[0].address,
