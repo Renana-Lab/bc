@@ -42,14 +42,17 @@ function harness() {
   const archive = createArchive({ config, store, objects, kms, chain });
   const service = createService({ config, store, objects, kms, chain, archive, now: () => clock,
     payloadId: () => nonce,
-    verifyTypedData: (data, signature) => sig.recoverTypedSignature({ data: { ...data, types: { EIP712Domain: [{ name: 'name', type: 'string' }, { name: 'version', type: 'string' }, { name: 'chainId', type: 'uint256' }, { name: 'verifyingContract', type: 'address' }], ...data.types } }, signature, version: sig.SignTypedDataVersion.V4 })
+    verifyTypedData: (data, signature) => {
+      const { EIP712Domain, ...types } = data.types;
+      return require('ethers').utils.verifyTypedData(data.domain, types, data.message, signature);
+    }
   });
   const request = async (path, body, token, headers = {}) => {
     const response = await service({ rawPath: path, headers: { origin, ...headers, ...(token ? { authorization: 'Bearer ' + token } : {}) }, requestContext: { http: { method: body === undefined ? 'GET' : 'POST' } }, body: body === undefined ? undefined : JSON.stringify(body) });
     return { status: response.statusCode, data: JSON.parse(response.body), headers: response.headers };
   };
   const challenge = () => request('/challenge', { wallet, publicKey });
-  const sign = typedData => sig.signTypedData({ privateKey: secret, data: { ...typedData, types: { EIP712Domain: [{ name: 'name', type: 'string' }, { name: 'version', type: 'string' }, { name: 'chainId', type: 'uint256' }, { name: 'verifyingContract', type: 'address' }], ...typedData.types } }, version: sig.SignTypedDataVersion.V4 });
+  const sign = typedData => sig.signTypedData({ privateKey: secret, data: typedData, version: sig.SignTypedDataVersion.V4 });
   const login = async () => { const c = await challenge(); const result = await request('/session', { challengeId: c.data.challengeId, signature: sign(c.data.typedData) }); assert.equal(result.status, 200); return result.data.token; };
   const prepare = async token => {
     const sealed = await cryptoModule.sealText('SECRET-CANARY-עברית', { chainId: 11155111, factory, seller: wallet, nonce }, publicKey);

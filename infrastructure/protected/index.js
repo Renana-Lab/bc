@@ -149,7 +149,10 @@ async function initialize() {
   const config = { chainId, factory, origins: process.env.ALLOWED_ORIGINS.split(','), kmsKeyId: KeyId, finalizerConfigured: process.env.FINALIZER_CONFIGURED === 'true', serviceName: process.env.AWS_LAMBDA_FUNCTION_NAME };
   const archive = require('./archive').createArchive({ config, store, objects, kms, chain });
   const handler = createService({ config, store, objects, kms, chain, archive,
-    verifyTypedData: (data, signature) => verifyTypedData(data.domain, data.types, data.message, signature),
+    verifyTypedData: (data, signature) => {
+      const { EIP712Domain, ...types } = data.types;
+      return verifyTypedData(data.domain, types, data.message, signature);
+    },
     payloadId: (id, f, seller, nonce) => keccak256(AbiCoder.defaultAbiCoder().encode(['uint256', 'address', 'address', 'bytes32'], [id, f, seller, nonce])) });
   return event => event.adminAction && !event.requestContext && !event.httpMethod && !event.rawPath ? archive.admin(event) : handler(event);
 }

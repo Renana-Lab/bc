@@ -41,7 +41,10 @@ function createService({ config, store, objects, kms, chain, verifyTypedData, pa
       const typedData = {
         domain: { name: 'Marketplace Protected', version: '1', chainId: config.chainId, verifyingContract: factory },
         primaryType: 'ProtectedSession',
-        types: { ProtectedSession: [{ name: 'wallet', type: 'address' }, { name: 'keyHash', type: 'bytes32' }, { name: 'origin', type: 'string' }, { name: 'nonce', type: 'bytes32' }, { name: 'expiresAt', type: 'uint256' }] },
+        types: {
+          EIP712Domain: [{ name: 'name', type: 'string' }, { name: 'version', type: 'string' }, { name: 'chainId', type: 'uint256' }, { name: 'verifyingContract', type: 'address' }],
+          ProtectedSession: [{ name: 'wallet', type: 'address' }, { name: 'keyHash', type: 'bytes32' }, { name: 'origin', type: 'string' }, { name: 'nonce', type: 'bytes32' }, { name: 'expiresAt', type: 'uint256' }],
+        },
         message: { wallet, keyHash, origin, nonce: '0x' + challengeId, expiresAt }
       };
       await store.create('challenge:' + challengeId, { wallet, publicKey: body.publicKey, keyHash, origin, expiresAt, typedData });

@@ -32,7 +32,8 @@ async function main() {
   assert.ok(owned);
   const auth = async (owner, keys) => {
     const challenge = await call('/challenge', { wallet: owner.address, publicKey: await crypto.exportPublicKey(keys.publicKey) });
-    const signature = await owner._signTypedData(challenge.typedData.domain, challenge.typedData.types, challenge.typedData.message);
+    const { EIP712Domain, ...types } = challenge.typedData.types;
+    const signature = await owner._signTypedData(challenge.typedData.domain, types, challenge.typedData.message);
     return call('/session', { challengeId: challenge.challengeId, signature });
   };
   const delivery = await crypto.generateDeliveryKey();

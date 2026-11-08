@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const Web3 = require('web3');
 const { Wallet } = require('ethers');
+const { signTypedData, SignTypedDataVersion } = require('@metamask/eth-sig-util');
 require('dotenv').config({ quiet: true });
 const root = path.resolve(__dirname, '../..');
 const output = path.join(root, 'artifacts/backend/protected');
@@ -18,7 +19,7 @@ async function main() {
   const web3 = new Web3(process.env.PROTECTED_RPC_URL || process.env.RPC_URL);
   const { sha256 } = await import('../../src/protected/crypto.mjs');
   const report = { generatedAt: new Date().toISOString(), url: site, realAWS: true, realSepolia: true,
-    walletAdapter: 'Automated EIP-6963 test adapter, NOT a real MetaMask extension', engines: [] };
+    walletAdapter: 'Automated EIP-6963 adapter with MetaMask eth-sig-util V4, NOT a real extension', engines: [] };
   for (const engine of ['chromium', 'webkit']) {
     stage = `${engine}:launch`;
     const browser = await playwright[engine].launch({ headless: true });
@@ -38,8 +39,7 @@ async function main() {
         if (method === 'eth_signTypedData_v4') {
           assert.equal(params[0].toLowerCase(), signer.address.toLowerCase());
           const data = JSON.parse(params[1]);
-          const types = { ...data.types }; delete types.EIP712Domain;
-          return signer._signTypedData(data.domain, types, data.message);
+          return signTypedData({ privateKey: Buffer.from(signer.privateKey.slice(2), 'hex'), data, version: SignTypedDataVersion.V4 });
         }
         if (!['eth_call', 'eth_blockNumber', 'eth_getBalance', 'eth_getBlockByNumber', 'net_version'].includes(method)) throw new Error('Unsupported read-only automated wallet method');
         return new Promise((resolve, reject) => web3.currentProvider.send({ jsonrpc: '2.0', id: Date.now(), method, params }, (error, result) => error || result.error ? reject(new Error('Read RPC failed')) : resolve(result.result)));

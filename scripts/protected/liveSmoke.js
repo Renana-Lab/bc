@@ -24,7 +24,8 @@ async function main() {
   const auth = async (signer, delivery) => {
     const publicKey = await crypto.exportPublicKey(delivery.publicKey);
     const c = await call('/challenge', { wallet: signer.address, publicKey });
-    const signature = await signer._signTypedData(c.typedData.domain, c.typedData.types, c.typedData.message);
+    const { EIP712Domain, ...types } = c.typedData.types;
+    const signature = await signer._signTypedData(c.typedData.domain, types, c.typedData.message);
     return call('/session', { challengeId: c.challengeId, signature });
   };
   const factoryArtifact = require('../../src/real_ethereum/build/ProtectedCampaignFactory.json');
@@ -107,7 +108,8 @@ async function main() {
   if (!denied) throw new Error('Losing wallet was not denied');
   const publicKey = await crypto.exportPublicKey(delivery.publicKey);
   const replay = await call('/challenge', { wallet: winner.address, publicKey });
-  const signature = await winner._signTypedData(replay.typedData.domain, replay.typedData.types, replay.typedData.message);
+  const { EIP712Domain, ...types } = replay.typedData.types;
+  const signature = await winner._signTypedData(replay.typedData.domain, types, replay.typedData.message);
   await call('/session', { challengeId: replay.challengeId, signature });
   let replayDenied = false;
   try { await call('/session', { challengeId: replay.challengeId, signature }); }

@@ -13,6 +13,9 @@ independent security audit or real-Mac certification.
   private S3 and the confirmed chain. No seller action/key was used for release.
 - Unrelated wallet denied; session replay denied; recipient-key substitution
   denied; signed S3 upload with a mismatched Content-Length denied.
+- The challenge contains an explicit EIP712Domain schema. MetaMask's signing
+  library signs the exact, unmodified challenge; the Ethers verifier recovers the
+  correct wallet. Tests must not synthesize missing domain fields for the server.
 - Marker absent from creation calldata, public contract summary and ciphertext.
 - All 202 legacy records were imported and traversed in five API pages without
   duplicates. An original winning wallet decrypted its archived content and
