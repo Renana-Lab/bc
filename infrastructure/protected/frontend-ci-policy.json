@@ -6,6 +6,7 @@
     "Resource": [
       "arn:aws:amplify:us-east-1:774490039997:apps/df7mlebpdd7v7",
       "arn:aws:amplify:us-east-1:774490039997:apps/df7mlebpdd7v7/branches/main",
+      "arn:aws:amplify:us-east-1:774490039997:apps/df7mlebpdd7v7/branches/main/deployments/*",
       "arn:aws:amplify:us-east-1:774490039997:apps/df7mlebpdd7v7/branches/main/jobs/*"
     ]
   }]
