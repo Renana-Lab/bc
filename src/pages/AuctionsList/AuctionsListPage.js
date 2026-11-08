@@ -396,6 +396,9 @@ const AuctionTableRow = React.memo(function AuctionTableRow({
         <AuctionCountdown endTime={auction.endTime} />
       </TableCell>
       <TableCell align="center" sx={fontSx}>
+        {auction.isReadPlaceholder ? "" : auction.minimumContribution}
+      </TableCell>
+      <TableCell align="center" sx={fontSx}>
         {auction.isReadPlaceholder ? "" : auction.highestBid}
       </TableCell>
       <TableCell align="center" sx={fontSx}>
@@ -1929,6 +1932,7 @@ function AuctionsListPage() {
                     "Description",
                     "End Date",
                     "Auction Status",
+                    "Minimum Bid",
                     "Highest Bid",
                     "Number Of Bidders",
                     "Payment Status",
