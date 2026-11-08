@@ -561,7 +561,7 @@ class MarketStore {
     const active = this.active(),
       assigned = new Set(),
       decisions = [];
-    // Choose the cheapest eligible unassigned auction; randomize only tied prices.
+    // Find the eligible minimum before reservations; never spill into dearer prices.
     const roundNumber = this.one('SELECT COUNT(*) n FROM rounds').n;
     const rotate = items => items.length ? [...items.slice(roundNumber % items.length), ...items.slice(0, roundNumber % items.length)] : [];
     for (const bot of rotate(bots)) {
@@ -569,11 +569,11 @@ class MarketStore {
       const budget = this.user(bot.user_id).budget;
       const price = a => Math.max(a.minimum, a.highest + 10);
       const candidates = active.filter(a => {
-        if (assigned.has(a.id) || a.seller_id === bot.user_id || a.winner_id === bot.user_id || a.end_at - this.now() < 20000) return false;
+        if (a.seller_id === bot.user_id || a.winner_id === bot.user_id || a.end_at - this.now() < 20000) return false;
         return price(a) <= budget;
       });
       const cheapest = candidates.reduce((minimum, a) => Math.min(minimum, price(a)), Infinity);
-      const tied = candidates.filter(a => price(a) === cheapest);
+      const tied = candidates.filter(a => price(a) === cheapest && !assigned.has(a.id));
       const a = tied.length > 1 ? tied[this.random(tied.length)] : tied[0];
       if (a) {
         const target = price(a);

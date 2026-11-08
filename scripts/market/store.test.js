@@ -532,14 +532,15 @@ test('ended and finalized auctions are never selected', async t => {
   assert.equal(s.one('SELECT COUNT(*) n FROM bids WHERE auction_id IN (?,?)', ended, finalized).n, 0);
 });
 
-test('multiple bots get distinct assignments, each taking the cheapest remaining', async t => {
+test('multiple bots wait rather than spill from a reserved minimum to higher prices', async t => {
   const { s, mk, bot } = await botFixture(t);
-  const c1 = mk(50), c2 = mk(60), c3 = mk(70);
+  const c1 = mk(50); mk(60); mk(70);
   await bot('m1'); await bot('m2'); await bot('m3');
   const round = s.runBots(true);
   const chosen = picked(round);
-  assert.equal(new Set(chosen).size, 3);
-  assert.deepEqual(chosen, [c1, c2, c3]);
+  assert.equal(new Set(chosen).size, 1);
+  assert.deepEqual(chosen, [c1]);
+  assert.equal(round.decisions.filter(d => d.outcome === 'skipped').length, 2);
 });
 
 test('no eligible auctions means no bid', async t => {
