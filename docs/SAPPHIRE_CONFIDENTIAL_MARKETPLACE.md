@@ -86,6 +86,26 @@ only the winner (SIWE token) reads it, while loser, seller, outsider, empty and 
 - The MetaMask browser flow has not been run by an automated agent (it needs the extension unlocked and
   an account imported). Run the checklist below before relying on it.
 
+## Review gaps to handle before merging (non-blocking for this Draft PR)
+
+- **Scheduled workflows will fail on master.** `.github/workflows/auto-finalize-auctions.yml` (push to master
+  and every 5 min) and `botnet-cycle.yml` need `FACTORY_ADDRESS` and a Sapphire `RPC_URL` secret. No
+  factory is committed and `scripts/autoFinalizeAuctions.js`, `scripts/botnet/service.js` and
+  `scripts/experiment/*` still default to Sepolia RPCs and send transactions without the Sapphire wrapper
+  (pre-existing). Configure or disable them before merging.
+- **Plaintext risk in unported scripts.** `runExperiment.js`, `scripts/stress/*` and `src/tests/testFinalize.js`
+  would send `createCampaign` payloads in cleartext if pointed at a Sapphire factory. Do not use them with one.
+- **Production builds need a factory.** Set `REACT_APP_FACTORY_ADDRESS` (or `REACT_APP_REAL_FACTORY_ADDRESS`)
+  and `REACT_APP_NETWORK` in the Amplify environment; otherwise the app shows a clear configuration error.
+- **SIWE domain is fixed per factory**, so a preview host or custom domain different from `FACTORY_SIWE_DOMAIN`
+  cannot read payloads. The factory exposes no token revocation; a leaked token works until it expires
+  (60 min).
+- **Cosmetic Sepolia leftovers:** Etherscan links in reports and `BotnetControlPanel`, the Sepolia faucet link in
+  `MetamaskGuidePage`, and README / `scripts/botnet/README.md` still mention Sepolia and the old factory.
+- **Dev only:** switching MetaMask between localnet and testnet in one tab can reuse a cached Sapphire key until
+  the page reloads.
+- The bulk-create draft is no longer saved to localStorage (it contained payloads).
+
 ## Manual MetaMask checklist (sapphire-localnet only)
 
 Prepare (terminal, repo root):

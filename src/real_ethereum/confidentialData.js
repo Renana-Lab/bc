@@ -1,6 +1,6 @@
 import { getFactoryContract } from "./factory";
 import campaign from "./campaign";
-import { requireWalletAccess } from "./walletAccess";
+import { requireWalletAccess, subscribeWalletAccess, getWalletAccess } from "./walletAccess";
 import { ensureTargetChain, getTargetNetwork } from "./sapphireNetworks";
 import { buildSiweMessage, splitSignature, utf8ToHex, SIWE_SESSION_MINUTES } from "./siwe.mjs";
 
@@ -11,7 +11,7 @@ const REFRESH_MARGIN_MS = 60 * 1000;
 const sessionKey = (account) =>
   `${getFactoryContract().options.address}:${String(account).toLowerCase()}`;
 
-export const clearConfidentialSessions = () => sessions.clear();
+
 
 // One MetaMask signature per session (SIWE_SESSION_MINUTES); later reads reuse the token.
 export const getConfidentialToken = async (account) => {
@@ -55,8 +55,22 @@ export const getConfidentialToken = async (account) => {
 
 // Payloads never change after the auction closes, so successful reads are kept in memory.
 const payloads = new Map();
+
+// Drop the cached session token and decrypted payloads (call on disconnect/account change).
+export const clearConfidentialSessions = () => {
+  sessions.clear();
+  payloads.clear();
+  rejectedUntil.clear();
+};
 const rejectedUntil = new Map();
 const REJECT_COOLDOWN_MS = 60 * 1000;
+
+// Forget tokens and decrypted payloads when the wallet is no longer verified as connected.
+// Brief "checking" states between verifications keep the session (one prompt per session).
+subscribeWalletAccess(() => {
+  const { status } = getWalletAccess();
+  if (["locked", "unauthorized", "unavailable"].includes(status)) clearConfidentialSessions();
+});
 
 // Winner-only read of the confidential payload (auction must be finalized).
 export const readWinnerData = async (auctionAddress, account) => {
@@ -71,7 +85,9 @@ export const readWinnerData = async (auctionAddress, account) => {
     payloads.set(key, data);
     return data;
   } catch (error) {
-    if (error?.code === 4001) rejectedUntil.set(key, Date.now() + REJECT_COOLDOWN_MS);
+    // Any failure (rejected signature, declined network switch, wrong host) pauses
+    // automatic retries so background refreshes cannot re-open MetaMask popups.
+    rejectedUntil.set(key, Date.now() + REJECT_COOLDOWN_MS);
     throw error;
   }
 };

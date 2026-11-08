@@ -441,10 +441,9 @@ const ManageBudgetPage = () => {
 
     loadBudget();
 
-    const savedDraft = localStorage.getItem(BULK_DRAFT_KEY);
-    if (savedDraft) {
-      setBulkText(savedDraft);
-    }
+    // Drafts contain confidential payloads, so they are never kept in the browser.
+    // Remove any draft stored by earlier versions.
+    localStorage.removeItem(BULK_DRAFT_KEY);
     return () => {
       cancelled = true;
     };
@@ -481,14 +480,6 @@ const ManageBudgetPage = () => {
   useEffect(() => {
     return () => window.clearTimeout(switchTimerRef.current);
   }, []);
-
-  useEffect(() => {
-    if (bulkText) {
-      localStorage.setItem(BULK_DRAFT_KEY, bulkText);
-    } else {
-      localStorage.removeItem(BULK_DRAFT_KEY);
-    }
-  }, [bulkText]);
 
   const authenticate = useCallback(() => {
     if (pass === ADMIN_SECRET) {

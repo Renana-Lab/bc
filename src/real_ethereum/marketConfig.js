@@ -3,7 +3,7 @@
 const DEFAULT_FACTORY_ADDRESS = "";
 const DEFAULT_DEV_FACTORY_ADDRESS = "";
 const MARKET_STORAGE_KEY = "data-market:active-factory";
-const ACTIVE_FACTORY_STORAGE_KEY = "data-market:factory-address:v2";
+const ACTIVE_FACTORY_STORAGE_KEY = "data-market:factory-address:sapphire-v1";
 const ACTIVE_LABEL_STORAGE_KEY = "data-market:market-label";
 export const MARKET_CHANGED_EVENT = "data-market:factory-changed";
 

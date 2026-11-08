@@ -21,8 +21,7 @@ const networkId = String(process.env.DEPLOY_NETWORK || "sapphire-localnet").toLo
 const network = NETWORKS[networkId];
 const privateKey =
   process.env.DEPLOY_PRIVATE_KEY ||
-  process.env.PRIVATE_KEY ||
-  process.env.AUTO_FINALIZE_PRIVATE_KEY;
+  process.env.PRIVATE_KEY;
 const deploymentMarket = String(process.env.DEPLOY_MARKET || "dev").toLowerCase();
 // Host (and port) users open the app on, e.g. "localhost:3000". Only localnet gets a default:
 // a deployed host must be stated explicitly because it is fixed in the factory forever.
