@@ -142,9 +142,15 @@ class ContributeForm extends Component {
     try {
 
 
-      const receipt = await campaign.methods.contribute().send({
+      const method = process.env.REACT_APP_PROTECTED_MARKET === "true"
+        ? campaign.methods.contributeWithKey(await (await import("../protected/client")).getBidKeyFingerprint(
+            connectedAccount, Number(await (await import("../real_ethereum/web3")).default.eth.getChainId()),
+          ))
+        : campaign.methods.contribute();
+      const receipt = await method.send({
         from: connectedAccount,
         value: additionalBid.toString(),
+        ...(process.env.REACT_APP_PROTECTED_MARKET === "true" ? { chainId: 11155111 } : {}),
       });
       const bidRecordedEvent = Array.isArray(receipt?.events?.BidRecorded)
         ? receipt.events.BidRecorded[0]

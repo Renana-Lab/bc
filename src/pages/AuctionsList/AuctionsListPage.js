@@ -5,6 +5,8 @@ import React, {
   useDeferredValue,
   useMemo,
   useRef,
+  lazy,
+  Suspense,
 } from "react";
 import {
   Table,
@@ -62,6 +64,7 @@ const AUCTIONS_API_URL = (process.env.REACT_APP_AUCTION_API_URL || "").replace(
   "",
 );
 
+const ArchiveHistoryPanel = lazy(() => import("../../protected/ArchiveHistoryPanel"));
 const SORT_OPTIONS = [
   { value: "normal", label: "Market order" },
   { value: "ending", label: "Ending soon" },
@@ -394,6 +397,9 @@ const AuctionTableRow = React.memo(function AuctionTableRow({
       </TableCell>
       <TableCell align="center" sx={{ color: statusFontColor }} style={{ fontWeight: "bold" }}>
         <AuctionCountdown endTime={auction.endTime} />
+      </TableCell>
+      <TableCell align="center" sx={fontSx}>
+        {auction.isReadPlaceholder ? "" : auction.minimumContribution}
       </TableCell>
       <TableCell align="center" sx={fontSx}>
         {auction.isReadPlaceholder ? "" : auction.highestBid}
@@ -1788,6 +1794,9 @@ function AuctionsListPage() {
   return (
     <Layout>
       <div className={styles.page}>
+        {process.env.REACT_APP_PROTECTED_MARKET === "true" && (
+          <Suspense fallback={null}><ArchiveHistoryPanel wallet={connectedAccount} /></Suspense>
+        )}
         <div className={styles.createAuction}>
           <div className={styles.introduction}>
             <div className={styles.introductionText}>
@@ -1929,6 +1938,7 @@ function AuctionsListPage() {
                     "Description",
                     "End Date",
                     "Auction Status",
+                    "Minimum Bid",
                     "Highest Bid",
                     "Number Of Bidders",
                     "Payment Status",

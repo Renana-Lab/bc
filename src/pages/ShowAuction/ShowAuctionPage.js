@@ -11,6 +11,7 @@ import { useParams, useNavigate, useLocation } from "react-router-dom";
 import moment from "moment";
 import Layout from "../../components/Layout";
 import Campaign from "../../real_ethereum/campaign";
+import { getWalletAccess, subscribeWalletAccess } from "../../real_ethereum/walletAccess";
 import ContributeForm from "../../components/ContributeForm";
 import toast from "react-hot-toast";
 import { readOnlyCall } from "../../real_ethereum/readOnly";
@@ -222,11 +223,60 @@ const reducer = (state, action) => {
 };
 
 function ShowAuctionPage() {
+  const protectedMode = process.env.REACT_APP_PROTECTED_MARKET === "true";
+  const [protectedText, setProtectedText] = useState("");
+  const [decrypting, setDecrypting] = useState(false);
+  const revealGeneration = useRef(0);
   const [finalizingPayment, setFinalizingPayment] = useState(false);
   const [state, dispatch] = useReducer(reducer, initialState);
   const fetchInFlightRef = useRef(false);
   const eventRefreshTimerRef = useRef(null);
   const { address } = useParams();
+  useEffect(() => {
+    setProtectedText("");
+    revealGeneration.current += 1;
+    if (!protectedMode) return undefined;
+    let disposed = false;
+    let unsubscribeProtected;
+    import("../../protected/client").then(client => {
+      if (!disposed) unsubscribeProtected = client.subscribeProtectedRevocation(() => {
+        revealGeneration.current += 1;
+        setProtectedText("");
+        setDecrypting(false);
+      });
+    });
+    let account = getWalletAccess().account;
+    const unsubscribeWallet = subscribeWalletAccess(() => {
+      const access = getWalletAccess();
+      if (access.status === "checking") { setProtectedText(""); return; }
+      if (access.status !== "connected" || access.account !== account) {
+        account = access.account;
+        revealGeneration.current += 1;
+        setProtectedText("");
+        setDecrypting(false);
+      }
+    });
+    return () => {
+      disposed = true;
+      revealGeneration.current += 1;
+      unsubscribeWallet();
+      unsubscribeProtected?.();
+    };
+  }, [address, protectedMode]);
+  const revealProtectedData = async () => {
+    const epoch = ++revealGeneration.current;
+    setDecrypting(true);
+    try {
+      const payload = await readOnlyCall(({ campaign }) => campaign(address).methods.getEncryptedPayload(), undefined, { preferInjected: false, allowInjectedFallback: false });
+      const { decryptProtectedAuction } = await import("../../protected/client");
+      const text = await decryptProtectedAuction({ address, wallet: state.connectedAccount, expectedHash: payload[2], expectedPayloadId: payload[1] });
+      if (epoch !== revealGeneration.current) return;
+      setProtectedText(text);
+      if (!state.displayBiddingDialog) dispatch({ type: "TOGGLE_BIDDING_DIALOG" });
+    } catch (error) {
+      if (epoch === revealGeneration.current) toast.error(error.message || "Could not decrypt the data. Please retry.");
+    } finally { if (epoch === revealGeneration.current) setDecrypting(false); }
+  };
   const navigate = useNavigate();
   const { state: navState } = useLocation();
   const [remainingBudget, setRemainingBudget] = useState(
@@ -368,7 +418,7 @@ function ShowAuctionPage() {
       const contributors =
         summaryIsLight && userParticipated ? [account] : addresses;
 
-      if (auctionEnded && closed && userIsHighestBidder && !dataForSell) {
+      if (!protectedMode && auctionEnded && closed && userIsHighestBidder && !dataForSell) {
         dataForSell = await auctionInstance.methods
           .getData()
           .call({ from: account })
@@ -470,7 +520,7 @@ function ShowAuctionPage() {
     } finally {
       fetchInFlightRef.current = false;
     }
-  }, [address, navigate]);
+  }, [address, navigate, protectedMode]);
 
   const finalizeAuction = useCallback(async () => {
     if (!state.auction || !state.connectedAccount) return;
@@ -797,31 +847,32 @@ function ShowAuctionPage() {
             />
           </div>
         )}
-        {!isAuctionActive && isHighestBidder && (
+        {((!isAuctionActive && isHighestBidder) || (protectedMode && isManager)) && (
           <div className={showPageStyles.contributeForm}>
             <div className={showPageStyles.centered}>
-              <img alt="Auction winner medal" width="80px" src={picSrc} />
-              <div className={showPageStyles.winnerTitle}>Congrats!</div>
+              {!isManager && <img alt="Auction winner medal" width="80px" src={picSrc} />}
+              <div className={showPageStyles.winnerTitle}>{isManager ? "Your data" : "Congrats!"}</div>
               <div className={showPageStyles.winnerLabel}>
-                You won the auction and have now access to the data
+                {isManager ? "Your information is stored encrypted." : "You won the auction and have now access to the data"}
               </div>
-              {!state.displayBiddingDialog && (
+              {(!state.displayBiddingDialog || (protectedMode && !protectedText)) && (
                 <Button
                   variant="contained"
                   className={showPageStyles.viewDataButton}
-                  onClick={() => dispatch({ type: "TOGGLE_BIDDING_DIALOG" })}
+                  disabled={decrypting}
+                  onClick={protectedMode ? revealProtectedData : () => dispatch({ type: "TOGGLE_BIDDING_DIALOG" })}
                 >
-                  View Data
+                  {decrypting ? "Opening data..." : "View Data"}
                 </Button>
               )}
             </div>
-            {state.displayBiddingDialog && (
+            {state.displayBiddingDialog && (!protectedMode || Boolean(protectedText)) && (
               <div className={showPageStyles.revealedData}>
                 <InfoItem
                   label="Data Description"
                   value={state.dataDescription}
                 />
-                <InfoItem label="Data acquired" value={state.dataForSell} />
+                <InfoItem label="Data acquired" value={protectedMode ? protectedText : state.dataForSell} />
               </div>
             )}
           </div>

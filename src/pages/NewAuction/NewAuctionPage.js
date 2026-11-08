@@ -108,6 +108,7 @@ function NewAuctionPage() {
   const [activeMarket, setActiveMarketState] = useState(getActiveMarket());
   const [, setMarketOptions] = useState(getMarketOptions());
   const submittingRef = useRef(false);
+  const protectedOperationRef = useRef(null);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -163,7 +164,16 @@ function NewAuctionPage() {
 
       try {
         const account = await requestConnectedAccount();
-        const receipt = await factory.methods
+        if (process.env.REACT_APP_PROTECTED_MARKET === "true" && !protectedOperationRef.current) protectedOperationRef.current = crypto.randomUUID();
+        const receipt = process.env.REACT_APP_PROTECTED_MARKET === "true"
+          ? await (await import("../../protected/client")).createProtectedAuction({
+              factory, wallet: account, minimum: formData.minimumContribution,
+              text: formData.dataForSell, description: formData.dataDescription,
+              duration: formData.auctionDuration,
+              operationId: protectedOperationRef.current,
+              onProgress: message => toast.loading(message, { id: toastId }),
+            })
+          : await factory.methods
           .createCampaign(
             formData.minimumContribution,
             formData.dataForSell,

@@ -1,6 +1,8 @@
 import Web3 from "web3";
 import CampaignFactory from "./build/CampaignFactory.json";
 import Campaign from "./build/Campaign.json";
+import ProtectedCampaign from "./build/ProtectedCampaign.json";
+import ProtectedCampaignFactory from "./build/ProtectedCampaignFactory.json";
 import { getActiveFactoryAddress } from "./marketConfig";
 
 const WS_URL = process.env.REACT_APP_WS_RPC_URL || "";
@@ -60,7 +62,7 @@ const createFactorySocket = () => {
     const socket = getWeb3Socket();
     factorySocketCache.set(
       key,
-      new socket.eth.Contract(CampaignFactory.abi, factoryAddress)
+      new socket.eth.Contract(process.env.REACT_APP_PROTECTED_MARKET === "true" ? ProtectedCampaignFactory.abi : CampaignFactory.abi, factoryAddress)
     );
   }
 
@@ -85,7 +87,7 @@ const campaignSocket = (address) => {
     const socket = getWeb3Socket();
     campaignSocketCache.set(
       key,
-      new socket.eth.Contract(Campaign.abi, address)
+      new socket.eth.Contract(process.env.REACT_APP_PROTECTED_MARKET === "true" ? ProtectedCampaign.abi : Campaign.abi, address)
     );
   }
 

@@ -33,6 +33,10 @@
     "web3": "^1.10.4"
   },
   "scripts": {
+    "protected:compile": "node scripts/protected/compile.js",
+    "protected:build": "vite build --mode protected --outDir artifacts/backend/protected/build",
+    "protected:test": "node --test scripts/protected/*.test.*",
+    "protected:deploy-service": "node scripts/protected/deployService.js",
     "market:dev": "node scripts/market/dev.js",
     "market:server": "node scripts/market/server.js",
     "market:create-admin": "node scripts/market/createAdmin.js",

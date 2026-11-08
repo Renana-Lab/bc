@@ -8,8 +8,9 @@ const { pathToFileURL } = require("url");
 const Web3Package = require("web3");
 const Web3 = Web3Package.Web3 || Web3Package;
 
-const campaignJson = require("../../src/real_ethereum/build/Campaign.json");
-const factoryJson = require("../../src/real_ethereum/build/CampaignFactory.json");
+const protectedMarket = process.env.REACT_APP_PROTECTED_MARKET === "true";
+const campaignJson = require(protectedMarket ? "../../src/real_ethereum/build/ProtectedCampaign.json" : "../../src/real_ethereum/build/Campaign.json");
+const factoryJson = require(protectedMarket ? "../../src/real_ethereum/build/ProtectedCampaignFactory.json" : "../../src/real_ethereum/build/CampaignFactory.json");
 const { loadFactoryAddress } = require("../factoryAddressLoader");
 const { createMetaMaskAgentWallet } = require("./metamaskAgentWallet");
 
@@ -17,9 +18,13 @@ const PRIVATE_KEY_WALLET = "private-key";
 const METAMASK_AGENT_WALLET = "metamask-agent";
 
 const ROOT_DIR = path.resolve(__dirname, "../..");
-const DATA_DIR = path.resolve(process.env.BOTNET_DATA_DIR || path.join(ROOT_DIR, "botnet-data"));
+const DATA_DIR = path.resolve(process.env.BOTNET_DATA_DIR || path.join(ROOT_DIR, "botnet-data", ...(protectedMarket ? ["protected"] : [])));
 const BOTS_PATH = path.resolve(process.env.BOTNET_BOTS_PATH || path.join(DATA_DIR, "bots.json"));
 const LOG_PATH = path.resolve(process.env.BOTNET_LOG_PATH || path.join(DATA_DIR, "botnet.log"));
+async function botDeliveryKeyHash(wallet) {
+  const { deliveryKey } = require("../../src/protected/nodeClient.cjs");
+  return (await deliveryKey(wallet, path.join(DATA_DIR, "protected-delivery-keys"))).fingerprint;
+}
 const AUCTION_INDEX_PATH = path.resolve(
   process.env.BOTNET_AUCTION_INDEX_PATH || path.join(DATA_DIR, "active-auctions.json"),
 );
@@ -524,6 +529,14 @@ function getRpcUrls() {
 }
 
 function getFactoryAddress() {
+  if (protectedMarket) {
+    const address = process.env.REACT_APP_FACTORY_ADDRESS;
+    if (!/^0x[0-9a-f]{40}$/i.test(address || "") || /^0x0{40}$/i.test(address)) throw new Error("Protected runner requires an explicit REACT_APP_FACTORY_ADDRESS");
+    for (const override of [process.env.BOTNET_FACTORY_ADDRESS, process.env.FACTORY_ADDRESS].filter(Boolean)) {
+      if (override.toLowerCase() !== address.toLowerCase()) throw new Error("Protected runner factory overrides conflict");
+    }
+    return address;
+  }
   return (
     process.env.BOTNET_FACTORY_ADDRESS ||
     process.env.FACTORY_ADDRESS ||
@@ -1078,7 +1091,7 @@ async function executeRoundOnProvider(bots, sharedContext) {
               return sendContractTx(
                 ctx,
                 candidate.address,
-                campaign.methods.contribute(),
+                protectedMarket ? campaign.methods.contributeWithKey(await botDeliveryKeyHash(ctx.account.address)) : campaign.methods.contribute(),
                 { from: ctx.account.address, value: decision.amountWei.toString() },
                 `Place a ${decision.amountWei.toString()} wei bid on auction ${candidate.address}`,
               );

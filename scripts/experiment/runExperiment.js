@@ -5,11 +5,14 @@ require("dotenv").config({ path: path.resolve(__dirname, "../../.env") });
 
 const Web3Package = require("web3");
 const Web3 = Web3Package.Web3 || Web3Package;
-const factoryArtifact = require("../../src/real_ethereum/build/CampaignFactory.json");
-const campaignArtifact = require("../../src/real_ethereum/build/Campaign.json");
+const protectedMarket = process.env.REACT_APP_PROTECTED_MARKET === "true";
+const factoryArtifact = require(protectedMarket ? "../../src/real_ethereum/build/ProtectedCampaignFactory.json" : "../../src/real_ethereum/build/CampaignFactory.json");
+const campaignArtifact = require(protectedMarket ? "../../src/real_ethereum/build/ProtectedCampaign.json" : "../../src/real_ethereum/build/Campaign.json");
+const protectedClient = protectedMarket ? require("../../src/protected/nodeClient.cjs") : null;
+const deliveryKeyDirectory = path.resolve(__dirname, "../../experiment-data/private/protected-delivery-keys");
 
 const ROOT = path.resolve(__dirname, "../..");
-const RUN_DIR = path.join(ROOT, "experiment-data", "runs");
+const RUN_DIR = path.join(ROOT, "experiment-data", "runs", ...(protectedMarket ? ["protected"] : []));
 const DEFAULT_RPC_URLS = [
   "https://sepolia.gateway.tenderly.co",
   "https://sepolia.rpc.thirdweb.com",
@@ -113,6 +116,7 @@ class RpcPool {
 
 class ExperimentRunner {
   constructor(config, core, planner) {
+    if (protectedMarket && (!/^0x[0-9a-f]{40}$/i.test(process.env.REACT_APP_FACTORY_ADDRESS || "") || config.factoryAddress?.toLowerCase() !== process.env.REACT_APP_FACTORY_ADDRESS.toLowerCase() || Number(config.chainId) !== 11155111)) throw new Error("Protected experiment must use the explicitly configured Sepolia factory");
     this.config = config;
     this.core = core;
     this.planner = planner;
@@ -288,9 +292,15 @@ class ExperimentRunner {
     const createHashes = new Map();
     await Promise.all(specs.map(async (spec) => {
       const seller = this.wallet("seller", (wallet) => wallet.auctionId === spec.id)[0];
+      const prepared = protectedMarket ? await protectedClient.prepareAuction({
+        wallet: seller, text: `Dummy payload for ${this.config.experimentId} ${spec.id}`,
+        factory: this.config.factoryAddress, chainId: this.config.chainId, directory: deliveryKeyDirectory,
+      }) : null;
       const receipt = await this.sendMethod(
         seller,
-        (web3) => this.factory(web3).methods.createCampaign(
+        (web3) => prepared ? this.factory(web3).methods.createEncryptedCampaign(
+          String(spec.minimumBidWei), prepared.nonce, prepared.ciphertextHash, prepared.sellerKeyHash, spec.description, String(spec.durationMinutes),
+        ) : this.factory(web3).methods.createCampaign(
           String(spec.minimumBidWei),
           `Dummy payload for ${this.config.experimentId} ${spec.id}`,
           spec.description,
@@ -441,9 +451,10 @@ class ExperimentRunner {
     });
     if (!decision.bid || this.stopRequested) return false;
     try {
+      const delivery = protectedMarket ? await protectedClient.deliveryKey(actor.address, deliveryKeyDirectory) : null;
       const receipt = await this.sendMethod(
         actor,
-        (web3) => this.campaign(web3, auction.address).methods.contribute(),
+        (web3) => delivery ? this.campaign(web3, auction.address).methods.contributeWithKey(delivery.fingerprint) : this.campaign(web3, auction.address).methods.contribute(),
         { to: auction.address, value: decision.amountWei.toString(), label: `bid:${actor.actorId}:${auction.auctionId}` },
       );
       auction.highestBid = decision.targetBid.toString();

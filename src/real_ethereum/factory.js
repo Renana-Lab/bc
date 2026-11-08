@@ -1,5 +1,6 @@
 import web3 from "./web3";
 import CampaignFactory from "./build/CampaignFactory.json";
+import ProtectedCampaignFactory from "./build/ProtectedCampaignFactory.json";
 import { getActiveFactoryAddress } from "./marketConfig";
 
 const factoryContractCache = new Map();
@@ -12,7 +13,7 @@ export const getFactoryContract = () => {
   if (!factoryContractCache.has(cacheKey)) {
     factoryContractCache.set(
       cacheKey,
-      new web3.eth.Contract(CampaignFactory.abi, factoryAddress)
+      new web3.eth.Contract(process.env.REACT_APP_PROTECTED_MARKET === "true" ? ProtectedCampaignFactory.abi : CampaignFactory.abi, factoryAddress)
     );
   }
 

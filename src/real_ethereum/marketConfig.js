@@ -1,6 +1,7 @@
 const NEW_BUDGET_LEDGER_FACTORY_ADDRESS = "0xec38565FAeeef009F57037F2804D186928E63629";
 const DEFAULT_FACTORY_ADDRESS = NEW_BUDGET_LEDGER_FACTORY_ADDRESS;
 const DEFAULT_DEV_FACTORY_ADDRESS = NEW_BUDGET_LEDGER_FACTORY_ADDRESS;
+const PROTECTED_MARKET = process.env.REACT_APP_PROTECTED_MARKET === "true";
 const MARKET_STORAGE_KEY = "data-market:active-factory";
 const ACTIVE_FACTORY_STORAGE_KEY = "data-market:factory-address:v2";
 const ACTIVE_LABEL_STORAGE_KEY = "data-market:market-label";
@@ -91,6 +92,11 @@ export const MARKET_DEFINITIONS = [
 export const getMarketFactoryAddress = (marketId) => {
   const definition = MARKET_DEFINITIONS.find((market) => market.id === marketId);
   if (!definition) return "";
+  if (PROTECTED_MARKET) {
+    const address = normalizeAddress(process.env.REACT_APP_FACTORY_ADDRESS);
+    if (!isValidAddress(address)) throw new Error("Protected factory address is required");
+    return address;
+  }
 
   return firstValidAddress(
     getStoredValue(definition.storageKey),
@@ -104,6 +110,7 @@ export const getDevelopmentFactoryAddress = () => {
 };
 
 export const setMarketFactoryAddress = (marketId, address) => {
+  if (PROTECTED_MARKET) throw new Error("Protected factory is pinned by deployment configuration");
   const market = MARKET_DEFINITIONS.find((option) => option.id === marketId);
   if (!market) {
     throw new Error("Unknown market");

@@ -1,0 +1,65 @@
+name: Marketplace Protected
+on:
+  push:
+    branches: [marketplace-protected]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: yarn
+      - run: corepack enable
+      - run: yarn install --frozen-lockfile --non-interactive
+      - run: npm run protected:compile
+      - run: npm run protected:test
+      - run: node --test src/protected/client.test.cjs
+      - run: npm test -- --watchAll=false --runInBand --runTestsByPath src/botnet/cyclePlanner.test.js src/pages/ManageBudget/BotnetControlPanel.test.js src/real_ethereum/walletAccess.test.js src/protected/archiveHistory.test.js
+        env:
+          CI: 'true'
+      - run: npm run protected:build
+        env:
+          REACT_APP_BUILD_ID: ${{ github.sha }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: protected-frontend
+          path: artifacts/backend/protected/build
+  deploy:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: protected-frontend
+          path: build
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::774490039997:role/marketplace-protected-frontend-ci
+          aws-region: us-east-1
+      - run: cd build && zip -qr ../frontend.zip .
+      - name: Deploy isolated Amplify app
+        shell: bash
+        run: |
+          set -euo pipefail
+          deployment=$(aws amplify create-deployment --app-id df7mlebpdd7v7 --branch-name main)
+          job=$(jq -r .jobId <<< "$deployment")
+          upload=$(jq -r .zipUploadUrl <<< "$deployment")
+          curl --fail --silent --show-error -X PUT --upload-file frontend.zip "$upload"
+          aws amplify start-deployment --app-id df7mlebpdd7v7 --branch-name main --job-id "$job" --query jobSummary.status --output text
+          for attempt in $(seq 1 60); do
+            state=$(aws amplify get-job --app-id df7mlebpdd7v7 --branch-name main --job-id "$job" --query job.summary.status --output text)
+            [ "$state" = SUCCEED ] && exit 0
+            case "$state" in FAILED|CANCELLED) exit 1;; esac
+            sleep 5
+          done
+          exit 1

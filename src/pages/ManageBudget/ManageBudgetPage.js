@@ -79,6 +79,7 @@ import {
 } from "../../experiment/experimentEvidence";
 
 const BotnetControlPanel = lazy(() => import("./BotnetControlPanel"));
+const ProtectedStatusPanel = lazy(() => import("../../protected/ProtectedStatusPanel"));
 const ExperimentEvidencePanel = lazy(() => import("./ExperimentEvidencePanel"));
 
 const LOCAL_STORAGE_KEY = "globalBudgetStore";
@@ -408,6 +409,7 @@ const ManageBudgetPage = () => {
   const [switchingMarketId, setSwitchingMarketId] = useState("");
   const reportCancelRef = useRef(false);
   const bulkSubmittingRef = useRef(false);
+  const protectedBulkOperationRef = useRef(null);
   const autoLoadedAuctionRangeRef = useRef("");
   const switchTimerRef = useRef(null);
 
@@ -441,7 +443,7 @@ const ManageBudgetPage = () => {
 
     loadBudget();
 
-    const savedDraft = localStorage.getItem(BULK_DRAFT_KEY);
+    const savedDraft = process.env.REACT_APP_PROTECTED_MARKET === "true" ? null : localStorage.getItem(BULK_DRAFT_KEY);
     if (savedDraft) {
       setBulkText(savedDraft);
     }
@@ -483,6 +485,7 @@ const ManageBudgetPage = () => {
   }, []);
 
   useEffect(() => {
+    if (process.env.REACT_APP_PROTECTED_MARKET === "true") return;
     if (bulkText) {
       localStorage.setItem(BULK_DRAFT_KEY, bulkText);
     } else {
@@ -780,6 +783,7 @@ const ManageBudgetPage = () => {
 
     try {
       const from = await requestConnectedAccount();
+      if (process.env.REACT_APP_PROTECTED_MARKET === "true" && !protectedBulkOperationRef.current) protectedBulkOperationRef.current = crypto.randomUUID();
 
       for (let index = 0; index < auctions.length; index += 1) {
         const auction = auctions[index];
@@ -793,7 +797,15 @@ const ManageBudgetPage = () => {
         setBulkResults([...results]);
 
         try {
-          const receipt = await factory.methods
+          const receipt = process.env.REACT_APP_PROTECTED_MARKET === "true"
+            ? await (await import("../../protected/client")).createProtectedAuction({
+                factory, wallet: from, minimum: auction.minimumContribution,
+                text: auction.dataForSell, description: auction.dataDescription,
+                duration: auction.auctionDuration,
+                operationId: `${protectedBulkOperationRef.current}:row-${auction.rowNumber}`,
+                onProgress: message => toast.loading(message, { id: toastId }),
+              })
+            : await factory.methods
             .createCampaign(
               auction.minimumContribution,
               auction.dataForSell,
@@ -836,6 +848,7 @@ const ManageBudgetPage = () => {
       }
 
       toast.success(`Created ${results.length} auctions`, { id: toastId });
+      protectedBulkOperationRef.current = null;
       setBulkText("");
     } catch (createError) {
       toast.error(getTransactionErrorMessage(createError), { id: toastId });
@@ -1668,6 +1681,9 @@ const ManageBudgetPage = () => {
             <Typography component="h1" variant="h4" gutterBottom>
               Admin Zone
             </Typography>
+            {process.env.REACT_APP_PROTECTED_MARKET === "true" && (
+              <Suspense fallback={null}><ProtectedStatusPanel /></Suspense>
+            )}
             <Typography
               variant="body2"
               color="text.secondary"

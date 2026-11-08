@@ -448,7 +448,7 @@ export const readAuctionReport = async (
     approversCount: summary[2],
     seller: summary[3],
     highestBid: summary[4],
-    dataForSell: summary[5],
+    dataForSell: process.env.REACT_APP_PROTECTED_MARKET === "true" ? "" : summary[5],
     dataDescription: summary[6],
     highestBidder: summary[7],
     addresses: summary[8] || [],

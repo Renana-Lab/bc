@@ -29,6 +29,8 @@ import toast from "react-hot-toast";
 import Web3 from "web3";
 import CampaignFactory from "../../real_ethereum/build/CampaignFactory.json";
 import Campaign from "../../real_ethereum/build/Campaign.json";
+import ProtectedCampaign from "../../real_ethereum/build/ProtectedCampaign.json";
+import ProtectedCampaignFactory from "../../real_ethereum/build/ProtectedCampaignFactory.json";
 import { getActiveFactoryAddress } from "../../real_ethereum/marketConfig";
 import {
   acquireActiveAuctionCoordinatorLease,
@@ -149,7 +151,7 @@ const getCachedWeb3 = (rpcUrl) => {
 const getCachedFactory = (web3, rpcUrl, factoryAddress) => {
   const key = `${rpcUrl}:${String(factoryAddress).toLowerCase()}`;
   if (!browserFactoryCache.has(key)) {
-    browserFactoryCache.set(key, new web3.eth.Contract(CampaignFactory.abi, factoryAddress));
+    browserFactoryCache.set(key, new web3.eth.Contract(process.env.REACT_APP_PROTECTED_MARKET === "true" ? ProtectedCampaignFactory.abi : CampaignFactory.abi, factoryAddress));
   }
   return browserFactoryCache.get(key);
 };
@@ -157,7 +159,7 @@ const getCachedFactory = (web3, rpcUrl, factoryAddress) => {
 const getCachedCampaign = (web3, rpcUrl, address) => {
   const key = `${rpcUrl}:${String(address).toLowerCase()}`;
   if (!browserCampaignCache.has(key)) {
-    browserCampaignCache.set(key, new web3.eth.Contract(Campaign.abi, address));
+    browserCampaignCache.set(key, new web3.eth.Contract(process.env.REACT_APP_PROTECTED_MARKET === "true" ? ProtectedCampaign.abi : Campaign.abi, address));
   }
   return browserCampaignCache.get(key);
 };
@@ -1654,9 +1656,12 @@ const BotnetControlPanel = ({
             botTrace?.steps.push({ at: Date.now(), stage: "write", auction: candidate.address, outcome: "attempted", reason: `Submitting ${decision.amountWei.toString()} wei` });
 
             try {
+              const keyHash = process.env.REACT_APP_PROTECTED_MARKET === "true"
+                ? await (await import("../../protected/client")).getBidKeyFingerprint(account.address, 11155111)
+                : null;
               const receipt = await withBrowserWriteSlot(() => {
                 if (cancelledBotsRef.current.has(bot.id)) return Promise.resolve(null);
-                return sendContractTx(candidate.campaign.methods.contribute(), {
+                return sendContractTx(keyHash ? candidate.campaign.methods.contributeWithKey(keyHash) : candidate.campaign.methods.contribute(), {
                   from: account.address,
                   value: decision.amountWei.toString(),
                 });

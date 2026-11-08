@@ -1,6 +1,8 @@
 import Web3 from "web3";
 import CampaignFactory from "./build/CampaignFactory.json";
 import Campaign from "./build/Campaign.json";
+import ProtectedCampaign from "./build/ProtectedCampaign.json";
+import ProtectedCampaignFactory from "./build/ProtectedCampaignFactory.json";
 import { getActiveFactoryAddress } from "./marketConfig";
 import { getEthereumProvider } from "./ethereumProvider";
 import {
@@ -124,7 +126,7 @@ const createFactory = (web3Instance, factoryAddress = getActiveFactoryAddress())
   getCachedContract(
     web3Instance,
     `factory:${normalizeAddress(factoryAddress)}`,
-    CampaignFactory.abi,
+    process.env.REACT_APP_PROTECTED_MARKET === "true" ? ProtectedCampaignFactory.abi : CampaignFactory.abi,
     factoryAddress
   );
 
@@ -132,7 +134,7 @@ const createCampaign = (web3Instance, address) =>
   getCachedContract(
     web3Instance,
     `campaign:${normalizeAddress(address)}`,
-    Campaign.abi,
+    process.env.REACT_APP_PROTECTED_MARKET === "true" ? ProtectedCampaign.abi : Campaign.abi,
     address
   );
 
