@@ -530,7 +530,7 @@ function AuctionsListView({ auctions, admin, user, act, refresh, allowPostSubmit
           <Table className={auctionStyles.auctionsTable} aria-label="auctions table">
             <TableHead>
               <TableRow>
-                {['Description', 'End Date', 'Auction Status', 'Highest Bid', 'Number Of Bidders', ''].map((h, i) => (
+                {['Description', 'End Date', 'Auction Status', 'Minimum Bid', 'Highest Bid', 'Number Of Bidders', ''].map((h, i) => (
                   <TableCell key={i} align="center" style={{ color: '#0d0d4e', fontWeight: 'bold' }}>
                     {h}
                   </TableCell>
@@ -568,6 +568,9 @@ function AuctionsListView({ auctions, admin, user, act, refresh, allowPostSubmit
                     </TableCell>
                     <TableCell align="center">
                       <Countdown end={a.end_at} plain leading={isLeading} />
+                    </TableCell>
+                    <TableCell align="center" style={{ color: rowText, fontWeight: 700 }}>
+                      {a.minimum.toLocaleString()}
                     </TableCell>
                     <TableCell align="center" style={{ color: rowText, fontWeight: 700 }}>
                       {a.highest.toLocaleString()}
