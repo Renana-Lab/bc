@@ -1411,15 +1411,7 @@ const BotnetControlPanel = ({
         return { bot, account, strategy: getStrategy(bot) };
       });
       const activeAuctions = sharedSnapshot.activeAuctions || [];
-      const allocation = allocateCycleCandidates({
-        bots: contexts
-          .filter(({ strategy }) => strategy.enableBidding)
-          .map(({ bot, account, strategy }) => ({ id: bot.id, wallet: account.address, strategy })),
-        auctions: activeAuctions,
-        cursor: cycleCursorRef.current,
-        nowSec,
-      });
-      cycleCursorRef.current = allocation.nextCursor;
+      let allocation = { assignments: {}, candidatesEvaluated: 0 };
 
       roundTrace.snapshot = {
         updatedAt: Number(sharedSnapshot.updatedAt || 0),
@@ -1442,9 +1434,7 @@ const BotnetControlPanel = ({
           maxBidsPerCycle: strategy.maxBidsPerCycle,
           primary: assigned.primary.map((auction) => auction.address),
           reserve: assigned.reserve.map((auction) => auction.address),
-          steps: !assigned.primary.length && !assigned.reserve.length
-            ? [{ at: Date.now(), stage: "planner", outcome: "skipped", reason: "No eligible active auctions were assigned" }]
-            : [],
+          steps: [],
           metrics: null,
         };
       });
@@ -1454,6 +1444,7 @@ const BotnetControlPanel = ({
       let blockNumber = null;
       let readSpecs = [];
       let readResults = [];
+      let readBatchCount = 0;
       const batchSize = 25;
       try {
         const connection = await executeWithRpcFailover(
@@ -1469,16 +1460,36 @@ const BotnetControlPanel = ({
               getCachedAccount(candidateWeb3, bot.privateKey);
             });
             const candidateBlock = await candidateWeb3.eth.getBlockNumber();
+            const budgetSpecs = contexts.filter(({ strategy }) => strategy.enableBidding).map(({ bot, account }) => ({
+              type: "budget",
+              botId: bot.id,
+              method: candidateFactory.methods.getBudget(account.address),
+            }));
+            const budgetResults = [];
+            for (let offset = 0; offset < budgetSpecs.length; offset += batchSize) {
+              const chunk = budgetSpecs.slice(offset, offset + batchSize);
+              const results = await executeBatchCalls(candidateWeb3, chunk.map((item) => item.method), candidateBlock);
+              const failure = results.find((result) => result?.status === "rejected" && isRpcProviderFailure(result.reason));
+              if (failure) throw failure.reason;
+              budgetResults.push(...results);
+            }
+            const availableBudgets = new Map(budgetSpecs.map((spec, index) => [
+              spec.botId,
+              budgetResults[index]?.status === "fulfilled" ? toBigIntSafe(budgetResults[index].value) : 0n,
+            ]));
+            const candidateAllocation = allocateCycleCandidates({
+              bots: contexts.filter(({ strategy }) => strategy.enableBidding).map(({ bot, account, strategy }) => ({
+                id: bot.id, wallet: account.address, strategy, budgetWei: availableBudgets.get(bot.id) || 0n,
+              })),
+              auctions: activeAuctions,
+              cursor: cycleCursorRef.current,
+              nowSec,
+            });
             const candidateSpecs = [];
             contexts.forEach(({ bot, account, strategy }) => {
               if (!strategy.enableBidding) return;
-              const assigned = allocation.assignments[bot.id] || { primary: [], reserve: [] };
+              const assigned = candidateAllocation.assignments[bot.id] || { primary: [], reserve: [] };
               if (!assigned.primary.length && !assigned.reserve.length) return;
-              candidateSpecs.push({
-                type: "budget",
-                botId: bot.id,
-                method: candidateFactory.methods.getBudget(account.address),
-              });
               [...assigned.primary, ...assigned.reserve].forEach((auction) => {
                 candidateSpecs.push({
                   type: "bid",
@@ -1513,8 +1524,10 @@ const BotnetControlPanel = ({
             return {
               web3: candidateWeb3,
               blockNumber: candidateBlock,
-              readSpecs: candidateSpecs,
-              readResults: candidateResults,
+              readSpecs: [...budgetSpecs, ...candidateSpecs],
+              readResults: [...budgetResults, ...candidateResults],
+              allocation: candidateAllocation,
+              rpcBatches: Math.ceil(budgetSpecs.length / batchSize) + Math.ceil(candidateSpecs.length / batchSize),
             };
           },
           { startIndex: rpcIndexRef.current },
@@ -1525,6 +1538,15 @@ const BotnetControlPanel = ({
         blockNumber = connection.value.blockNumber;
         readSpecs = connection.value.readSpecs;
         readResults = connection.value.readResults;
+        readBatchCount = connection.value.rpcBatches;
+        allocation = connection.value.allocation;
+        cycleCursorRef.current = allocation.nextCursor;
+        roundTrace.bots.forEach((trace) => {
+          const assigned = allocation.assignments[trace.id] || { primary: [], reserve: [] };
+          trace.primary = assigned.primary.map((auction) => auction.address);
+          trace.reserve = assigned.reserve.map((auction) => auction.address);
+          trace.steps = assigned.primary.length ? [] : [{ at: Date.now(), stage: "planner", outcome: "skipped", reason: "No eligible affordable unassigned auctions" }];
+        });
         rpcIndexRef.current = (RPC_URLS.indexOf(rpcUrl) + 1) % Math.max(1, RPC_URLS.length);
         roundTrace.provider = (() => {
           try {
@@ -1686,8 +1708,8 @@ const BotnetControlPanel = ({
           const metrics = finishCycleMetrics(baseMetrics, {
             snapshotAgeMs: Math.max(0, startedAt - Number(sharedSnapshot.updatedAt || startedAt)),
             activeAuctions: activeAuctions.length,
-            logicalReads: assigned.primary.length + assigned.reserve.length + (assigned.primary.length ? 1 : 0),
-            rpcBatches: readSpecs.length ? Math.ceil(readSpecs.length / batchSize) : 0,
+            logicalReads: assigned.primary.length + assigned.reserve.length + (strategy.enableBidding ? 1 : 0),
+            rpcBatches: readBatchCount,
             candidatesEvaluated: allocation.candidatesEvaluated,
             bidsAttempted: attempted,
             bidsSent: sent,

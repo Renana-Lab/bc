@@ -263,6 +263,37 @@ test('bots use independent budgets, one cheapest-eligible auction per round, and
   assert.equal(s.auction(id, admin.id).highest, 80);
   assert.equal(s.user(bot.id).budget, 20);
 });
+
+test('bots choose cheapest current prices, randomize only ties, and reconsider after price changes', async t => {
+  const { s, admin, seller, a, make } = await fixture(t);
+  const bot = await make('cheapest-bot', 'bot');
+  const create = minimum => s.createAuction({ description: 'Dataset', payload: 'private', minimum, minutes: 30 }, seller.id).id;
+  const formerlyCheap = create(1);
+  s.bid(formerlyCheap, 500, a.id, randomUUID());
+  const cheap = create(50);
+  const tied = create(50);
+  const expensive = create(70);
+  const round = s.runBots(true, bot.id);
+  assert.equal(round.sent, 1);
+  assert([cheap, tied].includes(round.decisions[0].auction));
+  s.bid(cheap, 100, a.id, randomUUID());
+  s.bid(tied, 100, a.id, randomUUID());
+  assert.equal(s.runBots(true, bot.id).decisions[0].auction, expensive);
+});
+
+test('bots preserve the ten-point opening floor and still skip their own auctions', async t => {
+  const { s, admin, seller, make } = await fixture(t);
+  const bot = await make('small-budget-bot', 'bot');
+  s.createAuction({ description: 'Own dataset', payload: 'private', minimum: 1, minutes: 30 }, bot.id);
+  const id = s.createAuction({ description: 'Other dataset', payload: 'private', minimum: 5, minutes: 30 }, seller.id).id;
+  s.botSettings(bot.id, { budget: 5 }, admin.id);
+  assert.equal(s.runBots(true, bot.id).sent, 0);
+  s.botSettings(bot.id, { budget: 10 }, admin.id);
+  const round = s.runBots(true, bot.id);
+  assert.equal(round.sent, 1);
+  assert.equal(round.decisions[0].auction, id);
+  assert.equal(s.user(bot.id).budget, 0);
+});
 test('restart preserves bids, balances and idempotency', async t => {
   const dir = mkdtempSync(join(tmpdir(), 'market-test-'));
   t.after(() => rmSync(dir, {
@@ -531,4 +562,24 @@ test('scheduled runBots still honors next_at and audit label is cheapest-first',
   assert(s.runBots());
   const ev = s.all("SELECT detail FROM events WHERE type='bot-configured'").map(e => JSON.parse(e.detail));
   assert(ev.some(d => d.strategy === 'cheapest-auction-random-tie'));
+});
+
+test('cheapest selection handles 200000 active candidates without argument spreading', t => {
+  const s = new MarketStore(':memory:', () => 1000000, () => {
+    throw new Error('The cheapest auction is unique');
+  });
+  t.after(() => s.close());
+  const candidates = Array.from({ length: 200000 }, (_, index) => ({
+    id: String(index), seller_id: 'seller', winner_id: null,
+    end_at: 1100000, minimum: index === 199999 ? 25 : 50, highest: 0,
+  }));
+  s.all = () => [{ user_id: 'bot', interval_seconds: 60 }];
+  s.one = () => ({ n: 0 });
+  s.user = () => ({ budget: 2000 });
+  s.active = () => candidates;
+  s.bid = id => ({ id: `bid-${id}` });
+  s.run = () => {};
+  const round = s.runBots(true);
+  assert.equal(round.sent, 1);
+  assert.equal(round.decisions[0].auction, '199999');
 });

@@ -122,7 +122,7 @@ Each enabled bot:
 - Reads all auctions from the configured factory.
 - Finalizes its own ended seller auctions when finalization is enabled.
 - Reads its current on-chain budget.
-- Picks one open auction per cycle.
+- Picks the eligible unassigned auction with the lowest next cumulative bid; equal prices are randomized. Opening bids use the minimum, and subsequent bids use the current highest bid plus the configured increment. Browser and Node bots share this planner; budgets are read before assignment.
 - Skips auctions where it is the seller, already winning, too close to ending,
   too expensive, or outside the bot's max bid settings.
 - Sends an incremental bid when eligible.

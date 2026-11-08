@@ -972,10 +972,22 @@ async function executeRoundOnProvider(bots, sharedContext) {
     }
   }
 
+  const budgetReads = botContexts.map(({ bot, ctx }) => ({
+    botId: bot.id,
+    method: sharedContext.factory.methods.getBudget(ctx.account.address),
+  }));
+  const budgets = new Map();
+  for (let offset = 0; offset < budgetReads.length; offset += READ_BATCH_SIZE) {
+    const chunk = budgetReads.slice(offset, offset + READ_BATCH_SIZE);
+    const results = await executeBatch(sharedContext, chunk.map((item) => item.method), blockNumber);
+    results.forEach((result, indexInChunk) => {
+      if (result.status === "fulfilled") budgets.set(chunk[indexInChunk].botId, asBigInt(result.value));
+    });
+  }
   const allocation = planner.allocateCycleCandidates({
     bots: botContexts
       .filter(({ strategy }) => strategy.enableBidding)
-      .map(({ bot, ctx, strategy }) => ({ id: bot.id, wallet: ctx.account.address, strategy })),
+      .map(({ bot, ctx, strategy }) => ({ id: bot.id, wallet: ctx.account.address, strategy, budgetWei: budgets.get(bot.id) || 0n })),
     auctions: index.activeAuctions,
     cursor: allocationCursor,
     nowSec,
@@ -984,8 +996,7 @@ async function executeRoundOnProvider(bots, sharedContext) {
   allocationCursor = allocation.nextCursor;
 
   const reads = [];
-  botContexts.forEach(({ bot, ctx }) => {
-    reads.push({ botId: bot.id, kind: "budget", method: sharedContext.factory.methods.getBudget(ctx.account.address) });
+  botContexts.forEach(({ bot }) => {
     const assignment = allocation.assignments[bot.id] || { primary: [], reserve: [] };
     [...assignment.primary, ...assignment.reserve].forEach((auction) => {
       reads.push({
@@ -1003,11 +1014,9 @@ async function executeRoundOnProvider(bots, sharedContext) {
     const results = await executeBatch(sharedContext, chunk.map((item) => item.method), blockNumber);
     results.forEach((result, indexInChunk) => readResults.push({ ...chunk[indexInChunk], result }));
   }
-  const budgets = new Map();
   const myBids = new Map();
   readResults.forEach((item) => {
     if (item.result.status !== "fulfilled") return;
-    if (item.kind === "budget") budgets.set(item.botId, asBigInt(item.result.value));
     if (item.kind === "bid") {
       myBids.set(`${item.botId}:${item.auctionAddress.toLowerCase()}`, asBigInt(item.result.value));
     }
@@ -1016,8 +1025,8 @@ async function executeRoundOnProvider(bots, sharedContext) {
   const sharedMetrics = {
     snapshotAgeMs: Math.max(0, Date.now() - Number(index.updatedAt || Date.now())),
     activeAuctions: index.activeAuctions.length,
-    logicalReads: Number(index.logicalReads || 0) + reads.length,
-    rpcBatches: Number(index.rpcBatches || 0) + Math.ceil(reads.length / READ_BATCH_SIZE),
+    logicalReads: Number(index.logicalReads || 0) + budgetReads.length + reads.length,
+    rpcBatches: Number(index.rpcBatches || 0) + Math.ceil(budgetReads.length / READ_BATCH_SIZE) + Math.ceil(reads.length / READ_BATCH_SIZE),
     candidatesEvaluated: allocation.candidatesEvaluated,
     cacheHits: index.cacheHit ? 1 : 0,
   };

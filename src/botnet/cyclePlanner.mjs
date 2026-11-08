@@ -10,6 +10,11 @@ const toBigInt = (value, fallback = 0n) => {
 
 const normalizeAddress = (value) => String(value || "").trim().toLowerCase();
 
+export const getTargetBid = (auction, strategy) =>
+  Number(auction.approversCount || 0) === 0 && toBigInt(auction.highestBid) === 0n
+    ? toBigInt(auction.minimumContribution)
+    : toBigInt(auction.highestBid) + toBigInt(strategy.outbidByWei);
+
 export const clampBidsPerCycle = (value, fallback = 1) => {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
@@ -40,19 +45,16 @@ export const getBidDecision = (auction, budget, strategy) => {
   }
 
   const minimumContribution = toBigInt(auction.minimumContribution);
-  const highestBid = toBigInt(auction.highestBid);
   const myBid = toBigInt(auction.myBid);
   const availableBudget = toBigInt(budget);
   const maxMinimum = toBigInt(strategy.maxMinContributionWei);
   const maxBid = toBigInt(strategy.maxBidWei);
-  const outbidBy = toBigInt(strategy.outbidByWei);
 
   if (minimumContribution > maxMinimum) {
     return { bid: false, reason: "Minimum contribution too high" };
   }
 
-  const emptyAuction = Number(auction.approversCount || 0) === 0 && highestBid === 0n;
-  const targetBid = emptyAuction ? minimumContribution : highestBid + outbidBy;
+  const targetBid = getTargetBid(auction, strategy);
   const incrementalValue = myBid > 0n ? targetBid - myBid : targetBid;
   // The campaign sends only the increment as ETH, but when a previously
   // outbid wallet returns the factory charges its full new cumulative bid
@@ -78,11 +80,7 @@ const isStaticallyEligible = (auction, bot, nowSec) => {
   const endTimeSec = Number(auction.endTimeSec || 0);
   const secondsLeft = Math.max(0, endTimeSec - nowSec);
   const minimumContribution = toBigInt(auction.minimumContribution);
-  const highestBid = toBigInt(auction.highestBid);
-  const targetBid =
-    Number(auction.approversCount || 0) === 0 && highestBid === 0n
-      ? minimumContribution
-      : highestBid + toBigInt(strategy.outbidByWei);
+  const targetBid = getTargetBid(auction, strategy);
 
   if (auction.closed || endTimeSec <= nowSec) return false;
   if (wallet && manager === wallet) return false;
@@ -90,13 +88,11 @@ const isStaticallyEligible = (auction, bot, nowSec) => {
   if (secondsLeft < Number(strategy.minTimeRemainingSec || 0)) return false;
   if (minimumContribution > toBigInt(strategy.maxMinContributionWei)) return false;
   if (targetBid > toBigInt(strategy.maxBidWei)) return false;
+  const budgetCost = wallet && highestBidder === wallet
+    ? targetBid - toBigInt(auction.highestBid)
+    : targetBid;
+  if (bot.budgetWei !== undefined && budgetCost > toBigInt(bot.budgetWei)) return false;
   return true;
-};
-
-const stableAuctionSort = (left, right) => {
-  const endDifference = Number(left.endTimeSec || 0) - Number(right.endTimeSec || 0);
-  if (endDifference) return endDifference;
-  return normalizeAddress(left.address).localeCompare(normalizeAddress(right.address));
 };
 
 const rotate = (values, offset) => {
@@ -111,8 +107,25 @@ export const allocateCycleCandidates = ({
   cursor = 0,
   nowSec = Math.floor(Date.now() / 1000),
   reservePerSlot = 1,
+  random = Math.random,
 } = {}) => {
-  const orderedAuctions = rotate([...auctions].sort(stableAuctionSort), cursor);
+  const orderedAuctions = [...auctions];
+  for (let index = orderedAuctions.length - 1; index > 0; index -= 1) {
+    const swap = Math.floor(random() * (index + 1));
+    [orderedAuctions[index], orderedAuctions[swap]] = [orderedAuctions[swap], orderedAuctions[index]];
+  }
+  const rankings = new Map();
+  const rankFor = (strategy = {}) => {
+    const key = String(strategy.outbidByWei || 0);
+    if (!rankings.has(key)) {
+      rankings.set(key, [...orderedAuctions].sort((left, right) => {
+        const a = getTargetBid(left, strategy);
+        const b = getTargetBid(right, strategy);
+        return a < b ? -1 : a > b ? 1 : 0;
+      }));
+    }
+    return rankings.get(key);
+  };
   const orderedBots = rotate(bots, cursor);
   const reserved = new Set();
   const assignments = Object.fromEntries(
@@ -128,12 +141,13 @@ export const allocateCycleCandidates = ({
       if (kind === "primary" && slotIndex >= limit) continue;
       if (kind === "reserve" && slotIndex >= limit * Math.max(0, reservePerSlot)) continue;
 
-      const botAuctions = rotate(orderedAuctions, botIndex + slotIndex);
+      const botAuctions = rankFor(bot.strategy);
       let candidate = null;
       for (const auction of botAuctions) {
         const key = normalizeAddress(auction.address);
+        if (!key || reserved.has(key)) continue;
         candidatesEvaluated += 1;
-        if (key && !reserved.has(key) && isStaticallyEligible(auction, bot, nowSec)) {
+        if (isStaticallyEligible(auction, bot, nowSec)) {
           candidate = auction;
           break;
         }

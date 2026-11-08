@@ -99,7 +99,7 @@ test("bid limits and budget accounting remain deterministic in Node", () => {
     highestBid: "500",
     myBid: "480",
   }, 30n, strategy(1));
-  assert.deepEqual(decision, { bid: true, amountWei: 30n, targetBid: 510n });
+  assert.deepEqual(decision, { bid: false, reason: "Insufficient budget" });
 });
 
 test("planner covers exact deadline and minimum-time boundaries", () => {
@@ -132,7 +132,7 @@ test("exact budget and maximum bid limits are accepted without overspending", ()
     highestBid: "1990",
     myBid: "0",
   }, 2000n, strategy(1));
-  assert.deepEqual(decision, { bid: true, amountWei: 2000n, targetBid: 2000n });
+  assert.deepEqual(decision, { bid: true, amountWei: 2000n, targetBid: 2000n, budgetCostWei: 2000n });
 });
 
 test("seller, current winner, closed, and malformed-time auctions are never assigned", () => {
@@ -147,4 +147,48 @@ test("seller, current winner, closed, and malformed-time auctions are never assi
   const result = allocateCycleCandidates({ bots: [bot], auctions: blocked, nowSec });
   assert.equal(result.assignments[bot.id].primary.length, 0);
   assert.equal(result.assignments[bot.id].reserve.length, 0);
+});
+
+test("cheapest means next cumulative bid, with random selection only among ties", () => {
+  const bot = { id: "cheap", wallet: address(100), strategy: strategy(1), budgetWei: 2000n };
+  const auctions = [
+    { ...auction(1), minimumContribution: "1", highestBid: "500", approversCount: 1 },
+    { ...auction(2), minimumContribution: "60" },
+    { ...auction(3), minimumContribution: "70" },
+    { ...auction(4), minimumContribution: "50", highestBid: "50", approversCount: 1 },
+  ];
+  const pick = (random) => allocateCycleCandidates({ bots: [bot], auctions, nowSec: 2000000000, reservePerSlot: 0, random }).assignments.cheap.primary[0];
+  assert.equal(pick(() => 0.999).address, address(2));
+  assert.equal(pick(() => 0.3).address, address(4));
+  const changed = auctions.map(a => a.address === address(2) ? { ...a, highestBid: "100", approversCount: 1 } : a);
+  const next = allocateCycleCandidates({ bots: [bot], auctions: changed, nowSec: 2000000000 });
+  assert.equal(next.assignments.cheap.primary[0].address, address(4));
+});
+
+test("unfunded bots cannot reserve the cheapest auction from funded bots", () => {
+  const bots = [
+    { id: "empty", wallet: address(100), strategy: strategy(1), budgetWei: 0n },
+    { id: "funded", wallet: address(101), strategy: strategy(1), budgetWei: 100n },
+  ];
+  const result = allocateCycleCandidates({ bots, auctions: [auction(1), { ...auction(2), minimumContribution: "200" }], nowSec: 2000000000 });
+  assert.equal(result.assignments.empty.primary.length, 0);
+  assert.equal(result.assignments.funded.primary[0].address, address(1));
+});
+
+test("ranks large prices precisely and keeps primary and reserve assignments distinct", () => {
+  const bot = { id: "large", wallet: address(100), strategy: { ...strategy(2), maxMinContributionWei: 10n ** 20n, maxBidWei: 10n ** 20n } };
+  const auctions = ["9007199254740993", "9007199254740992", "9007199254740994", "9007199254740995"].map((value, index) => ({ ...auction(index + 1), minimumContribution: value }));
+  const result = allocateCycleCandidates({ bots: [bot], auctions, nowSec: 2000000000 });
+  assert.deepEqual(result.assignments.large.primary.map(a => a.minimumContribution), ["9007199254740992", "9007199254740993"]);
+  assert.deepEqual(result.assignments.large.reserve.map(a => a.minimumContribution), ["9007199254740994", "9007199254740995"]);
+});
+
+test("optional winner rebids reserve only the incremental budget", () => {
+  const bot = { id: "winner", wallet: address(100), strategy: { ...strategy(1), skipIfWinning: false }, budgetWei: 10n };
+  const result = allocateCycleCandidates({
+    bots: [bot],
+    auctions: [{ ...auction(1), highestBidder: bot.wallet, highestBid: "500", approversCount: 1 }],
+    nowSec: 2000000000,
+  });
+  assert.equal(result.assignments.winner.primary[0].address, address(1));
 });
