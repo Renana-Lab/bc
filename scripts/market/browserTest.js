@@ -147,7 +147,7 @@ const {
       exact: true
     }).first().waitFor();
     assert.equal(await page.getByText(/bids per hour/).count(), 0);
-    await page.getByText('Random auction', { exact: true }).waitFor();
+    await page.getByText('Cheapest auction', { exact: true }).waitFor();
     await page.getByRole('button', {
       name: 'Run manual cycle'
     }).click();

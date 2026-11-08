@@ -67,7 +67,8 @@ a server-verified admin role. There is no frontend admin passcode.
   manufacture extra funds when an old winner is later outbid.
 - Automatic and manual finalization. Seller payments are transferred exactly once.
 - Bot Command Center: persistent server-hosted bots, independent budgets and
-  intervals, random eligible-auction selection, enable/start/stop, manual rounds,
+  intervals, cheapest-eligible-auction selection (lowest required cumulative
+  next bid, `max(minimum, highest + 10)`; ties broken randomly among the cheapest only), enable/start/stop, manual rounds,
   and observatory. Each bot places at most one bid per round using a fixed ten-point
   outbid step. A shared active-only snapshot prevents duplicate assignments in the
   same round. All execution stays inside the marketplace service.
