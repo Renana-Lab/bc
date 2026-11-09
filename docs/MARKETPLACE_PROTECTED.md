@@ -19,7 +19,7 @@ Sepolia payloads cannot be erased or made private by importing an encrypted copy
 ## Isolation
 
 - Branch and Amplify app: `marketplace-protected`.
-- Region: `us-east-1`.
+- Amplify Hosting: `us-east-2` (Ohio). Existing encryption infrastructure: `us-east-1`.
 - Separate factory, encrypted-payload API, S3 bucket, DynamoDB table and KMS key.
 - No existing factory addresses, budgets or marketplace databases are modified.
 - No private keys, AWS credentials or server RPC credentials belong in any
@@ -55,7 +55,7 @@ reconstruct bid transactions or balances from archive rows.
 
 ## Deployed Resources
 
-- Preview: https://main.df7mlebpdd7v7.amplifyapp.com/
+- Preview: https://main.d1n93p6nqw0kho.amplifyapp.com/
 - Protected Sepolia factory: `0xc52f7A33010E525dcC1821F533e96B381C3879c2`.
 - Key API: https://c53tm1of1k.execute-api.us-east-1.amazonaws.com
 - Stack: `marketplace-protected`, AWS account `774490039997`, `us-east-1`.

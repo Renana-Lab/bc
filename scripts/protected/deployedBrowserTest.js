@@ -7,7 +7,7 @@ const { signTypedData, SignTypedDataVersion } = require('@metamask/eth-sig-util'
 require('dotenv').config({ quiet: true });
 const root = path.resolve(__dirname, '../..');
 const output = path.join(root, 'artifacts/backend/protected');
-const site = 'https://main.df7mlebpdd7v7.amplifyapp.com';
+const site = 'https://main.d1n93p6nqw0kho.amplifyapp.com';
 let playwright;
 try { playwright = require('playwright'); }
 catch { playwright = require(path.join(process.env.USERPROFILE || process.env.HOME, '.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright')); }

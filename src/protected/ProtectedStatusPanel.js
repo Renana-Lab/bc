@@ -11,7 +11,7 @@ export default function ProtectedStatusPanel() {
     ["Key release service", "https://us-east-1.console.aws.amazon.com/lambda/home?region=us-east-1#/functions/marketplace-protected-service"],
     ["Automatic finalizer", "https://us-east-1.console.aws.amazon.com/lambda/home?region=us-east-1#/functions/marketplace-protected-finalizer"],
     ["Release monitoring", "https://us-east-1.console.aws.amazon.com/cloudwatch/home?region=us-east-1#logsV2:log-groups/log-group/$252Faws$252Flambda$252Fmarketplace-protected-service"],
-    ["Deployment (Amplify)", "https://us-east-1.console.aws.amazon.com/amplify/apps/df7mlebpdd7v7/branches/main"],
+    ["Deployment (Amplify)", "https://us-east-2.console.aws.amazon.com/amplify/apps/d1n93p6nqw0kho/branches/main"],
   ];
   const check = async () => {
     setLoading(true);

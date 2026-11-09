@@ -7,7 +7,7 @@ async function main() {
   const crypto = await import('../../src/protected/crypto.mjs');
   const base = process.env.PROTECTED_API_URL;
   assert.ok(base?.startsWith('https://'));
-  const origin = 'https://main.df7mlebpdd7v7.amplifyapp.com';
+  const origin = 'https://main.d1n93p6nqw0kho.amplifyapp.com';
   const call = async (route, body, token) => {
     const response = await fetch(base + route, { method: body ? 'POST' : 'GET', signal: AbortSignal.timeout(25000), headers: { Origin: origin, 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) });
     const result = await response.json();

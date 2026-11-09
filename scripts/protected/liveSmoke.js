@@ -5,7 +5,7 @@ const { Wallet } = require('ethers');
 require('dotenv').config({ quiet: true });
 const dir = path.resolve(__dirname, '../../artifacts/backend/protected');
 const file = path.join(dir, 'live-smoke-private.json');
-const origin = 'https://main.df7mlebpdd7v7.amplifyapp.com';
+const origin = 'https://main.d1n93p6nqw0kho.amplifyapp.com';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function main() {
   const crypto = await import('../../src/protected/crypto.mjs');

@@ -10,6 +10,7 @@ const {
 function createMarketServer(store, options = {}) {
   const attempts = new Map();
   const origin = options.origin || 'http://localhost:3010';
+  const allowedOrigins = new Set([origin, ...(options.allowedOrigins || [])]);
   const secure = new URL(origin).protocol === 'https:';
   const cookie = (token, expired = false) => `market_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${expired ? 0 : 28800}${secure ? '; Secure' : ''}`;
   const server = http.createServer(async (req, res) => {
@@ -47,7 +48,7 @@ function createMarketServer(store, options = {}) {
       }
       const write = !['GET', 'HEAD'].includes(req.method);
       if (write) {
-        check(req.headers.origin === (options.origin || origin), 'Origin not allowed', 403);
+        check(allowedOrigins.has(req.headers.origin), 'Origin not allowed', 403);
         check(req.headers['content-type']?.split(';')[0] === 'application/json', 'JSON content type required', 415);
       }
       let body = {};
@@ -186,6 +187,7 @@ if (require.main === module) {
   const server = createMarketServer(store, {
     devLogin: process.env.MARKET_DEV_LOGIN === '1',
     origin: process.env.MARKET_ORIGIN,
+    allowedOrigins: (process.env.MARKET_ALLOWED_ORIGINS || '').split(',').map(value => value.trim()).filter(Boolean),
     staticDir: process.env.MARKET_STATIC_DIR,
     adminPassword: process.env.MARKET_ADMIN_PASSWORD
   });

@@ -1,12 +1,12 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
-const appId = 'df7mlebpdd7v7';
+const appId = 'd1n93p6nqw0kho';
 const branch = 'main';
 const root = path.resolve(__dirname, '../..');
 const build = path.join(root, 'artifacts/backend/protected/build');
 const zip = path.join(root, 'artifacts/backend/protected/frontend.zip');
-const aws = args => execFileSync('aws', [...args, '--profile', 'presence-deploy', '--region', 'us-east-1', '--no-cli-pager'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+const aws = args => execFileSync('aws', [...args, '--profile', 'presence-deploy', '--region', 'us-east-2', '--no-cli-pager'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 async function main() {
   if (!fs.existsSync(path.join(build, 'index.html'))) throw new Error('Protected production build is required');
   const sourceBranch = execFileSync('git', ['branch', '--show-current'], { encoding: 'utf8', cwd: root }).trim();

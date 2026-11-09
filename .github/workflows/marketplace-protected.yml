@@ -45,19 +45,19 @@ jobs:
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::774490039997:role/marketplace-protected-frontend-ci
-          aws-region: us-east-1
+          aws-region: us-east-2
       - run: cd build && zip -qr ../frontend.zip .
       - name: Deploy isolated Amplify app
         shell: bash
         run: |
           set -euo pipefail
-          deployment=$(aws amplify create-deployment --app-id df7mlebpdd7v7 --branch-name main)
+          deployment=$(aws amplify create-deployment --app-id d1n93p6nqw0kho --branch-name main)
           job=$(jq -r .jobId <<< "$deployment")
           upload=$(jq -r .zipUploadUrl <<< "$deployment")
           curl --fail --silent --show-error -X PUT --upload-file frontend.zip "$upload"
-          aws amplify start-deployment --app-id df7mlebpdd7v7 --branch-name main --job-id "$job" --query jobSummary.status --output text
+          aws amplify start-deployment --app-id d1n93p6nqw0kho --branch-name main --job-id "$job" --query jobSummary.status --output text
           for attempt in $(seq 1 60); do
-            state=$(aws amplify get-job --app-id df7mlebpdd7v7 --branch-name main --job-id "$job" --query job.summary.status --output text)
+            state=$(aws amplify get-job --app-id d1n93p6nqw0kho --branch-name main --job-id "$job" --query job.summary.status --output text)
             [ "$state" = SUCCEED ] && exit 0
             case "$state" in FAILED|CANCELLED) exit 1;; esac
             sleep 5
