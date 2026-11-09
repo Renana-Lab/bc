@@ -46,6 +46,23 @@ describe("RPC failure classification", () => {
     expect(urls.join(",")).not.toContain("6426761d274542bb9652e9a5aff35a0c");
   });
 
+  test("keeps the protected browser on its own Sepolia fallback pool", () => {
+    const previous = process.env.REACT_APP_PROTECTED_MARKET;
+    try {
+      process.env.REACT_APP_PROTECTED_MARKET = "true";
+      const urls = getConfiguredRpcUrls();
+      expect(urls).toEqual(expect.arrayContaining([
+        "https://ethereum-sepolia-rpc.publicnode.com",
+        "https://11155111.rpc.thirdweb.com",
+        "https://public.1rpc.io/sepolia",
+      ]));
+      expect(urls).not.toContain("https://sepolia.gateway.tenderly.co");
+    } finally {
+      if (previous === undefined) delete process.env.REACT_APP_PROTECTED_MARKET;
+      else process.env.REACT_APP_PROTECTED_MARKET = previous;
+    }
+  });
+
   test("classifies HTTP provider status codes even without vendor text", () => {
     expect(getRpcFailureKind({ response: { status: 429 } })).toBe("capacity");
     expect(getRpcFailureKind({ status: 503 })).toBe("network");

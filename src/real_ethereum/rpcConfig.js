@@ -3,6 +3,11 @@ const DEFAULT_RPC_URLS = [
   "https://sepolia.rpc.thirdweb.com",
   "https://ethereum-sepolia-rpc.publicnode.com",
 ];
+const PROTECTED_RPC_URLS = [
+  "https://ethereum-sepolia-rpc.publicnode.com",
+  "https://11155111.rpc.thirdweb.com",
+  "https://public.1rpc.io/sepolia",
+];
 
 const endpointHealth = new Map();
 const endpointLanes = new Map();
@@ -74,7 +79,7 @@ export const getConfiguredRpcUrls = () => {
     normalizeRpcUrl(process.env.REACT_APP_RPC_URL),
     infuraKey ? `https://sepolia.infura.io/v3/${infuraKey}` : "",
     alchemyKey ? `https://eth-sepolia.g.alchemy.com/v2/${alchemyKey}` : "",
-    ...DEFAULT_RPC_URLS,
+    ...(process.env.REACT_APP_PROTECTED_MARKET === "true" ? PROTECTED_RPC_URLS : DEFAULT_RPC_URLS),
   ].filter(Boolean);
 
   return [...new Set(configured)];

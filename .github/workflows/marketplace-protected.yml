@@ -20,7 +20,7 @@ jobs:
       - run: npm run protected:compile
       - run: npm run protected:test
       - run: node --test src/protected/client.test.cjs
-      - run: npm test -- --watchAll=false --runInBand --runTestsByPath src/botnet/cyclePlanner.test.js src/pages/ManageBudget/BotnetControlPanel.test.js src/real_ethereum/walletAccess.test.js src/protected/archiveHistory.test.js
+      - run: npm test -- --watchAll=false --runInBand --runTestsByPath src/botnet/cyclePlanner.test.js src/pages/ManageBudget/BotnetControlPanel.test.js src/real_ethereum/walletAccess.test.js src/real_ethereum/rpcConfig.test.js src/protected/archiveHistory.test.js
         env:
           CI: 'true'
       - run: npm run protected:build
