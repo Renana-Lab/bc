@@ -84,11 +84,8 @@ test("5 parallel participants: pid, wallet, faucet, bid, winner reads", { skip, 
     const faucetBefore = await plain.getBalance(faucetWallet.address);
     const duplicates = [];
     const firstRound = people.map((person) => claim(person.pid, person.address, person.ip));
-    // While the first round is in flight, hammer participant 0's pid with the same address, another address and another caller.
-    for (let i = 0; i < 4; i += 1) {
-      duplicates.push(claim(people[0].pid, people[0].address, "203.0.113.1"));
-      duplicates.push(claim(people[0].pid, Wallet.createRandom().address, "203.0.113.2"));
-    }
+    // While the first round is in flight, hammer participant 0's pid with the same address from other callers.
+    for (let i = 0; i < 4; i += 1) duplicates.push(claim(people[0].pid, people[0].address, `203.0.113.${i + 1}`));
     const first = await Promise.all(firstRound);
     const dups = await Promise.all(duplicates);
     const bodies = first.map((r) => JSON.parse(r.body));
@@ -97,6 +94,8 @@ test("5 parallel participants: pid, wallet, faucet, bid, winner reads", { skip, 
     for (const r of dups) assert.ok([200, 403, 409].includes(r.statusCode), `duplicate got ${r.statusCode}`);
     assert.equal(dups.filter((r) => r.statusCode === 200 && JSON.parse(r.body).status === "paid").length, 0, "no duplicate was paid");
 
+    // A different address for an already used pid is refused (after the first round, so it cannot win the race).
+    assert.equal((await claim(people[0].pid, Wallet.createRandom().address, "203.0.113.9")).statusCode, 403);
     // Later attempts: same pid same address is idempotent, different address is refused.
     const later = await claim(people[1].pid, people[1].address, people[1].ip);
     assert.equal(JSON.parse(later.body).status, "already_paid");

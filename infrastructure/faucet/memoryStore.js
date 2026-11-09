@@ -25,8 +25,9 @@ const createMemoryStore = () => {
       if (!record) return { outcome: "unknown" };
       if (record.status === "paid") return { outcome: "paid", record: { ...record } };
       if (record.status === "pending" && !(record.leaseUntil < nowSeconds)) return { outcome: "busy" };
+      if (record.status === "pending" && record.address !== address.toLowerCase()) return { outcome: "mismatch" };
       const previous = record.status === "pending" ? { ...record } : null;
-      pids.set(pidHash, { ...record, status: "pending", address: address.toLowerCase(), leaseUntil });
+      pids.set(pidHash, { ...record, status: "pending", address: record.address ?? address.toLowerCase(), leaseUntil });
       return { outcome: "reserved", previous };
     },
     async savePending(pidHash, { rawTx, txHash }) {

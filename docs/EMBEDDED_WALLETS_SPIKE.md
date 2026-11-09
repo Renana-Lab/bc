@@ -58,12 +58,15 @@ app (web3.js / personal_sign) -> paratime wrapper (encrypts calldata) -> guard -
 
 * **Participant code:** the lab hands out a random code in the link, `https://<host>/?pid=K7f3QpX9mA2d` (8-24 letters/digits; generated
   codes are 16 characters, about 79 bits). The app reads it from the URL and keeps it in `sessionStorage` only (`participantId.mjs`). The
-  format check rejects anything that looks like an email or phone number. No email, phone or name is collected anywhere.
+  format check rejects emails and digit-only values, but it cannot prove a code is not personal data (a name with letters would pass):
+  codes are issued by the lab, the faucet honours only allowlisted codes, and the app removes `?pid=` from the address bar and shows the
+  code masked. No email, phone or name is collected by the app.
 * **Faucet:** an AWS Lambda + DynamoDB stack in `infrastructure/faucet/` (see its README): allowlist of code digests, a fixed
   configurable amount once per code (exactly-once even for parallel requests), per-caller and global rate limits, key only in Secrets
   Manager, log scrubbing, and a CloudWatch low-balance alarm. `scripts/faucet/` has the code generator/uploader, the secret creator and
   the deploy script. Nothing was deployed to AWS.
-* **Verified on localnet:** `npm run faucet:test` (unit: parallel claims, crash retry without double payment, rate limits, log hygiene) and
+* **Verified:** `npm run faucet:test` (offline, fake chain and in-memory table: parallel claims, crash retry, reverted transfer, address
+  hijack, RPC lag, rate limits, log hygiene, plus the DynamoDB store against a fake client) and, on localnet,
   `npm run faucet:test:flow` (5 parallel participants: code -> local wallet -> faucet payment -> bid with encrypted
   calldata -> auction ends -> winner reads, the others cannot; repeated and parallel claims for one code paid once).
   Not verified: the real DynamoDB store, CloudFormation template and Secrets Manager call (no AWS access/deployment).

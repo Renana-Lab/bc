@@ -39,7 +39,7 @@ Open the browser console on any page of the app after step 6, or run a read call
 ## 4. Faucet stack on AWS (see `infrastructure/faucet/README.md`)
 
 1. `node scripts/faucet/createFaucetSecret.js --name bc-faucet/key --region <region>` -> prints the secret ARN and the faucet address.
-2. Send TEST tokens to that faucet address (budget: participants x `--amount-wei`, plus gas of about 0.007 TEST per payment).
+2. Send TEST tokens to that faucet address (budget: participants x `--amount-wei`, plus gas of up to about 0.007 TEST per payment (measured use is about 22k gas, roughly 0.0022 TEST)).
 3. `node scripts/faucet/deployFaucet.js --dry-run` (offline check), then deploy with the command in the README
    (`--secret-arn`, `--faucet-address`, `--artifact-bucket`, `--alert-email`, `--origins`, optionally `--amount-wei`, `--low-balance`).
 4. Confirm the SNS email so the low-balance alarm can reach you.
@@ -61,7 +61,7 @@ Do not set any key in Amplify. (This repo's Amplify build is triggered by pushes
 ## 6. Verify with one participant (you)
 
 1. Open `https://<host>/?pid=<one code>` in a clean browser profile. Create a wallet, click "Request test funds".
-2. Confirm the balance arrives, and that a second click / a second browser with the same code is refused.
+2. Confirm the balance arrives. A second click or a second browser with the same code and wallet returns the original payment (no second payment); a different wallet with the same code is refused.
 3. Create an auction (seller wallet), bid from the participant, let it end, finalize, and click "View data" as the winner.
 4. Download the encrypted backup, clear site data, restore from the backup.
 

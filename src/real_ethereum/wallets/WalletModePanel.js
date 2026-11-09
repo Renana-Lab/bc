@@ -24,16 +24,44 @@ const LocalWalletPanel = () => {
   const pid = useMemo(() => {
     let storage;
     try { storage = window.sessionStorage; } catch { storage = undefined; }
-    return getParticipantId({ search: window.location.search, storage });
+    const code = getParticipantId({ search: window.location.search, storage });
+    // The code is a faucet capability: keep it out of the address bar, history and Referer headers.
+    try {
+      const url = new URL(window.location.href);
+      if (url.searchParams.has("pid")) {
+        url.searchParams.delete("pid");
+        window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+      }
+    } catch {
+      // not fatal
+    }
+    return code;
   }, []);
   const faucetUrl = process.env.REACT_APP_FAUCET_URL;
   const requestFunds = () => run(async () => {
-    const response = await fetch(`${faucetUrl}/claim`, {
-      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pid, address: wallet.address }),
-    });
-    const body = await response.json();
-    if (!response.ok) throw new Error(body.error || "Faucet request failed.");
-    setMessage("Test funds requested. They arrive in a few seconds.");
+    const friendly = {
+      not_eligible: "This participant code cannot receive funds (unknown or already used).",
+      faucet_empty: "The faucet is empty. Tell the experimenter.",
+      transfer_failed: "The transfer failed. Use a normal wallet address.",
+      rate_limited: "Too many requests. Wait a few minutes.",
+    };
+    // 429 (Lambda throttling), 202 (payment still confirming), 409 (in progress) and 5xx are retried.
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      const response = await fetch(`${faucetUrl}/claim`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pid, address: wallet.address }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (response.status === 200 && (body.status === "paid" || body.status === "already_paid")) {
+        setMessage("Test funds sent. They are in your wallet.");
+        return;
+      }
+      if ([400, 403, 422, 503].includes(response.status) || body.error === "rate_limited") {
+        throw new Error(friendly[body.error] || "Faucet request refused.");
+      }
+      setMessage("Faucet is busy, retrying...");
+      await new Promise((resolve) => setTimeout(resolve, 2000 * (attempt + 1)));
+    }
+    throw new Error("The faucet is busy. Try again in a minute.");
   });
 
   const refresh = async () => setState({ exists: await wallet.exists(), address: wallet.address });
@@ -60,7 +88,7 @@ const LocalWalletPanel = () => {
   return (
     <div style={box} data-testid="local-wallet-panel">
       <strong>Local wallet (spike)</strong>
-      {pid ? <div>Participant code: {pid}</div> : null}
+      {pid ? <div>Participant code: {`${pid.slice(0, 4)}…${pid.slice(-2)}`}</div> : null}
       <div style={{ color: "#8a1c1c" }}>
         Do not clear this site&apos;s data (cookies / storage) during the session: the wallet key lives there.
         Download the encrypted backup first; you can restore it below.

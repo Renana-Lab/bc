@@ -29,6 +29,7 @@ const amountWei = read("--amount-wei", "100000000000000000"); // 0.1 TEST
 const lowBalance = Number(read("--low-balance", "5")); // alarm when the faucet holds fewer than this many TEST
 const origins = read("--origins", "http://localhost:3000,https://datamarketplaces.net,https://www.datamarketplaces.net");
 const rateLimit = read("--rate-limit", "20");
+const reservedConcurrency = Number(read("--reserved-concurrency", "1"));
 
 if (chainId !== 23295 && chainId !== 23293) throw new Error("--chain-id must be 23295 (Sapphire testnet) or 23293 (localnet); mainnet is refused");
 if (!/^\d+$/.test(amountWei) || BigInt(amountWei) <= 0n) throw new Error("--amount-wei must be a positive integer");
@@ -89,7 +90,9 @@ const template = {
       Properties: {
         Runtime: "nodejs20.x", Handler: "index.handler", Role: { "Fn::GetAtt": ["FaucetRole", "Arn"] },
         Timeout: 30, MemorySize: 256,
-        ReservedConcurrentExecutions: 1, // one signer, sequential nonces
+        // One signer, sequential nonces. Needs an account concurrency quota above 10; --reserved-concurrency 0 omits it
+        // (signing is still serialized inside one container, but parallel containers could then collide on nonces).
+        ...(reservedConcurrency > 0 ? { ReservedConcurrentExecutions: reservedConcurrency } : {}),
         Environment: {
           Variables: {
             FAUCET_TABLE: { Ref: "FaucetTable" }, FAUCET_SECRET_ID: secretArn || "unset",
@@ -125,6 +128,10 @@ const template = {
         AssumeRolePolicyDocument: assume, ManagedPolicyArns: basic,
         Policies: [policy([{ Effect: "Allow", Action: "cloudwatch:PutMetricData", Resource: "*", Condition: { StringEquals: { "cloudwatch:namespace": "BcFaucet" } } }])],
       },
+    },
+    MonitorLogGroup: {
+      Type: "AWS::Logs::LogGroup", DeletionPolicy: "Retain", UpdateReplacePolicy: "Retain",
+      Properties: { LogGroupName: { "Fn::Sub": "/aws/lambda/${MonitorFunction}" }, RetentionInDays: 30 },
     },
     MonitorFunction: {
       Type: "AWS::Lambda::Function",
@@ -193,6 +200,7 @@ try {
   console.log(`REACT_APP_FAUCET_URL=${output("FaucetApiUrl").replace(/\/$/, "")}`);
   console.log(`Table for generatePids.js: ${output("FaucetTableName")}`);
   if (alertEmail) console.log(`Confirm the SNS subscription email sent to ${alertEmail}, otherwise balance alerts are not delivered.`);
+  else console.log("WARNING: no --alert-email given: the low-balance alarm has no subscriber and nobody will be notified. Subscribe to the SNS topic.");
 } finally {
   fs.rmSync(work, { recursive: true, force: true });
 }

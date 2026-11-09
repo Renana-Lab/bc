@@ -31,7 +31,9 @@ monitor Lambda (every 5 min) -> CloudWatch metric BcFaucet/FaucetBalance -> alar
 
 Known limits: the Function URL is public (protection is the allowlist, rate limit and single-use codes; add WAF/CloudFront if
 you expect abuse). The lab can link a pid to the address it funded (pseudonymous towards the lab). Reserved concurrency 1
-means simultaneous bursts are queued/throttled by Lambda (clients should retry on 429/202).
+means simultaneous requests are NOT queued: Lambda throttles them (429, non-JSON body) while one claim is confirming (up to 20 s). The app retries on 429/202/409/5xx with backoff. It needs an account concurrency quota above 10 (`--reserved-concurrency 0` omits it, at the cost of possible nonce collisions across containers).
+The rate limiter counts every request, so a few abusive IPs can exhaust the global limit for everyone (raise `GLOBAL_RATE_LIMIT_PER_WINDOW` or add WAF). A claim for a code that is mid-payment answers 409/202/200, so code validity can be inferred only by someone who already holds that code and address.
+A reverted transfer (for example a contract address that rejects plain transfers) releases the code so it can be used again with a normal address; each failed attempt costs the faucet gas, bounded by the rate limits.
 
 ## Files
 
@@ -42,7 +44,7 @@ means simultaneous bursts are queued/throttled by Lambda (clients should retry o
 * Tests: `npm run faucet:test` (unit, no network) and `REQUIRE_LOCALNET=1 npm run faucet:test:flow` (5 parallel participants on localnet)
 
 Not verified here: the DynamoDB store and CloudFormation template were not run against AWS (no deployment was made). The
-conditional-expression semantics are standard DynamoDB; the memory store mirrors them for the tests.
+conditional-expression semantics are standard DynamoDB. `scripts/faucet/dynamoStore.test.mjs` runs the real store against a fake client that understands exactly these expressions (command construction and result handling), and the memory store mirrors the same contract for the handler tests.
 
 ## Deploy (do it yourself; nothing here is run automatically)
 

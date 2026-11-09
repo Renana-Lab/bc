@@ -7,19 +7,21 @@ import { Transaction, Wallet } from "ethers";
 import { isValidParticipantId } from "../../src/real_ethereum/wallets/participantId.mjs";
 
 const require = createRequire(import.meta.url);
-const { createFaucetHandler, loadConfig, sha256, PID_PATTERN } = require("../../infrastructure/faucet/handler.js");
+const { createFaucetHandler, loadConfig, sha256, scrub, PID_PATTERN } = require("../../infrastructure/faucet/handler.js");
 const { createMemoryStore } = require("../../infrastructure/faucet/memoryStore.js");
 const { generatePids, uploadPids } = require("./pidTools.js");
 
 const AMOUNT = 10n ** 17n;
 const GAS_PRICE = 100n * 10n ** 9n;
-const CONFIG = { chainId: 23293, amountWei: AMOUNT, rateLimit: 1000, globalRateLimit: 10000, rateWindowSeconds: 600, leaseSeconds: 60, confirmTimeoutMs: 1000 };
+const PAID_GAS_PRICE = (GAS_PRICE * 12n) / 10n; // the handler adds 20% headroom
+const CONFIG = { chainId: 23293, amountWei: AMOUNT, rateLimit: 1000, globalRateLimit: 10000, rateWindowSeconds: 600, leaseSeconds: 60, confirmTimeoutMs: 1000, absentChecks: 3, absentDelayMs: 0 };
 const faucetKey = Wallet.createRandom().privateKey; // disposable, never printed
 
 const fakeChain = ({ balance = 10n ** 20n } = {}) => {
   const sent = [];
   const mined = new Map();
-  const state = { balance, nonce: 0, failNextSend: false };
+  const state = { balance, nonce: 0, failNextSend: false, revertNext: false, hideCalls: 0, nonceTooLowOnResend: false };
+  const failed = new Set();
   return {
     sent, mined, state,
     getBalance: async () => state.balance,
@@ -29,10 +31,20 @@ const fakeChain = ({ balance = 10n ** 20n } = {}) => {
       sent.push(raw);
       if (state.failNextSend) { state.failNextSend = false; throw new Error("network down"); }
       const tx = Transaction.from(raw);
-      if (!mined.has(tx.hash)) { mined.set(tx.hash, tx); state.nonce += 1; state.balance -= tx.value + GAS_PRICE * 21000n; }
+      if (mined.has(tx.hash)) {
+        if (state.nonceTooLowOnResend) throw new Error("nonce too low");
+        return;
+      }
+      mined.set(tx.hash, tx);
+      state.nonce += 1;
+      state.balance -= tx.value + PAID_GAS_PRICE * 21000n;
+      if (state.revertNext) { state.revertNext = false; failed.add(tx.hash); }
     },
-    getReceipt: async (hash) => (mined.has(hash) ? { status: 1 } : null),
-    getTransaction: async (hash) => mined.get(hash) || null,
+    getReceipt: async (hash) => (mined.has(hash) ? { status: failed.has(hash) ? 0 : 1 } : null),
+    getTransaction: async (hash) => {
+      if (state.hideCalls > 0) { state.hideCalls -= 1; return null; } // an RPC node that lags behind
+      return mined.get(hash) || null;
+    },
   };
 };
 
@@ -120,6 +132,73 @@ test("a crash after signing never pays twice: the retry re-broadcasts the SAME t
   assert.equal(chain.mined.size, 1, "paid once");
   assert.equal((await store.get(sha256(pids[1]))).status, "paid");
   assert.equal((await store.get(sha256(pids[1]))).rawTx, undefined, "raw tx removed after payment");
+});
+
+test("a reverted payment releases the pid instead of wedging it", async () => {
+  const { claim, chain, pids, store } = await setup();
+  chain.state.revertNext = true;
+  const first = await claim(pids[3], addr());
+  assert.equal(first.statusCode, 422);
+  assert.equal(parse(first).error, "transfer_failed");
+  assert.equal((await store.get(sha256(pids[3]))).status, "unclaimed");
+  const retry = await claim(pids[3], addr());
+  assert.equal(retry.statusCode, 200, "the code works again with a normal address");
+});
+
+test("a stale pending reservation cannot be hijacked or re-pointed by another address", async () => {
+  const { claim, chain, clock, pids, store } = await setup();
+  const original = addr();
+  chain.state.failNextSend = true;
+  assert.equal((await claim(pids[4], original)).statusCode, 500);
+  clock.ms += 120_000; // lease expired
+  assert.equal((await claim(pids[4], addr())).statusCode, 403, "another address is refused");
+  assert.equal((await store.get(sha256(pids[4]))).address, original.toLowerCase(), "stored address is unchanged");
+  assert.equal((await claim(pids[4], original)).statusCode, 200, "the original address completes the payment");
+  assert.equal(Transaction.from(chain.sent[chain.sent.length - 1]).to, original);
+  assert.equal(chain.mined.size, 1);
+  assert.equal((await claim(pids[4], original)).statusCode, 200, "and a repeat is idempotent");
+  assert.equal(chain.mined.size, 1);
+});
+
+test("an RPC that lags (nonce too low, transaction not yet visible) never causes a second payment", async () => {
+  const { claim, chain, clock, pids } = await setup();
+  const to = addr();
+  chain.state.failNextSend = true;
+  assert.equal((await claim(pids[5], to)).statusCode, 500); // signed, stored, broadcast reported failure
+  // In reality the transaction did get mined; our RPC node just does not show it yet.
+  await chain.sendRaw(chain.sent[0]);
+  chain.state.nonceTooLowOnResend = true;
+  chain.state.hideCalls = 2;
+  clock.ms += 120_000;
+  const lagging = await claim(pids[5], to);
+  assert.equal(lagging.statusCode, 202, "unclear state: ask the client to retry");
+  assert.equal(chain.mined.size, 1, "no second transaction was signed");
+  clock.ms += 120_000;
+  const settled = await claim(pids[5], to);
+  assert.equal(settled.statusCode, 200);
+  assert.equal(chain.mined.size, 1);
+  assert.equal(new Set(chain.sent).size, 1, "only one distinct signed transaction ever existed");
+});
+
+test("if recording the payment fails after it is confirmed, the retry only confirms and records it", async () => {
+  const { claim, chain, clock, pids, store } = await setup();
+  const to = addr();
+  const markPaid = store.markPaid;
+  store.markPaid = async () => { throw new Error("dynamodb unavailable"); };
+  assert.equal((await claim(pids[0], to)).statusCode, 500);
+  store.markPaid = markPaid;
+  assert.equal(chain.mined.size, 1);
+  clock.ms += 120_000;
+  const retry = await claim(pids[0], to);
+  assert.equal(retry.statusCode, 200);
+  assert.equal(chain.sent.length, 1, "no re-broadcast, no second payment");
+  assert.equal((await store.get(sha256(pids[0]))).status, "paid");
+});
+
+test("error text is scrubbed of hex before it is logged", () => {
+  const raw = `0x${"ab".repeat(120)}`;
+  assert.equal(scrub(`failed ${raw} and ${"c".repeat(64)}`).includes("ab".repeat(10)), false);
+  assert.ok(scrub("x".repeat(500)).length <= 200);
 });
 
 test("an empty faucet answers 503 and the pid stays usable", async () => {

@@ -46,8 +46,10 @@ const createDynamoStore = ({ table, client } = {}) => {
         const result = await send(new sdk.UpdateItemCommand({
           TableName: table,
           Key: stateKey(pidHash),
-          ConditionExpression: "attribute_exists(pk) AND (#s = :unclaimed OR (#s = :pending AND leaseUntil < :now))",
-          UpdateExpression: "SET #s = :pending, address = :address, leaseUntil = :lease",
+          // A stale pending item can only be resumed by the SAME address its transaction was signed for,
+          // and the stored address is never overwritten (it is set on the first reservation only).
+          ConditionExpression: "attribute_exists(pk) AND (#s = :unclaimed OR (#s = :pending AND leaseUntil < :now AND address = :address))",
+          UpdateExpression: "SET #s = :pending, leaseUntil = :lease, address = if_not_exists(address, :address)",
           ExpressionAttributeNames: { "#s": "status" },
           ExpressionAttributeValues: {
             ":unclaimed": { S: "unclaimed" }, ":pending": { S: "pending" }, ":now": { N: String(nowSeconds) },
@@ -62,6 +64,7 @@ const createDynamoStore = ({ table, client } = {}) => {
         const record = await store.get(pidHash);
         if (!record) return { outcome: "unknown" };
         if (record.status === "paid") return { outcome: "paid", record };
+        if (record.status === "pending" && record.leaseUntil < nowSeconds && record.address !== address.toLowerCase()) return { outcome: "mismatch" };
         return { outcome: "busy" };
       }
     },

@@ -47,6 +47,8 @@ const loadConfig = (env = process.env) => {
     rateWindowSeconds: Number(env.RATE_WINDOW_SECONDS || 600),
     leaseSeconds: Number(env.LEASE_SECONDS || 60),
     confirmTimeoutMs: Number(env.CONFIRM_TIMEOUT_MS || 20000),
+    absentChecks: 3,
+    absentDelayMs: 700,
   };
 };
 
@@ -86,6 +88,15 @@ const createFaucetHandler = ({ store, getPrivateKey, chain, config, now = () => 
     }
   };
 
+  // True only if the transaction stays unknown over several checks (RPC nodes can lag).
+  const confirmAbsent = async (txHash) => {
+    for (let i = 0; i < config.absentChecks; i += 1) {
+      if ((await chain.getTransaction(txHash)) || (await chain.getReceipt(txHash))) return false;
+      if (config.absentDelayMs > 0 && i < config.absentChecks - 1) await new Promise((resolve) => setTimeout(resolve, config.absentDelayMs));
+    }
+    return true;
+  };
+
   // Pays (or finishes paying) for a reserved pid. Returns { txHash } or throws.
   const pay = (pidHash, address, previous) =>
     exclusive(async () => {
@@ -97,10 +108,13 @@ const createFaucetHandler = ({ store, getPrivateKey, chain, config, now = () => 
           try {
             await chain.sendRaw(previous.rawTx);
           } catch (error) {
-            if (/nonce too low/i.test(String(error?.message)) && !(await chain.getTransaction(previous.txHash))) {
-              // Its nonce was taken by another transaction and it was never mined: safe to start over.
+            if (/nonce too low/i.test(String(error?.message)) && (await confirmAbsent(previous.txHash))) {
+              // Its nonce was taken by another transaction and it stayed absent over several checks
+              // (an RPC that lags behind must not make us pay twice): safe to start over.
               await store.release(pidHash);
               previous = null;
+            } else if (/nonce too low/i.test(String(error?.message))) {
+              throw Object.assign(new Error("previous transaction state unclear"), { code: "PENDING" });
             } else if (!/already known|known transaction|already imported/i.test(String(error?.message))) {
               throw error;
             }
@@ -112,6 +126,10 @@ const createFaucetHandler = ({ store, getPrivateKey, chain, config, now = () => 
             await store.markPaid(pidHash, { txHash: previous.txHash, amountWei: config.amountWei.toString(), paidAt: Math.floor(now() / 1000) });
             return { txHash: previous.txHash };
           }
+          if (ok === false) {
+            await store.release(pidHash); // mined but failed (e.g. the target contract reverted): the pid may try again
+            throw Object.assign(new Error("transaction reverted"), { code: "REVERTED" });
+          }
           throw Object.assign(new Error("transaction not confirmed yet"), { code: "PENDING" });
         }
         // fell through: released, re-reserve below
@@ -120,11 +138,12 @@ const createFaucetHandler = ({ store, getPrivateKey, chain, config, now = () => 
       }
 
       const wallet = await getWallet();
-      const [balance, gasPrice, nonce] = await Promise.all([
+      const [balance, quotedGasPrice, nonce] = await Promise.all([
         chain.getBalance(wallet.address),
         chain.getGasPrice(),
         chain.getNonce(wallet.address),
       ]);
+      const gasPrice = (quotedGasPrice * 12n) / 10n; // 20% headroom so a small price rise does not strand the transaction
       if (balance < config.amountWei + gasPrice * TRANSFER_GAS) {
         await store.release(pidHash); // nothing was broadcast
         throw Object.assign(new Error("faucet balance too low"), { code: "FAUCET_EMPTY" });
@@ -136,7 +155,11 @@ const createFaucetHandler = ({ store, getPrivateKey, chain, config, now = () => 
       await store.savePending(pidHash, { rawTx, txHash }); // persisted before broadcasting
       await chain.sendRaw(rawTx);
       const ok = await confirm(txHash);
-      if (ok !== true) throw Object.assign(new Error(ok === false ? "transaction reverted" : "transaction not confirmed yet"), { code: ok === false ? "REVERTED" : "PENDING" });
+      if (ok === false) {
+        await store.release(pidHash); // consumed gas but paid nobody: let the code be used again (rate limits bound abuse)
+        throw Object.assign(new Error("transaction reverted"), { code: "REVERTED" });
+      }
+      if (ok !== true) throw Object.assign(new Error("transaction not confirmed yet"), { code: "PENDING" });
       await store.markPaid(pidHash, { txHash, amountWei: config.amountWei.toString(), paidAt: Math.floor(now() / 1000) });
       return { txHash };
     });
@@ -182,6 +205,7 @@ const createFaucetHandler = ({ store, getPrivateKey, chain, config, now = () => 
         event("claim_rejected", { pid: pidHash.slice(0, 8), reason: "used" });
         return json(403, { error: "not_eligible" });
       }
+      if (reservation.outcome === "mismatch") return json(403, { error: "not_eligible" });
       if (reservation.outcome === "busy") return json(409, { error: "in_progress" }, { "retry-after": String(config.leaseSeconds) });
       if (reservation.previous?.address && reservation.previous.address !== to.toLowerCase()) {
         return json(403, { error: "not_eligible" });
@@ -192,9 +216,10 @@ const createFaucetHandler = ({ store, getPrivateKey, chain, config, now = () => 
       event("claim_paid", { pid: pidHash.slice(0, 8), ms: now() - started });
       return json(200, { status: "paid", txHash, amountWei: config.amountWei.toString() });
     } catch (error) {
-      const code = error?.code === "FAUCET_EMPTY" ? "faucet_empty" : error?.code === "PENDING" ? "pending" : "internal";
+      const code = error?.code === "FAUCET_EMPTY" ? "faucet_empty" : error?.code === "PENDING" ? "pending" : error?.code === "REVERTED" ? "reverted" : "internal";
       event("error", { pid: pidHash ? pidHash.slice(0, 8) : undefined, code: scrub(error?.code), message: scrub(error?.message) });
       if (code === "faucet_empty") return json(503, { error: "faucet_empty" });
+      if (code === "reverted") return json(422, { error: "transfer_failed" });
       if (code === "pending") return json(202, { status: "pending" }, { "retry-after": "5" });
       return json(500, { error: "internal" });
     }

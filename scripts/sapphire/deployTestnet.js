@@ -36,7 +36,7 @@ if (!domain) problems.push("FACTORY_SIWE_DOMAIN is required (the host users open
 else if (/^https?:\/\//i.test(domain) || domain.includes("/")) problems.push("FACTORY_SIWE_DOMAIN must be a host (and optional port) only, e.g. datamarketplaces.net");
 else if (/^(localhost|127\.0\.0\.1)(:\d+)?$/.test(domain)) problems.push("FACTORY_SIWE_DOMAIN must not be localhost for a testnet deployment.");
 
-if (process.env.DEPLOY_RPC_URL && !/^https:\/\/[^/]*oasis\.io\b/.test(process.env.DEPLOY_RPC_URL)) {
+if (process.env.DEPLOY_RPC_URL && !/^https:\/\/([a-z0-9-]+\.)*oasis\.io(:\d+)?(\/|$)/.test(process.env.DEPLOY_RPC_URL)) {
   problems.push("DEPLOY_RPC_URL, if set, must be an https://*.oasis.io endpoint.");
 }
 if (!fs.existsSync(path.join(root, "src", "real_ethereum", "build", "CampaignFactory.json"))) {
