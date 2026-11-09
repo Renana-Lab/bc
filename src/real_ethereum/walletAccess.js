@@ -1,4 +1,6 @@
 import { setWalletSessionAccount } from "../telemetry/walletSession";
+import { getWalletMode } from "./wallets/walletMode.mjs";
+import { getModeProvider, subscribeModeProvider } from "./wallets/modeProvider";
 
 const ACCOUNT = /^0x[0-9a-fA-F]{40}$/;
 const TIMEOUT = 3000;
@@ -12,6 +14,7 @@ let expiry;
 let users = 0;
 let discovering = false;
 let boundProvider = null;
+let unsubscribeMode;
 
 export const getWalletAccess = () => snapshot;
 export const subscribeWalletAccess = (listener) => {
@@ -37,6 +40,8 @@ const announce = (event) => {
 };
 export const discoverWalletProvider = () => {
   if (typeof window === "undefined") return null;
+  // Embedded wallet modes (privy | local) register their own provider.
+  if (getWalletMode() !== "metamask") return getModeProvider();
   if (!discovering) {
     discovering = true;
     window.addEventListener("eip6963:announceProvider", announce);
@@ -85,18 +90,19 @@ export const verifyWalletAccess = () => {
   const epoch = generation;
   const task = (async () => {
     try {
-      if (typeof provider._metamask?.isUnlocked !== "function") {
+      const probe = getWalletMode() === "metamask" ? provider._metamask : provider;
+      if (typeof probe?.isUnlocked !== "function") {
         throw new Error("This wallet cannot verify its unlock state. Update the MetaMask extension and retry.");
       }
       const result = await deadline((async () => {
-        const unlocked = await provider._metamask.isUnlocked();
+        const unlocked = await probe.isUnlocked();
         if (unlocked !== true) return { status: unlocked === false ? "locked" : "verification-failed" };
         const accounts = await provider.request({ method: "eth_accounts" });
         if (!Array.isArray(accounts) || accounts.some((account) => !ACCOUNT.test(account))) {
           throw new Error("MetaMask returned an invalid account response.");
         }
         if (!accounts.length) return { status: "unauthorized" };
-        if (await provider._metamask.isUnlocked() !== true) return { status: "locked" };
+        if (await probe.isUnlocked() !== true) return { status: "locked" };
         return { status: "connected", account: accounts[0] };
       })());
       if (generation !== epoch) return snapshot;
@@ -125,6 +131,7 @@ export const startWalletAccess = () => {
   if (users === 1) {
     // Rebind after Strict Mode's setup/cleanup cycle.
     boundProvider = null;
+    unsubscribeMode = subscribeModeProvider(() => { reconcileProvider(); void verifyWalletAccess(); });
     void verifyWalletAccess();
     timer = setInterval(() => { if (!document.hidden) void verifyWalletAccess(); }, 1000);
     window.addEventListener("focus", resume);
@@ -136,6 +143,7 @@ export const startWalletAccess = () => {
     users -= 1;
     if (users) return;
     clearInterval(timer);
+    unsubscribeMode?.();
     suspend();
     for (const event of ["accountsChanged", "chainChanged", "disconnect"]) boundProvider?.removeListener?.(event, event === "disconnect" ? disconnected : changed);
     boundProvider = null;

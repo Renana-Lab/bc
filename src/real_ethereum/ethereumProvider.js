@@ -1,4 +1,5 @@
 import { ensureTargetChain } from "./sapphireNetworks";
+import { getWalletMode } from "./wallets/walletMode.mjs";
 import { discoverWalletProvider, requireWalletAccess, verifyWalletAccess } from "./walletAccess";
 
 export const getEthereumProvider = discoverWalletProvider;
@@ -17,8 +18,13 @@ export const getEthereumAccounts = async () => {
   return session.status === "connected" ? [session.account] : [];
 };
 export const requestEthereumAccounts = async () => {
-  const provider = await waitForEthereumProvider({ timeoutMs: 6500 });
-  if (!provider) throw new Error("MetaMask was not detected. Enable the extension for this site and retry.");
+  const mode = getWalletMode();
+  const provider = await waitForEthereumProvider({ timeoutMs: mode === "metamask" ? 6500 : 200 });
+  if (!provider) {
+    throw new Error(mode === "metamask"
+      ? "MetaMask was not detected. Enable the extension for this site and retry."
+      : `Sign in with the ${mode} wallet (wallet panel) before connecting.`);
+  }
   await provider.request({ method: "eth_requestAccounts" });
   await ensureTargetChain(provider);
   if (provider !== discoverWalletProvider()) throw new Error("Wallet provider changed. Retry the connection.");

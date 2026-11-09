@@ -11,6 +11,7 @@ import { Toaster } from "react-hot-toast";
 import PageSeo from "./components/Seo.js";
 import PresenceCoordinator from "./telemetry/PresenceCoordinator.js";
 import BotnetRuntimeHost from "./botnet/BotnetRuntimeHost.js";
+import WalletModePanel from "./real_ethereum/wallets/WalletModePanel.js";
 
 const HomePage = lazy(() => import("./pages/Home/HomePage.js"));
 const NewAuctionPage = lazy(() => import("./pages/NewAuction/NewAuctionPage.js"));
@@ -187,6 +188,7 @@ function App() {
 
   return (
     <MetaMaskProvider>
+      <WalletModePanel />
       <BotnetRuntimeHost />
       <PresenceCoordinator />
       {isMobile ? (
