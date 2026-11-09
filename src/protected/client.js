@@ -91,6 +91,7 @@ const api = async (path, body, token) => {
         awaiting_confirmation: "Settlement is still being confirmed on Sepolia. No signature is needed. Please try again shortly.",
         delivery_key_recovery_required: "The original delivery key is not available in this browser. Recover access with the same wallet.",
         payload_unavailable: "The encrypted information is not ready. No data was released; please retry shortly.",
+        payload_key_mismatch: "The encrypted data could not be verified. Your auction was not created. Please try again.",
         service_unavailable: "The network or protected storage is temporarily unavailable. Please retry shortly.",
         challenge_expired: "Wallet verification expired. Please retry and confirm the new request in MetaMask.",
       };
@@ -174,7 +175,10 @@ export const prepareProtectedAuction = async ({ wallet, text, operationId, onPro
     }
     stage.uploaded = true;
   }
-  const completed = await api(`/uploads/${encodeURIComponent(stage.id)}/complete`, {}, auth.token);
+  const completed = await api(`/uploads/${encodeURIComponent(stage.id)}/complete`, {}, auth.token).catch(error => {
+    if (error.code === "payload_key_mismatch" && encryptedStages.get(cacheKey) === stage) encryptedStages.delete(cacheKey);
+    throw error;
+  });
   if (completed.ready !== true || completed.ciphertextHash?.toLowerCase() !== sealed.ciphertextHash.toLowerCase()) throw new Error("Encrypted upload was not verified");
   if (epoch !== generation) throw new Error("Wallet session changed");
   const result = { nonce, ciphertextHash: sealed.ciphertextHash, sellerKeyHash: owner.key.fingerprint, payloadId: stage.id };

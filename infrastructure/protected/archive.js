@@ -39,8 +39,7 @@ function createArchive({ config, store, objects, kms, chain }) {
       try {
         raw = await kms.decrypt(Buffer.from(b.wrappedKey, 'base64'));
         if (raw.length !== 32) throw new Error('Invalid wrapped key');
-        // Archive-only: already-public legacy content must match the original hash.
-        // New protected uploads never decrypt their content server-side.
+        // In addition to authenticating the envelope, verify the original public content hash.
         const encrypted = Buffer.from(e.ciphertext, 'base64');
         const decipher = createDecipheriv('aes-256-gcm', raw, Buffer.from(e.iv, 'base64'));
         decipher.setAAD(Buffer.from(JSON.stringify({ version: 1, ...context })));

@@ -54,10 +54,11 @@ function harness() {
   const challenge = () => request('/challenge', { wallet, publicKey });
   const sign = typedData => sig.signTypedData({ privateKey: secret, data: typedData, version: sig.SignTypedDataVersion.V4 });
   const login = async () => { const c = await challenge(); const result = await request('/session', { challengeId: c.data.challengeId, signature: sign(c.data.typedData) }); assert.equal(result.status, 200); return result.data.token; };
-  const prepare = async token => {
+  const prepare = async (token, transform = () => {}) => {
     const sealed = await cryptoModule.sealText('SECRET-CANARY-עברית', { chainId: 11155111, factory, seller: wallet, nonce }, publicKey);
-    state.ciphertextHash = sealed.ciphertextHash;
+    await transform(sealed);
     object = { bytes: Buffer.from(JSON.stringify(sealed.envelope)), version: 'immutable-version' };
+    state.ciphertextHash = sealed.ciphertextHash = hash(object.bytes);
     const upload = await request('/uploads', { nonce, wrappedKey: sealed.wrappedKey, ciphertextHash: sealed.ciphertextHash, envelopeBytes: object.bytes.length }, token);
     assert.equal(upload.status, 200);
     return sealed;
@@ -89,6 +90,33 @@ test('envelope SHA and dimensions validated before pinning; no plaintext returne
 });
 test('modified ciphertext fails completion with no KMS calls', async () => {
   const h = harness(); const token = await h.login(); await h.prepare(token); h.setObject({ bytes: Buffer.from('{}'), version: 'tampered' }); assert.equal((await h.request('/uploads/' + nonce + '/complete', {}, token)).status, 400); assert.equal(h.decrypts(), 0);
+});
+test('valid 32-byte wrapped key for different ciphertext cannot mark an upload ready', async () => {
+  const h = harness();
+  const token = await h.login();
+  await h.prepare(token, async sealed => {
+    const unrelated = await cryptoModule.sealText('other text', sealed.envelope.context, publicKey);
+    sealed.wrappedKey = unrelated.wrappedKey;
+  });
+  const result = await h.request('/uploads/' + nonce + '/complete', {}, token);
+  assert.equal(result.status, 400);
+  assert.equal(result.data.error, 'payload_key_mismatch');
+  assert.equal(h.decrypts(), 1);
+  assert.equal(h.items.get('payload:' + nonce).ready, false);
+  assert.equal((await h.request('/release', { auction, publicKey })).data.error, 'payload_unavailable');
+});
+test('matching object hash does not bypass GCM tag verification', async () => {
+  const h = harness();
+  const token = await h.login();
+  await h.prepare(token, sealed => {
+    const ciphertext = Buffer.from(sealed.envelope.ciphertext, 'base64');
+    ciphertext[ciphertext.length - 1] ^= 1;
+    sealed.envelope.ciphertext = ciphertext.toString('base64');
+  });
+  const result = await h.request('/uploads/' + nonce + '/complete', {}, token);
+  assert.equal(result.status, 400);
+  assert.equal(result.data.error, 'payload_key_mismatch');
+  assert.equal(h.items.get('payload:' + nonce).versionId, undefined);
 });
 test('upload conflicting nonce cannot overwrite metadata', async () => {
   const h = harness(); const t = await h.login(); const sealed = await h.prepare(t); assert.equal((await h.request('/uploads', { nonce, ciphertextHash: '0x' + '88'.repeat(32), wrappedKey: sealed.wrappedKey, envelopeBytes: Buffer.byteLength(JSON.stringify(sealed.envelope)) }, t)).status, 409);

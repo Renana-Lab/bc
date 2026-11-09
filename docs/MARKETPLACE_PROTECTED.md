@@ -12,6 +12,13 @@ contract before wrapping a data key for a verified recipient. AWS administrators
 with sufficient permissions can recover data keys. This is not zero-knowledge
 storage, and recipients can redistribute data they have decrypted.
 
+At upload completion, the service verifies AES-GCM authentication and UTF-8
+decodability with the unwrapped key before pinning the object version. Plaintext
+is held only in transient buffers during this check, never returned or stored.
+This proves decryptability, not that the data matches the seller's description.
+The contract does not enforce an upload receipt; direct contract calls can
+still create references the service will refuse to release.
+
 The description, auction prices, participants, and transaction metadata remain
 public. Never place private information in the description. Already-public
 Sepolia payloads cannot be erased or made private by importing an encrypted copy.

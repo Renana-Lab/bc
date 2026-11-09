@@ -1,5 +1,6 @@
 'use strict';
-const { randomBytes, createHash, createPublicKey, publicEncrypt, constants } = require('node:crypto');
+const { isUtf8 } = require('node:buffer');
+const { randomBytes, createHash, createDecipheriv, createPublicKey, publicEncrypt, constants } = require('node:crypto');
 const hash = bytes => '0x' + createHash('sha256').update(bytes).digest('hex');
 const address = v => typeof v === 'string' && /^0x[\da-f]{40}$/i.test(v) && !/^0x0{40}$/i.test(v);
 const hex32 = v => typeof v === 'string' && /^0x[\da-f]{64}$/i.test(v) && !/^0x0{64}$/i.test(v);
@@ -90,16 +91,27 @@ function createService({ config, store, objects, kms, chain, verifyTypedData, pa
         if (!object.version || object.bytes.length !== record.envelopeBytes || object.bytes.length > 1400000 || hash(object.bytes) !== record.ciphertextHash) fail(400, 'invalid_envelope');
         let e;
         try { e = JSON.parse(object.bytes.toString('utf8')); } catch { fail(400, 'invalid_envelope'); }
-        const c = e.context;
-        if (e.version !== 1 || !c || c.chainId !== record.chainId || c.factory !== factory || c.seller !== s.wallet || c.nonce !== record.nonce || b64(e.iv).length !== 12) fail(400, 'invalid_envelope');
+        const c = e?.context;
+        if (e?.version !== 1 || !c || c.chainId !== record.chainId || c.factory !== factory || c.seller !== s.wallet || c.nonce !== record.nonce) fail(400, 'invalid_envelope');
+        const iv = b64(e.iv);
         const ciphertext = b64(e.ciphertext);
-        if (ciphertext.length < 17 || ciphertext.length > 1048592 || Object.keys(e).sort().join(',') !== 'ciphertext,context,iv,version' || Object.keys(c).sort().join(',') !== 'chainId,factory,nonce,seller') fail(400, 'invalid_envelope');
-        let raw;
+        if (iv.length !== 12 || ciphertext.length < 17 || ciphertext.length > 1048592 || Object.keys(e).sort().join(',') !== 'ciphertext,context,iv,version' || Object.keys(c).sort().join(',') !== 'chainId,factory,nonce,seller') fail(400, 'invalid_envelope');
+        let raw, plain, tail;
         try {
-          raw = await kms.decrypt(b64(record.wrappedKey));
+          try { raw = await kms.decrypt(b64(record.wrappedKey)); }
+          catch { fail(400, 'invalid_wrapped_key'); }
           if (raw.length !== 32) fail(400, 'invalid_wrapped_key');
-        } catch (err) { if (err.status) throw err; fail(400, 'invalid_wrapped_key'); }
-        finally { raw?.fill(0); }
+          // Match the browser's canonical AAD and authenticate the ciphertext before pinning.
+          const aad = Buffer.from(JSON.stringify({ version: 1, chainId: record.chainId, factory, seller: s.wallet, nonce: record.nonce }));
+          try {
+            const decipher = createDecipheriv('aes-256-gcm', raw, iv, { authTagLength: 16 });
+            decipher.setAAD(aad);
+            decipher.setAuthTag(ciphertext.subarray(-16));
+            plain = decipher.update(ciphertext.subarray(0, -16));
+            tail = decipher.final();
+          } catch { fail(400, 'payload_key_mismatch'); }
+          if (tail.length || !isUtf8(plain)) fail(400, 'invalid_envelope');
+        } finally { raw?.fill(0); plain?.fill(0); tail?.fill(0); }
         await store.complete(key, object.version);
       }
       return { id: record.id, ready: true, ciphertextHash: record.ciphertextHash };

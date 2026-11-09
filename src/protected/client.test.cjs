@@ -134,6 +134,30 @@ test("failed completion retries the same encrypted upload without storing plaint
   assert.equal(h.calls.some(call => JSON.stringify(call.body).includes('marker-private')), false);
 });
 
+test("a rejected key prevents creation and retries with a fresh encrypted upload", async () => {
+  const h = await harness();
+  const fetch = h.context.fetch;
+  let failOnce = true;
+  h.context.fetch = async (url, options) => {
+    if (url.endsWith("/complete") && failOnce) {
+      failOnce = false;
+      return { ok: false, status: 400, json: async () => ({ error: "payload_key_mismatch" }) };
+    }
+    return fetch(url, options);
+  };
+  let transactions = 0;
+  const factoryContract = { methods: { createEncryptedCampaign: () => ({ send: async () => { transactions++; return { status: true }; } }) } };
+  const input = { factory: factoryContract, wallet, minimum: "50", text: "payload", description: "public description", duration: "10", operationId: "invalid-key" };
+  await assert.rejects(h.client.createProtectedAuction(input), { code: "payload_key_mismatch" });
+  assert.equal(transactions, 0);
+  await h.client.createProtectedAuction(input);
+  const uploads = h.calls.filter(call => call.url.endsWith("/uploads"));
+  assert.equal(uploads.length, 2);
+  assert.notEqual(uploads[0].body.nonce, uploads[1].body.nonce);
+  assert.equal(h.signatures(), 1);
+  assert.equal(transactions, 1);
+});
+
 test("creation retries and simultaneous submissions reuse the receipt, without legacy plaintext calls", async () => {
   const h = await harness();
   const sent = [];
