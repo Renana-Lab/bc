@@ -1,4 +1,4 @@
-// Holds the raw EIP-1193 provider of the active embedded wallet mode (privy | local).
+// Holds the raw EIP-1193 provider of the active embedded wallet mode (local).
 // It is RAW on purpose: every consumer reaches it through getSapphireProvider(), which adds the
 // calldata guard and the Sapphire encryption wrapper. Nothing should call it directly.
 let current = null;

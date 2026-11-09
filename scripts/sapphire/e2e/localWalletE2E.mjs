@@ -52,8 +52,11 @@ try {
   });
 
   const createWallet = async (user) => {
-    await user.page.goto(APP, { waitUntil: "networkidle" });
+    const pid = `${user.name}Code${Math.random().toString(36).slice(2, 8)}`;
+    await user.page.goto(`${APP}/?pid=${pid}`, { waitUntil: "networkidle" });
     const panel = user.page.locator('[data-testid="local-wallet-panel"]');
+    await panel.getByText(`Participant code: ${pid}`).waitFor({ timeout: 15000 });
+    await panel.getByText(/Do not clear this site/).waitFor();
     await panel.getByPlaceholder("Passphrase (12+ chars)").fill(PASS);
     await user.shot("1-before-create");
     await panel.getByRole("button", { name: "Create" }).click();

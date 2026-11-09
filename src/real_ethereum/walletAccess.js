@@ -40,7 +40,7 @@ const announce = (event) => {
 };
 export const discoverWalletProvider = () => {
   if (typeof window === "undefined") return null;
-  // Embedded wallet modes (privy | local) register their own provider.
+  // Embedded wallet mode (local) register their own provider.
   if (getWalletMode() !== "metamask") return getModeProvider();
   if (!discovering) {
     discovering = true;

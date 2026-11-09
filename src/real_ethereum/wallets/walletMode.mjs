@@ -1,5 +1,5 @@
 // Single switch for the wallet implementation. MetaMask stays the default.
-export const WALLET_MODES = ["metamask", "privy", "local"];
+export const WALLET_MODES = ["metamask", "local"];
 
 // Written as `process.env.REACT_APP_WALLET_MODE` so Vite's `define` for `process.env` replaces it in the browser.
 export const getWalletMode = (value = process.env.REACT_APP_WALLET_MODE) => {

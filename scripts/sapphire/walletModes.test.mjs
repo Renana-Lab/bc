@@ -8,9 +8,9 @@
 // Evidence of encryption is taken from the recorder (what the wallet was actually asked to sign
 // and send) and from the transaction as stored on chain.
 //
-// metamask / privy use SIMULATED raw providers (they sign what they are given with a disposable
-// random key, like the real SDKs do); the real Privy login needs a browser, so it is covered by
-// the manual checklist. "local" uses the real local wallet implementation.
+// metamask uses a SIMULATED raw provider (it signs what it is given with a disposable random key,
+// like MetaMask does; real MetaMask is not driven here). "local" uses the real local wallet
+// implementation (the browser flow is covered by scripts/sapphire/e2e/localWalletE2E.mjs).
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import test from "node:test";
@@ -67,7 +67,7 @@ const recording = (raw) => {
   return { provider, log, writes: () => log.filter((entry) => WRITE_METHODS.has(entry.method)) };
 };
 
-// Behaves like MetaMask / Privy providers: signs the given tx as-is and broadcasts it.
+// Behaves like a MetaMask provider: signs the given tx as-is and broadcasts it.
 const simulatedEmbeddedProvider = (key) => {
   const signer = new Wallet(key, plain);
   return {
@@ -107,7 +107,7 @@ test("wallet modes keep calldata confidential on sapphire-localnet", { skip, tim
   assert.equal(getWalletMode(), "metamask", "default wallet mode must stay metamask");
   assert.equal(getWalletMode("local"), "local");
   assert.throws(() => getWalletMode("sepolia-magic"), /Unknown REACT_APP_WALLET_MODE/);
-  assert.throws(() => getWalletMode("apillon"), /Unknown REACT_APP_WALLET_MODE/);
+  for (const removed of ["apillon", "privy"]) assert.throws(() => getWalletMode(removed), /Unknown REACT_APP_WALLET_MODE/);
 
   const seller = devWallet(0);
   const outsider = devWallet(3);
@@ -126,7 +126,7 @@ test("wallet modes keep calldata confidential on sapphire-localnet", { skip, tim
 
   // One auction per mode; the mode's wallet will be its winner.
   const auctions = {};
-  for (const mode of ["metamask", "privy", "local"]) {
+  for (const mode of ["metamask", "local"]) {
     const secret = `SECRET-${mode}-${Wallet.createRandom().address}`;
     const created = await (await new Contract(factoryAddress, compiledFactory.abi, wrapEthersSigner(seller))
       .createCampaign(1, secret, `public ${mode}`, 1)).wait();
@@ -137,7 +137,7 @@ test("wallet modes keep calldata confidential on sapphire-localnet", { skip, tim
 
   // Participants: raw providers recorded, then wrapped exactly like the app wraps them.
   const participants = {};
-  for (const mode of ["metamask", "privy"]) {
+  for (const mode of ["metamask"]) {
     const rawSim = simulatedEmbeddedProvider(Wallet.createRandom().privateKey);
     const rec = recording(rawSim);
     participants[mode] = { ...rec, address: rawSim.address, wrapped: wrapForSapphire(rec.provider) };
@@ -186,7 +186,7 @@ test("wallet modes keep calldata confidential on sapphire-localnet", { skip, tim
   });
 
   await t.test("bypass checks: plaintext through the raw provider is refused by the guard; control shows the risk", async () => {
-    const mode = "privy";
+    const mode = "metamask";
     const iface = new Contract(auctions[mode].address, compiledCampaign.abi).interface;
     const plaintext = iface.encodeFunctionData("contribute");
     const rec = recording(simulatedEmbeddedProvider(Wallet.createRandom().privateKey));
@@ -243,7 +243,7 @@ test("wallet modes keep calldata confidential on sapphire-localnet", { skip, tim
       assert.equal(await campaignRead(auction).getDataWithToken(token), auction.secret, `${mode} winner must read the payload`);
 
       // Another mode's wallet (a non-winner of THIS auction) is denied.
-      const otherMode = mode === "metamask" ? "privy" : "metamask";
+      const otherMode = mode === "metamask" ? "local" : "metamask";
       const otherToken = await makeSiweToken(participants[otherMode].wrapped, participants[otherMode].address, readFactory);
       assert.equal((await attempt(campaignRead(auction).getDataWithToken(otherToken))).reverted, true, `${otherMode} must be denied on ${mode}'s auction`);
     }

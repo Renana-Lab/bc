@@ -1,7 +1,7 @@
 import { wrapEthereumProvider, isCalldataEnveloped, isCallDataPublicKeyQuery } from "@oasisprotocol/sapphire-paratime";
 import { Transaction } from "ethers";
 
-// The single choke point for every wallet mode. A raw EIP-1193 provider (MetaMask, Privy,
+// The single choke point for every wallet mode. A raw EIP-1193 provider (MetaMask,
 // local wallet) is first wrapped in a guard that REFUSES any transaction or call
 // carrying plaintext calldata, and the guarded provider is then wrapped by the Sapphire
 // paratime wrapper, which encrypts calldata before it reaches the guard. If the wrapper were

@@ -2,11 +2,11 @@ import { getWalletMode, WALLET_MODES } from "./walletMode.mjs";
 import { guardProvider } from "./sapphireWrap.mjs";
 
 describe("wallet mode", () => {
-  test("defaults to metamask and only accepts metamask|privy|local", () => {
+  test("defaults to metamask and only accepts metamask|local", () => {
     expect(getWalletMode("")).toBe("metamask");
-    expect(WALLET_MODES).toEqual(["metamask", "privy", "local"]);
+    expect(WALLET_MODES).toEqual(["metamask", "local"]);
     expect(getWalletMode("LOCAL")).toBe("local");
-    expect(() => getWalletMode("apillon")).toThrow(/Unknown REACT_APP_WALLET_MODE/);
+    for (const removed of ["apillon", "privy"]) expect(() => getWalletMode(removed)).toThrow(/Unknown REACT_APP_WALLET_MODE/);
   });
 });
 
