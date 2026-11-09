@@ -49,6 +49,7 @@ import {
 } from "../AuctionsList/AuctionsListPage";
 import { getActiveFactoryAddress } from "../../real_ethereum/marketConfig";
 import { notifyBudgetChanged } from "../../real_ethereum/budget";
+import { getBotBidderNames } from "../../telemetry/botPresence";
 import { markAuctionClosed } from "../../real_ethereum/activeAuctionRegistry";
 import {
   getEthereumAccounts,
@@ -831,6 +832,9 @@ function ShowAuctionPage() {
       </Layout>
     );
 
+  const bidderNames = getBotBidderNames();
+  const bidderLabel = (wallet) => bidderNames.get(String(wallet || "").toLowerCase()) || wallet;
+
   return (
     <Layout>
       <div className={showPageStyles.page}>
@@ -950,7 +954,7 @@ function ShowAuctionPage() {
               className={showPageStyles.subTitle}
               style={{ wordBreak: "break-all" }}
             >
-              Highest bidder: {state.highestBidder || "None"}
+              Highest bidder: {bidderLabel(state.highestBidder) || "None"}
             </p>
             <div style={{ display: "flex", justifyContent: "center" }}>
               <Button
@@ -972,7 +976,7 @@ function ShowAuctionPage() {
                     <TableHead>
                       <TableRow>
                         <TableCell className={showPageStyles.headerCell}>
-                          Bidder Address
+                          Bidder Identifier
                         </TableCell>
                         <TableCell
                           className={showPageStyles.headerCell}
@@ -1010,7 +1014,7 @@ function ShowAuctionPage() {
                               : undefined
                           }
                         >
-                          <TableCell align="center">{row.bidder}</TableCell>
+                          <TableCell align="center">{bidderLabel(row.bidder)}</TableCell>
                           <TableCell align="center">
                             {row.transactionAmount}
                           </TableCell>
