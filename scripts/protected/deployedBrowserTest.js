@@ -27,6 +27,7 @@ async function main() {
       const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
       const page = await context.newPage();
       const errors = [];
+      let signatures = 0;
       page.on('pageerror', () => errors.push('Page JavaScript error'));
       stage = `${engine}:unauthorized-direct-link`;
       await page.goto(`${site}/auction/${state.auction}`, { waitUntil: 'domcontentloaded' });
@@ -37,6 +38,7 @@ async function main() {
         if (method === 'eth_accounts' || method === 'eth_requestAccounts') return [signer.address];
         if (method === 'eth_chainId') return '0xaa36a7';
         if (method === 'eth_signTypedData_v4') {
+          signatures++;
           assert.equal(params[0].toLowerCase(), signer.address.toLowerCase());
           const data = JSON.parse(params[1]);
           return signTypedData({ privateKey: Buffer.from(signer.privateKey.slice(2), 'hex'), data, version: SignTypedDataVersion.V4 });
@@ -70,20 +72,25 @@ async function main() {
       });
       await page.screenshot({ path: path.join(output, `deployed-${engine}-winner.png`), animations: 'disabled' });
       stage = `${engine}:decrypt`;
-      const started = Date.now();
       await button.click();
+      const recover = page.getByRole('button', { name: 'Recover Access', exact: true });
+      await recover.waitFor({ state: 'visible', timeout: 45000 });
+      assert.equal(signatures, 0, 'View Data must not request a signature even on a new device');
+      const started = Date.now();
+      await recover.click();
       const result = page.locator('[class*="revealedData"]');
       await result.waitFor({ state: 'visible', timeout: 45000 });
       const text = await result.innerText();
       const marker = text.match(/PROTECTED-LIVE-[0-9a-f-]+/i)?.[0];
       assert.ok(marker && await sha256(marker) === state.expectedDigest, 'Production browser decrypted the verified dummy content');
+      assert.equal(signatures, 1, 'Explicit recovery requests exactly one wallet signature');
       const revealMs = Date.now() - started;
       stage = `${engine}:lock-revocation`;
       await page.evaluate(() => { window.automatedWalletUnlocked = false; });
       await result.waitFor({ state: 'hidden', timeout: 5000 });
       assert.equal((await page.locator('body').innerText()).includes(marker), false, 'Locking clears decrypted content');
       assert.deepEqual(errors, []);
-      report.engines.push({ engine, unauthenticatedDirectLinkBlocked: true, newDeviceWinnerDecrypted: true, lockedWalletClearedData: true, revealMs, errors });
+      report.engines.push({ engine, unauthenticatedDirectLinkBlocked: true, noImplicitSignature: true, newDeviceWinnerDecrypted: true, lockedWalletClearedData: true, revealMs, errors });
       await context.close();
     } finally { await browser.close(); }
   }

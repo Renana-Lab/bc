@@ -88,12 +88,15 @@ const api = async (path, body, token) => {
       const messages = {
         untrusted_auction: "The auction is not yet confirmed on this marketplace. Please retry after the network confirmations.",
         not_authorized: "Only the seller or the confirmed winning buyer can open this information.",
+        awaiting_confirmation: "Settlement is still being confirmed on Sepolia. No signature is needed. Please try again shortly.",
+        delivery_key_recovery_required: "The original delivery key is not available in this browser. Recover access with the same wallet.",
         payload_unavailable: "The encrypted information is not ready. No data was released; please retry shortly.",
         service_unavailable: "The network or protected storage is temporarily unavailable. Please retry shortly.",
         challenge_expired: "Wallet verification expired. Please retry and confirm the new request in MetaMask.",
       };
       const error = new Error(messages[result.error] || result.message || result.error || "Protected storage request failed");
       error.status = response.status;
+      error.code = result.error;
       throw error;
     }
     return result;
@@ -215,17 +218,13 @@ const assertRecipient = async (owner, epoch) => {
   if (epoch !== generation) throw new Error("Wallet session changed");
 };
 
-export const decryptProtectedAuction = async ({ address, wallet, expectedHash, expectedPayloadId }) => {
+export const decryptProtectedAuction = async ({ address, wallet, expectedHash, expectedPayloadId, recover = false }) => {
   const owner = await identity(wallet);
   const epoch = generation;
-  // A transaction-bound key needs no signature; a new device authenticates once.
-  let release;
-  try { release = await api("/release", { auction: address, publicKey: owner.key.publicKey }); }
-  catch (error) {
-    if (error.status !== 401 && error.status !== 403) throw error;
-    const auth = await authenticate(owner);
-    release = await api("/release", { auction: address }, auth.token);
-  }
+  // Only an explicit recovery action may ask the wallet to sign.
+  const release = recover
+    ? await api("/release", { auction: address }, (await authenticate(owner)).token)
+    : await api("/release", { auction: address, publicKey: owner.key.publicKey, walletHint: owner.wallet });
   if (release.id?.toLowerCase() !== expectedPayloadId?.toLowerCase() || release.ciphertextHash?.toLowerCase() !== expectedHash?.toLowerCase()) throw new Error("Payload identity mismatch");
   const response = await fetch(release.downloadUrl, { cache: "no-store" });
   if (!response.ok) throw new Error("Encrypted data is temporarily unavailable");

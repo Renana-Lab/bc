@@ -105,8 +105,37 @@ test('public key substitution fails before KMS decrypt', async () => {
 test('session cannot redirect delivery to arbitrary key', async () => { const h = harness(); const token = await h.login(); assert.equal((await h.request('/release', { auction, publicKey: otherKey }, token)).status, 403); });
 test('winner release requires closed and ended state; zero winner blocked', async () => {
   const h = harness(); const token = await h.login(); await h.prepare(token); await h.request('/uploads/' + nonce + '/complete', {}, token);
+  const beforeRelease = h.decrypts();
   h.state.seller = stranger; h.items.get('payload:' + nonce).wallet = stranger; h.state.sellerKeyHash = '0x' + '0'.repeat(64); h.state.winner = wallet; h.state.winnerKeyHash = hash(Buffer.from(publicKey, 'base64'));
-  assert.equal((await h.request('/release', { auction, publicKey })).status, 403); h.state.closed = true; assert.equal((await h.request('/release', { auction, publicKey })).status, 403); h.state.ended = true; assert.equal((await h.request('/release', { auction, publicKey })).status, 200); h.state.winner = '0x' + '0'.repeat(40); assert.equal((await h.request('/release', { auction, publicKey })).status, 403);
+  for (const [closed, ended] of [[false, false], [true, false], [false, true]]) {
+    Object.assign(h.state, { closed, ended });
+    const pending = await h.request('/release', { auction, publicKey });
+    assert.equal(pending.status, 409);
+    assert.equal(pending.data.error, 'awaiting_confirmation');
+    assert.equal(h.decrypts(), beforeRelease);
+  }
+  Object.assign(h.state, { closed: true, ended: true });
+  assert.equal((await h.request('/release', { auction, publicKey })).status, 200);
+  h.state.winner = '0x' + '0'.repeat(40);
+  assert.equal((await h.request('/release', { auction, publicKey })).status, 403);
+});
+test('new browser requires explicit wallet recovery, and a wallet hint never releases a key', async () => {
+  const h = harness(); const token = await h.login(); await h.prepare(token); await h.request('/uploads/' + nonce + '/complete', {}, token);
+  const beforeRelease = h.decrypts();
+  h.items.get('payload:' + nonce).wallet = stranger;
+  Object.assign(h.state, { seller: stranger, sellerKeyHash: hash(Buffer.from(otherKey, 'base64')), winner: wallet, winnerKeyHash: hash(Buffer.from(otherKey, 'base64')) });
+  const request = { auction, publicKey, walletHint: wallet };
+  assert.equal((await h.request('/release', request)).data.error, 'awaiting_confirmation');
+  assert.equal((await h.request('/release', { auction }, token)).data.error, 'awaiting_confirmation');
+  Object.assign(h.state, { closed: true, ended: true });
+  const recovery = await h.request('/release', request);
+  assert.equal(recovery.status, 409);
+  assert.equal(recovery.data.error, 'delivery_key_recovery_required');
+  assert.equal(recovery.data.wrappedKey, undefined);
+  assert.equal((await h.request('/release', { ...request, walletHint: factory })).status, 403);
+  assert.equal(h.decrypts(), beforeRelease);
+  assert.equal((await h.request('/release', { auction }, token)).status, 200);
+  assert.equal(h.decrypts(), beforeRelease + 1);
 });
 for (const [field, value] of [['member', false], ['factory', stranger], ['chainId', 1], ['version', 0], ['ciphertextHash', '0x' + '99'.repeat(32)]]) test('untrusted state rejected: ' + field, async () => {
   const h = harness(); const token = await h.login(); await h.prepare(token); await h.request('/uploads/' + nonce + '/complete', {}, token); h.state[field] = value; assert.notEqual((await h.request('/release', { auction, publicKey })).status, 200);

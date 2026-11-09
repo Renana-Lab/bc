@@ -129,8 +129,16 @@ function createService({ config, store, objects, kms, chain, verifyTypedData, pa
       if (!record?.ready || !record.versionId || record.wallet !== state.seller || record.ciphertextHash !== state.ciphertextHash || record.factory !== factory) fail(409, 'payload_unavailable');
       const wallet = s?.wallet;
       const isSeller = s ? wallet === state.seller : state.sellerKeyHash === keyHash;
-      const isWinner = state.closed && state.ended && state.winner !== '0x' + '0'.repeat(40) && (s ? wallet === state.winner : state.winnerKeyHash === keyHash);
-      if (!isSeller && !isWinner) fail(403, 'not_authorized');
+      const hasWinner = state.winner !== '0x' + '0'.repeat(40);
+      const matchesWinner = hasWinner && (s ? wallet === state.winner : state.winnerKeyHash === keyHash);
+      const settled = state.closed && state.ended;
+      // The hint selects a status message only. It never authorizes key release.
+      const hint = !s && address(body.walletHint) ? body.walletHint.toLowerCase() : null;
+      if (!isSeller && !settled && (matchesWinner || (hint && hint !== state.seller))) fail(409, 'awaiting_confirmation');
+      if (!isSeller && !(matchesWinner && settled)) {
+        if (hint === state.seller || (settled && hasWinner && hint === state.winner)) fail(409, 'delivery_key_recovery_required');
+        fail(403, 'not_authorized');
+      }
       let raw;
       try {
         raw = await kms.decrypt(b64(record.wrappedKey));

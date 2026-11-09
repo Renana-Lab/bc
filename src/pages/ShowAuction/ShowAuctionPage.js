@@ -226,6 +226,7 @@ function ShowAuctionPage() {
   const protectedMode = process.env.REACT_APP_PROTECTED_MARKET === "true";
   const [protectedText, setProtectedText] = useState("");
   const [decrypting, setDecrypting] = useState(false);
+  const [releaseNotice, setReleaseNotice] = useState(null);
   const revealGeneration = useRef(0);
   const [finalizingPayment, setFinalizingPayment] = useState(false);
   const [state, dispatch] = useReducer(reducer, initialState);
@@ -234,6 +235,7 @@ function ShowAuctionPage() {
   const { address } = useParams();
   useEffect(() => {
     setProtectedText("");
+    setReleaseNotice(null);
     revealGeneration.current += 1;
     if (!protectedMode) return undefined;
     let disposed = false;
@@ -242,6 +244,7 @@ function ShowAuctionPage() {
       if (!disposed) unsubscribeProtected = client.subscribeProtectedRevocation(() => {
         revealGeneration.current += 1;
         setProtectedText("");
+        setReleaseNotice(null);
         setDecrypting(false);
       });
     });
@@ -253,6 +256,7 @@ function ShowAuctionPage() {
         account = access.account;
         revealGeneration.current += 1;
         setProtectedText("");
+        setReleaseNotice(null);
         setDecrypting(false);
       }
     });
@@ -263,18 +267,22 @@ function ShowAuctionPage() {
       unsubscribeProtected?.();
     };
   }, [address, protectedMode]);
-  const revealProtectedData = async () => {
+  const revealProtectedData = async (recover = false) => {
     const epoch = ++revealGeneration.current;
     setDecrypting(true);
     try {
       const payload = await readOnlyCall(({ campaign }) => campaign(address).methods.getEncryptedPayload(), undefined, { preferInjected: false, allowInjectedFallback: false });
       const { decryptProtectedAuction } = await import("../../protected/client");
-      const text = await decryptProtectedAuction({ address, wallet: state.connectedAccount, expectedHash: payload[2], expectedPayloadId: payload[1] });
+      const text = await decryptProtectedAuction({ address, wallet: state.connectedAccount, expectedHash: payload[2], expectedPayloadId: payload[1], recover });
       if (epoch !== revealGeneration.current) return;
       setProtectedText(text);
+      setReleaseNotice(null);
       if (!state.displayBiddingDialog) dispatch({ type: "TOGGLE_BIDDING_DIALOG" });
     } catch (error) {
-      if (epoch === revealGeneration.current) toast.error(error.message || "Could not decrypt the data. Please retry.");
+      if (epoch === revealGeneration.current) {
+        if (["awaiting_confirmation", "delivery_key_recovery_required"].includes(error.code)) setReleaseNotice({ code: error.code, message: error.message });
+        else toast.error(error.message || "Could not decrypt the data. Please retry.");
+      }
     } finally { if (epoch === revealGeneration.current) setDecrypting(false); }
   };
   const navigate = useNavigate();
@@ -853,17 +861,23 @@ function ShowAuctionPage() {
               {!isManager && <img alt="Auction winner medal" width="80px" src={picSrc} />}
               <div className={showPageStyles.winnerTitle}>{isManager ? "Your data" : "Congrats!"}</div>
               <div className={showPageStyles.winnerLabel}>
-                {isManager ? "Your information is stored encrypted." : "You won the auction and have now access to the data"}
+                {isManager ? "Your information is stored encrypted." : protectedMode ? "You won the auction." : "You won the auction and have now access to the data"}
               </div>
               {(!state.displayBiddingDialog || (protectedMode && !protectedText)) && (
                 <Button
                   variant="contained"
                   className={showPageStyles.viewDataButton}
                   disabled={decrypting}
-                  onClick={protectedMode ? revealProtectedData : () => dispatch({ type: "TOGGLE_BIDDING_DIALOG" })}
+                  onClick={protectedMode ? () => revealProtectedData(releaseNotice?.code === "delivery_key_recovery_required") : () => dispatch({ type: "TOGGLE_BIDDING_DIALOG" })}
                 >
-                  {decrypting ? "Opening data..." : "View Data"}
+                  {decrypting ? "Opening data..." : releaseNotice?.code === "delivery_key_recovery_required" ? "Recover Access" : "View Data"}
                 </Button>
+              )}
+              {releaseNotice && (
+                <Typography variant="body2" role="status" sx={{ mt: 1.5 }}>
+                  {releaseNotice.message}
+                  {releaseNotice.code === "delivery_key_recovery_required" && " Recovery asks for one signature, not a transaction."}
+                </Typography>
               )}
             </div>
             {state.displayBiddingDialog && (!protectedMode || Boolean(protectedText)) && (

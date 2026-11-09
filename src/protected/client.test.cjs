@@ -26,6 +26,7 @@ async function harness() {
   const calls = [];
   let signatures = 0;
   let uploadIndex = 0;
+  let releaseError;
   const context = {
     exports: {}, crypto: webcrypto, TextEncoder, URL, setTimeout, clearTimeout, AbortController,
     access: { status: "connected", account: wallet }, factory,
@@ -41,18 +42,52 @@ async function harness() {
     fetch: async (url, options = {}) => {
       const body = options.body ? JSON.parse(options.body) : null;
       calls.push({ url, body, options });
+      if (url.endsWith("/release") && releaseError) {
+        return { ok: false, status: releaseError === "not_authorized" ? 403 : 409, json: async () => ({ error: releaseError }) };
+      }
       const result = url.endsWith("/config") ? { chainId: 11155111, factory, publicKey: "kms-public" } :
         url.endsWith("/challenge") ? { challengeId: "challenge", typedData: {} } :
         url.endsWith("/session") ? { token: "session-token", expiresAt: Math.floor(Date.now() / 1000) + 3600 } :
         url.endsWith("/uploads") ? { id: `payload-${++uploadIndex}`, uploadUrl: "https://storage.invalid/object" } :
-        url.endsWith("/complete") ? { ready: true, ciphertextHash: hash } : {};
+        url.endsWith("/complete") ? { ready: true, ciphertextHash: hash } :
+        url.endsWith("/release") ? { id: hash, ciphertextHash: hash, wrappedKey: "wrapped", downloadUrl: "https://storage.invalid/object" } : {};
       return { ok: true, status: 200, json: async () => result };
     },
   };
   context.module = { exports: context.exports };
   vm.runInNewContext(compiled.outputFiles[0].text, context);
-  return { client: context.module.exports, calls, context, signatures: () => signatures };
+  return { client: context.module.exports, calls, context, signatures: () => signatures, setReleaseError: code => { releaseError = code; } };
 }
+
+test("normal reveal never requests a signature, including pending or rejected releases", async () => {
+  const h = await harness();
+  const args = { address: factory, wallet, expectedHash: hash, expectedPayloadId: hash };
+  for (const code of ["awaiting_confirmation", "delivery_key_recovery_required", "not_authorized"]) {
+    h.setReleaseError(code);
+    await assert.rejects(h.client.decryptProtectedAuction(args), { code });
+  }
+  h.setReleaseError(null);
+  assert.equal(await h.client.decryptProtectedAuction(args), "private data");
+  assert.equal(h.signatures(), 0);
+  assert.equal(h.calls.some(call => call.url.endsWith("/challenge")), false);
+  for (const call of h.calls.filter(call => call.url.endsWith("/release"))) {
+    assert.equal(call.body.walletHint, wallet);
+    assert.equal(call.body.publicKey, "spki");
+    assert.equal(call.options.headers.Authorization, undefined);
+  }
+});
+
+test("explicit recovery signs once and uses the wallet-bound session for repeat recovery", async () => {
+  const h = await harness();
+  const args = { address: factory, wallet, expectedHash: hash, expectedPayloadId: hash, recover: true };
+  assert.equal(await h.client.decryptProtectedAuction(args), "private data");
+  assert.equal(await h.client.decryptProtectedAuction(args), "private data");
+  assert.equal(h.signatures(), 1);
+  for (const call of h.calls.filter(call => call.url.endsWith("/release"))) {
+    assert.deepEqual(call.body, { auction: factory });
+    assert.equal(call.options.headers.Authorization, "Bearer session-token");
+  }
+});
 
 test("session seconds are normalized and reused across independent creations", async () => {
   const h = await harness();

@@ -54,10 +54,10 @@ async function main() {
           return json(200, { ready: true, ciphertextHash: record.ciphertextHash });
         }
         if (route === '/release') {
-          if (!req.headers.authorization) return json(401, { message: 'Fixture requires session' });
           const record = fixture.latest;
-          const rawKey = await cryptoModule.unwrapKey(record.wrappedKey, kms.privateKey);
           const sessionPublic = fixture.calls.filter(call => call.path === '/fixture/challenge').at(-1).body.publicKey;
+          if (!req.headers.authorization && body.publicKey !== sessionPublic) return json(409, { error: 'delivery_key_recovery_required' });
+          const rawKey = await cryptoModule.unwrapKey(record.wrappedKey, kms.privateKey);
           try { return json(200, { id: record.id, ciphertextHash: record.ciphertextHash,
             wrappedKey: await cryptoModule.wrapKey(rawKey, sessionPublic), downloadUrl: `${base}/fixture/object/${record.id}` }); }
           finally { rawKey.fill(0); }
@@ -184,7 +184,8 @@ async function main() {
         }), { expectedHash: other.ciphertextHash, expectedPayloadId: other.payloadId });
         assert.equal(decrypted, 'Browser-private-marker-7391');
         assert.equal(await page.evaluate(() => window.signatures), 1);
-        engine.checks.push('Same text in distinct operations gets unique nonces; actual worker AES/RSA roundtrip');
+        assert.equal(fixture.calls.filter(call => call.path === '/fixture/release').at(-1).body.publicKey !== undefined, true);
+        engine.checks.push('Unique nonces and real worker AES/RSA roundtrip with transaction-bound reveal');
         fixture.delayComplete = 200;
         const revoked = await page.evaluate(async () => {
           let notifications = 0;
