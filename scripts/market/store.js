@@ -262,7 +262,9 @@ class MarketStore {
     const item = this.auctions().find(a => a.id === id);
     check(item, 'Auction not found', 404);
     const canViewHistory = item.seller_id === actor || this.user(actor).role === 'admin';
-    const bids = canViewHistory ? this.all('SELECT b.id,b.amount,b.cumulative,b.created_at,u.email bidder FROM bids b JOIN users u ON u.id=b.user_id WHERE auction_id=? ORDER BY b.rowid', id) : [];
+    const bids = canViewHistory ? this.all(`SELECT b.id,b.amount,b.cumulative,b.created_at,
+      CASE WHEN u.role='bot' THEN u.name ELSE u.email END AS bidder
+      FROM bids b JOIN users u ON u.id=b.user_id WHERE auction_id=? ORDER BY b.rowid`, id) : [];
     const payload = item.finalized_at && item.winner_id === actor ? this.one('SELECT payload FROM auctions WHERE id=?', id).payload : undefined;
     return {
       ...item,

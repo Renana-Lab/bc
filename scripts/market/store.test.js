@@ -57,6 +57,14 @@ async function fixture(t, file) {
     }
   };
 }
+test('bidding history shows the configured bot name and the human identifier', async t => {
+  const { s, admin, seller, a, auction } = await fixture(t);
+  const bot = await s.createUser({ name: 'Dana', email: 'generated@bot.invalid', role: 'bot' }, admin.id);
+  const id = auction();
+  s.bid(id, 50, bot.id, randomUUID());
+  s.bid(id, 60, a.id, randomUUID());
+  assert.deepEqual(s.auction(id, seller.id).bids.map(bid => bid.bidder), ['Dana', 'a@example.com']);
+});
 test('cumulative bids reserve full amount, release old winner, finalize exactly once', async t => {
   const {
     s,
