@@ -1,5 +1,5 @@
 import { JsonRpcProvider, Wallet, encryptKeystoreJson, getBytes, isHexString } from "ethers";
-import { assertEnvelopedCalldata } from "./sapphireWrap.mjs";
+import { assertEnvelopedCalldata, assertRequestIsConfidential } from "./sapphireWrap.mjs";
 
 // Mode "local": a key generated in this browser, kept as an encrypted (scrypt + AES) keystore
 // in IndexedDB, unlocked with a passphrase. The decrypted key exists only inside this closure
@@ -43,7 +43,7 @@ export const createIndexedDbStorage = ({ dbName = "data-market-local-wallet", st
 
 const walletError = (code, message) => Object.assign(new Error(message), { code });
 
-export const createLocalWallet = ({ storage, scryptN = 2 ** 15 } = {}) => {
+export const createLocalWallet = ({ storage, scryptN = 2 ** 17 } = {}) => {
   if (!storage) throw new Error("A storage adapter is required.");
   let signer = null;
   const listeners = new Set();
@@ -59,7 +59,7 @@ export const createLocalWallet = ({ storage, scryptN = 2 ** 15 } = {}) => {
     isUnlocked() { return Boolean(signer); },
     get address() { return signer ? signer.address : ""; },
     async create(passphrase) {
-      if (!passphrase || passphrase.length < 8) throw new Error("Choose a passphrase of at least 8 characters.");
+      if (!passphrase || passphrase.length < 12) throw new Error("Choose a passphrase of at least 12 characters.");
       if (await storage.get(KEY)) throw new Error("A local wallet already exists in this browser. Unlock it or forget it first.");
       const wallet = Wallet.createRandom();
       await storage.set(KEY, await encrypt(wallet, passphrase));
@@ -83,7 +83,8 @@ export const createLocalWallet = ({ storage, scryptN = 2 ** 15 } = {}) => {
       if (!json) throw new Error("No local wallet in this browser.");
       return json;
     },
-    async importEncryptedBackup(json, passphrase) {
+    async importEncryptedBackup(json, passphrase, { overwrite = false } = {}) {
+      if (!overwrite && await storage.get(KEY)) throw new Error("A local wallet already exists in this browser. Forget it first.");
       const decrypted = await Wallet.fromEncryptedJson(json, passphrase).catch(() => {
         throw new Error("Backup could not be decrypted with that passphrase.");
       });
@@ -153,6 +154,8 @@ export const createLocalProvider = ({ wallet, network }) => {
         case "eth_signTypedData_v4":
           throw walletError(4200, `${method} is not supported by the local wallet.`);
         default:
+          // Reads and raw broadcasts must be enveloped as well (defense in depth under the wrapper).
+          assertRequestIsConfidential({ method, params });
           return rpc.send(method, params);
       }
     },

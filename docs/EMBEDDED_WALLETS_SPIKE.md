@@ -21,7 +21,9 @@ app (web3.js / personal_sign) -> paratime wrapper (encrypts calldata) -> guard -
   `input`), rejects `eth_sendRawTransaction` with plaintext calldata, `wallet_sendCalls` and `eth_sendUserOperation`.
   The only plaintext call allowed is the wrapper's own public calldata-key query. Finding while building this: the
   wrapper only encrypts `params[0].data`, so a caller passing `input` would have skipped encryption; the guard closes that.
-* The local wallet provider additionally refuses to sign plaintext calldata itself.
+* The local wallet provider applies the same check to everything it signs or forwards (reads and raw broadcasts too).
+* The guard checks envelope *format* (`isCalldataEnveloped`); it prevents accidental plaintext, it does not prove ciphertext quality. Methods that can carry calldata but cannot be encrypted (`eth_createAccessList`, `debug_traceCall`, `eth_simulateV1`, `eth_callMany`, `wallet_sendCalls`, `eth_sendUserOperation`) are rejected.
+* Before a Privy/local session exists, public reads use the plain fallback RPC transport, exactly like MetaMask-absent behavior; writes need a verified wallet.
 * Privy hooks that send transactions on their own (`useSendTransaction`, `wallet.sendTransaction`) are not used.
 * SIWE (`personal_sign` -> `factory.login` -> `getDataWithToken`) is unchanged and works with every mode.
 
@@ -29,11 +31,11 @@ app (web3.js / personal_sign) -> paratime wrapper (encrypts calldata) -> guard -
 
 | | MetaMask (default) | Privy | Local (browser keystore) |
 |---|---|---|---|
-| 1. Bid calldata encrypted (localnet) | **Yes**: recorder saw only enveloped `data`; on-chain tx `isCalldataEnveloped` = true | **Yes** with a *simulated* Privy-style raw provider; real Privy login **pending** (manual) | **Yes**: real local wallet implementation, same evidence |
+| 1. Bid calldata encrypted (localnet) | **Yes** with a *simulated* MetaMask-style raw provider (real MetaMask not run in this spike; it was verified earlier on the parent branch only at the wrapper level): recorder saw only enveloped `data`; on-chain tx `isCalldataEnveloped` = true | **Yes** with a *simulated* Privy-style raw provider; real Privy login **pending** (manual) | **Yes**: real local wallet implementation, same evidence |
 | 2. SIWE + `getDataWithToken` | Winner reads payload; other mode wallets denied | Same (simulated); real popup flow pending | Same |
 | 3. Gas, zero-balance bid | Needs funds | Needs funds (Privy does not sponsor on a custom localnet chain here) | Needs funds |
 | 4. Recovery | Seed phrase in MetaMask | Log in with email on any browser (per Privy docs, not verified here) | Same browser + passphrase: yes. Cleared site data: key gone unless the encrypted backup file was downloaded. Other browser: only via backup + passphrase |
-| 5. Custody | User's extension | Privy-hosted wallet infrastructure (key sharded; exportable per Privy docs). Privy account/app dependency | Key encrypted (scrypt + AES keystore) in this browser's IndexedDB, decrypted in memory only while unlocked; never sent anywhere |
+| 5. Custody | User's extension | Privy-hosted wallet infrastructure (key sharded; exportable per Privy docs). Privy account/app dependency | Key encrypted (scrypt N=2^17 + AES keystore) in this browser's IndexedDB; the decrypted key is held in memory while unlocked (JS cannot zero it on lock; GC frees it); never sent anywhere. The unlocked wallet signs without per-transaction confirmation (spike only) |
 
 Automated evidence: `scripts/sapphire/walletModes.test.mjs` (localnet). It also proves the bypass checks (guard refuses
 plaintext via `data`, `input`, raw tx, `wallet_sendCalls`; refused requests never reach the wallet) and that the local
@@ -89,4 +91,5 @@ Report each as passed only after you did it.
 * Real Privy (login, modals, `getEthereumProvider` behavior on a custom chain) was not run live.
 * `@privy-io/react-auth` adds a lazy ~1.7 MB chunk (loaded only in privy mode); install used `--ignore-scripts`
   because an optional native module (`bufferutil`) fails to build on Windows/Node 24.
+* `@stripe/stripe-js` was added only because Privy's bundle imports it (Vite build fails without it).
 * A Privy transaction modal and the `showWalletUIs` setting were left at defaults.

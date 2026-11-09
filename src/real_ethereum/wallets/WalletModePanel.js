@@ -25,8 +25,8 @@ const LocalWalletPanel = () => {
   const refresh = async () => setState({ exists: await wallet.exists(), address: wallet.address });
   useEffect(() => {
     setModeProvider(provider, async () => wallet.isUnlocked());
-    void refresh();
-    return wallet.subscribe(() => void refresh());
+    refresh().catch(() => setMessage("Browser storage is unavailable; the local wallet cannot be used."));
+    return wallet.subscribe(() => void refresh().catch(() => {}));
   }, [wallet, provider]);
 
   const run = async (action) => {
@@ -37,8 +37,10 @@ const LocalWalletPanel = () => {
   const downloadBackup = async () => {
     const blob = new Blob([await wallet.exportEncryptedBackup()], { type: "application/json" });
     const link = Object.assign(document.createElement("a"), { href: URL.createObjectURL(blob), download: "local-wallet-encrypted-backup.json" });
+    document.body.appendChild(link);
     link.click();
-    URL.revokeObjectURL(link.href);
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(link.href), 10_000);
   };
 
   return (
@@ -54,7 +56,7 @@ const LocalWalletPanel = () => {
       ) : (
         <>
           <div>{state.exists ? "Enter your passphrase to unlock." : "Create a wallet. The key stays encrypted in this browser only. Clearing site data deletes it, so download the encrypted backup."}</div>
-          <input type="password" autoComplete="off" value={passphrase} onChange={(event) => setPassphrase(event.target.value)} placeholder="Passphrase (8+ chars)" />{" "}
+          <input type="password" autoComplete="off" value={passphrase} onChange={(event) => setPassphrase(event.target.value)} placeholder="Passphrase (12+ chars)" />{" "}
           <button onClick={() => run(() => (state.exists ? wallet.unlock(passphrase) : wallet.create(passphrase)))}>{state.exists ? "Unlock" : "Create"}</button>
         </>
       )}

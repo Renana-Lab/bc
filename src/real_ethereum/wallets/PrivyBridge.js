@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { PrivyProvider, usePrivy, useWallets } from "@privy-io/react-auth";
 import { defineChain } from "viem";
 import { setModeProvider } from "./modeProvider";
@@ -21,6 +21,7 @@ const chainFor = (network) =>
 const Session = ({ network, boxStyle }) => {
   const { ready, authenticated, login, logout } = usePrivy();
   const { wallets } = useWallets();
+  const [error, setError] = useState("");
   const embedded = wallets.find((wallet) => wallet.walletClientType === "privy");
 
   useEffect(() => {
@@ -33,13 +34,18 @@ const Session = ({ network, boxStyle }) => {
       await embedded.switchChain(network.chainId);
       const provider = await embedded.getEthereumProvider();
       if (!cancelled) setModeProvider(provider);
-    })().catch(() => { if (!cancelled) setModeProvider(null); });
+    })().catch((failure) => {
+      if (cancelled) return;
+      setModeProvider(null);
+      setError(`Privy wallet unavailable on ${network.chainName}: ${failure?.message || "unknown error"}`);
+    });
     return () => { cancelled = true; };
   }, [ready, authenticated, embedded?.address, network.chainId]);
 
   return (
     <div style={boxStyle} data-testid="privy-wallet-panel">
       <strong>Privy wallet (spike)</strong>
+      {error ? <div role="alert">{error}</div> : null}
       {!ready ? <div>Loading…</div> : authenticated ? (
         <>
           <div style={{ wordBreak: "break-all" }}>{embedded ? `Account: ${embedded.address}` : "Creating wallet…"}</div>
@@ -55,10 +61,10 @@ const Session = ({ network, boxStyle }) => {
 const PrivyBridge = ({ boxStyle }) => {
   const appId = process.env.REACT_APP_PRIVY_APP_ID;
   const network = getTargetNetwork();
+  const chain = useMemo(() => chainFor(network), [network]);
   if (!appId) {
     return <div style={boxStyle}>Privy mode needs REACT_APP_PRIVY_APP_ID in .env.</div>;
   }
-  const chain = chainFor(network);
   return (
     <PrivyProvider
       appId={appId}

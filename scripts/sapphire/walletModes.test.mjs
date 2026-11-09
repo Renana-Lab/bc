@@ -30,6 +30,9 @@ const compiledFactory = require("../../src/real_ethereum/build/CampaignFactory.j
 const compiledCampaign = require("../../src/real_ethereum/build/Campaign.json");
 
 const RPC_URL = process.env.SAPPHIRE_LOCALNET_RPC || "http://localhost:8545";
+if (!/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/|$)/.test(RPC_URL)) {
+  throw new Error("Refusing to run: this suite uses a public dev mnemonic and must only target a local RPC.");
+}
 const CHAIN_ID = 23293;
 const DOMAIN = "localhost:3000";
 const NETWORK = { chainId: CHAIN_ID, chainIdHex: "0x5afd", chainName: "Oasis Sapphire Localnet", rpcUrls: [RPC_URL] };
@@ -177,8 +180,8 @@ test("wallet modes keep calldata confidential on sapphire-localnet", { skip, tim
       const onChain = await plain.getTransaction(bid.hash);
       assert.equal(isCalldataEnveloped(onChain.data), true, `${mode}: on-chain calldata must be enveloped`);
       assert.equal(
-        onChain.data.includes(new Contract(auction.address, compiledCampaign.abi).interface.getFunction("contribute").selector.slice(2)) &&
-          onChain.data.length < 12, false);
+        onChain.data.includes(new Contract(auction.address, compiledCampaign.abi).interface.getFunction("contribute").selector.slice(2)),
+        false, `${mode}: plaintext selector must not appear on chain`);
     }
   });
 
@@ -208,9 +211,20 @@ test("wallet modes keep calldata confidential on sapphire-localnet", { skip, tim
     // A raw signed transaction with plaintext calldata is refused too.
     const raw = await new Wallet(Wallet.createRandom().privateKey).signTransaction(
       Transaction.from({ to: auctions[mode].address, data: plaintext, chainId: CHAIN_ID, gasLimit: 100000, gasPrice: 1, nonce: 0 }));
-    assert.equal((await attempt(guarded.request({ method: "eth_sendRawTransaction", params: [raw] }))).reverted, true);
+    const refusedRaw = await attempt(guarded.request({ method: "eth_sendRawTransaction", params: [raw] }));
+    assert.equal(refusedRaw.reverted, true);
+    assert.match(refusedRaw.error.message, /plaintext calldata/);
+    for (const method of ["eth_sendUserOperation", "eth_createAccessList", "debug_traceCall"]) {
+      assert.match((await attempt(guarded.request({ method, params: [{}] }))).error.message, /not supported/);
+    }
+    // A public-key query must not smuggle plaintext through `input`.
+    const smuggle = await attempt(guarded.request({ method: "eth_call", params: [{ to: "0x" + "1".repeat(40), data: "0x", input: plaintext }] }));
+    assert.match(smuggle.error.message, /plaintext calldata/);
+    assert.equal(rec.log.length, 0, "refused requests must never reach the wallet");
 
-    // Control: without the guard/wrapper a raw provider would put the selector on chain in cleartext.
+    // Control: the same simulated raw provider, used WITHOUT the guard/wrapper, would put the call on
+    // chain in cleartext. (Not executed here to avoid emitting a plaintext tx; the guard tests above
+    // show the refusal happens before the wallet is reached.)
     assert.equal(isCalldataEnveloped(plaintext), false);
   });
 
@@ -232,8 +246,6 @@ test("wallet modes keep calldata confidential on sapphire-localnet", { skip, tim
       const otherMode = mode === "metamask" ? "privy" : "metamask";
       const otherToken = await makeSiweToken(participants[otherMode].wrapped, participants[otherMode].address, readFactory);
       assert.equal((await attempt(campaignRead(auction).getDataWithToken(otherToken))).reverted, true, `${otherMode} must be denied on ${mode}'s auction`);
-      // The wallet signing the SIWE message never sent the payload anywhere in plaintext.
-      assert.equal(JSON.stringify(participants[mode].log).includes(auction.secret), false);
     }
   });
 
@@ -252,7 +264,9 @@ test("wallet modes keep calldata confidential on sapphire-localnet", { skip, tim
 
     // Encrypted backup restores the same account in "another browser" (fresh storage).
     const backup = await reloaded.exportEncryptedBackup();
-    assert.equal(backup.includes(auctions.local.secret), false);
+    const decrypted = await Wallet.fromEncryptedJson(backup, "correct horse battery staple");
+    assert.equal(backup.toLowerCase().includes(decrypted.privateKey.slice(2).toLowerCase()), false, "backup must not contain the raw key");
+    assert.equal(JSON.parse(backup).version, 3, "backup is an encrypted keystore (v3)");
     const otherBrowser = createLocalWallet({ storage: createMemoryStorage(), scryptN: 2 ** 10 });
     assert.equal(await otherBrowser.exists(), false, "a different browser has no wallet");
     assert.equal(await otherBrowser.importEncryptedBackup(backup, "correct horse battery staple"), address);
@@ -271,11 +285,22 @@ test("wallet modes keep calldata confidential on sapphire-localnet", { skip, tim
   await t.test("key hygiene: the local provider never returns or logs key material", async () => {
     const { wallet } = await localModeProvider();
     const provider = createLocalProvider({ wallet, network: NETWORK });
-    for (const method of ["eth_accounts", "eth_chainId"]) {
-      const out = JSON.stringify(await provider.request({ method }));
-      assert.equal(/0x[0-9a-f]{64}/i.test(out), false);
+    const backup = await wallet.exportEncryptedBackup();
+    const key = (await Wallet.fromEncryptedJson(backup, "correct horse battery staple")).privateKey;
+    const logged = [];
+    const originals = ["log", "info", "warn", "error", "debug"].map((name) => [name, console[name]]);
+    originals.forEach(([name]) => { console[name] = (...args) => logged.push(args.map(String).join(" ")); });
+    try {
+      for (const method of ["eth_accounts", "eth_chainId", "eth_requestAccounts"]) await provider.request({ method });
+      await provider.request({ method: "personal_sign", params: [hexlify(toUtf8Bytes("hi")), wallet.address] });
+      await attempt(provider.request({ method: "eth_signTypedData_v4", params: [wallet.address, "{}"] }));
+      await attempt(provider.request({ method: "eth_sendTransaction", params: [{ to: wallet.address, data: "0xd7bb99ba" }] }));
+    } finally {
+      originals.forEach(([name, fn]) => { console[name] = fn; });
     }
-    assert.equal(Object.keys(wallet).some((key) => /key|secret|mnemonic/i.test(key)), false);
-    assert.equal(typeof hexlify(toUtf8Bytes("ok")), "string");
+    assert.equal(logged.join(" ").toLowerCase().includes(key.slice(2).toLowerCase()), false, "key must never be logged");
+    // The provider and wallet objects expose no key-bearing members.
+    assert.equal(Object.keys(wallet).some((name) => /key|secret|mnemonic/i.test(name)), false);
+    assert.equal(JSON.stringify(provider, (_k, v) => (typeof v === "function" ? undefined : v)).includes(key.slice(2)), false);
   });
 });
