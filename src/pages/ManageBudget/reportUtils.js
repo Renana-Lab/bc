@@ -369,10 +369,10 @@ export const readAuctionOption = async (address, index) => {
     minimumContribution: summary[0],
     seller: summary[3],
     highestBid: summary[4],
-    dataDescription: summary[6],
-    highestBidder: summary[7],
-    endTime: summary[9],
-    endDate: toDateInputValue(summary[9]),
+    dataDescription: summary[5],
+    highestBidder: summary[6],
+    endTime: summary[8],
+    endDate: toDateInputValue(summary[8]),
   };
 };
 
@@ -448,11 +448,12 @@ export const readAuctionReport = async (
     approversCount: summary[2],
     seller: summary[3],
     highestBid: summary[4],
-    dataForSell: summary[5],
-    dataDescription: summary[6],
-    highestBidder: summary[7],
-    addresses: summary[8] || [],
-    endTime: summary[9],
+    // dataForSell is confidential on Sapphire and is never returned by getSummary.
+    dataForSell: "",
+    dataDescription: summary[5],
+    highestBidder: summary[6],
+    addresses: summary[7] || [],
+    endTime: summary[8],
     closed: closedResult === true,
     closedReadError:
       closedResult && typeof closedResult === "object"
@@ -1455,7 +1456,7 @@ const buildCoreReportTables = (reports, errors, generatedAt, options = {}) => {
     "Auction Address": auction.address,
     "Etherscan URL": `${SEPOLIA_ADDRESS_URL}${auction.address}`,
     Description: auction.dataDescription,
-    "Data For Sale": auction.dataForSell,
+    "Data For Sale": "[confidential]",
     "Seller Address": auction.seller,
     "Minimum Bid (wei)": auction.minimumContribution,
     "Highest Bid (wei)": auction.highestBid,
@@ -1478,7 +1479,7 @@ const buildCoreReportTables = (reports, errors, generatedAt, options = {}) => {
       "Auction Address": auction.address,
       "Auction Etherscan URL": `${SEPOLIA_ADDRESS_URL}${auction.address}`,
       Description: auction.dataDescription,
-      "Data For Sale": auction.dataForSell,
+      "Data For Sale": "[confidential]",
       "Seller Address": auction.seller,
       "Seller Etherscan URL": `${SEPOLIA_ADDRESS_URL}${auction.seller}`,
       "Minimum Bid (wei)": auction.minimumContribution,

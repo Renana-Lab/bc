@@ -2,6 +2,8 @@
 
 pragma solidity ^0.8.9;
 
+import {SiweAuth} from "@oasisprotocol/sapphire-contracts/contracts/auth/SiweAuth.sol";
+
 contract Campaign {
     CampaignFactory public factory;
 
@@ -38,7 +40,10 @@ contract Campaign {
 
     address public manager;
     uint256 public minimumContribution;
-    string public dataForSell;
+    // Confidential: no public getter. Readable only through getData() by the winner.
+    // Only meaningful on Oasis Sapphire, where storage and calldata are encrypted and
+    // view calls are authenticated (msg.sender is the signer). Never emit or return it elsewhere.
+    string private dataForSell;
     string public dataDescription;
 
     mapping(address => bool) public approvers;
@@ -251,9 +256,29 @@ contract Campaign {
         return bidLedger[index];
     }
 
+    // Winner-only read of the confidential payload.
+    //
+    // getData(): authenticates by msg.sender. On Sapphire an unauthenticated
+    // eth_call has msg.sender == address(0), so it can never match a real winner;
+    // only a transaction or an authenticated call is accepted.
+    // getDataWithToken(): authenticates with a SIWE bearer token issued by the
+    // factory's login(), so a wallet signs once per session instead of per read.
     function getData() public view returns (string memory) {
+        return _readData(msg.sender);
+    }
+
+    function getDataWithToken(bytes calldata token)
+        public
+        view
+        returns (string memory)
+    {
+        return _readData(factory.authenticate(token));
+    }
+
+    function _readData(address reader) private view returns (string memory) {
         require(closed, "Auction not finalized");
-        require(msg.sender == highestBidder, "Only winner can access the data");
+        require(highestBidder != address(0), "No winner");
+        require(reader == highestBidder, "Only winner can access the data");
         return dataForSell;
     }
 
@@ -271,7 +296,6 @@ contract Campaign {
             address,
             uint256,
             string memory,
-            string memory,
             address,
             address[] memory,
             uint256
@@ -283,7 +307,6 @@ contract Campaign {
             approversCount,
             manager,
             highestBid,
-            dataForSell,
             dataDescription,
             highestBidder,
             addresses,
@@ -334,7 +357,7 @@ contract Campaign {
     }
 }
 
-contract CampaignFactory {
+contract CampaignFactory is SiweAuth {
     event AuctionCreated(address campaignAddress);
     event AuctionCreatedDetailed(
         address indexed campaignAddress,
@@ -356,6 +379,15 @@ contract CampaignFactory {
         address indexed campaignAddress,
         bytes reason
     );
+
+    // `inDomain` is the web origin host the SIWE login message must name
+    // (for example "localhost:3000"); see docs/SAPPHIRE_CONFIDENTIAL_MARKETPLACE.md.
+    constructor(string memory inDomain) SiweAuth(inDomain) {}
+
+    // Used by Campaign.getDataWithToken. Returns address(0) for an empty token.
+    function authenticate(bytes calldata token) external view returns (address) {
+        return authMsgSender(token);
+    }
 
     uint256 defaultBudget = 2000;
     address payable[] public deployedCampaigns;

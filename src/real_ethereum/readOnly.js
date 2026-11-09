@@ -3,6 +3,8 @@ import CampaignFactory from "./build/CampaignFactory.json";
 import Campaign from "./build/Campaign.json";
 import { getActiveFactoryAddress } from "./marketConfig";
 import { getEthereumProvider } from "./ethereumProvider";
+import { getSapphireProvider } from "./sapphireProvider";
+import { getTargetNetwork } from "./sapphireNetworks";
 import {
   createRpcPoolError,
   getConfiguredRpcUrls,
@@ -41,13 +43,29 @@ let injectedProviderRef = null;
 let injectedWeb3 = null;
 const contractCacheByWeb3 = new WeakMap();
 
+// Reads through the wallet only make sense while it is on the configured Sapphire
+// network; otherwise the RPC pool is used. The chain is tracked asynchronously.
+let injectedChainMatches = false;
+let chainWatchedProvider = null;
+const watchInjectedChain = (provider) => {
+  if (chainWatchedProvider === provider) return;
+  chainWatchedProvider = provider;
+  const update = (chainId) => {
+    injectedChainMatches =
+      String(chainId || "").toLowerCase() === getTargetNetwork().chainIdHex;
+  };
+  provider.request({ method: "eth_chainId" }).then(update, () => update(""));
+  provider.on?.("chainChanged", update);
+};
+
 const getInjectedWeb3 = () => {
   const provider = getEthereumProvider();
   if (!provider) return null;
+  watchInjectedChain(provider);
 
   if (injectedProviderRef !== provider || !injectedWeb3) {
     injectedProviderRef = provider;
-    injectedWeb3 = new Web3(provider);
+    injectedWeb3 = new Web3(getSapphireProvider(provider));
   }
 
   return injectedWeb3;
@@ -58,7 +76,8 @@ const getProviderSequence = (
   allowInjectedFallback = DEFAULT_ALLOW_INJECTED_FALLBACK
 ) => {
   const providers = [];
-  const injectedWeb3Instance = getInjectedWeb3();
+  const maybeInjectedWeb3 = getInjectedWeb3();
+  const injectedWeb3Instance = injectedChainMatches ? maybeInjectedWeb3 : null;
   const injectedProvider = injectedWeb3Instance
     ? { injected: true, web3: injectedWeb3Instance }
     : null;

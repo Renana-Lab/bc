@@ -11,6 +11,7 @@ import { useParams, useNavigate, useLocation } from "react-router-dom";
 import moment from "moment";
 import Layout from "../../components/Layout";
 import Campaign from "../../real_ethereum/campaign";
+import { readWinnerData } from "../../real_ethereum/confidentialData";
 import ContributeForm from "../../components/ContributeForm";
 import toast from "react-hot-toast";
 import { readOnlyCall } from "../../real_ethereum/readOnly";
@@ -314,11 +315,12 @@ function ShowAuctionPage() {
       const approversCount = summary[2];
       const manager = summary[3];
       const highestBid = summary[4];
-      let dataForSell = summaryIsLight ? "" : summary[5];
-      const dataDescription = summaryIsLight ? summary[5] : summary[6];
-      const highestBidder = summaryIsLight ? summary[6] : summary[7];
-      const addresses = summaryIsLight ? [] : summary[8];
-      const endTime = summaryIsLight ? summary[7] : summary[9];
+      // dataForSell is confidential: only the winner can fetch it (see below).
+      let dataForSell = "";
+      const dataDescription = summary[5];
+      const highestBidder = summary[6];
+      const addresses = summaryIsLight ? [] : summary[7];
+      const endTime = summaryIsLight ? summary[7] : summary[8];
       const closedFromSummary = summaryIsLight ? Boolean(summary[8]) : null;
       const auctionEnded = Number(endTime) * 1000 < Date.now();
       const accountKey = account.toLowerCase();
@@ -370,10 +372,8 @@ function ShowAuctionPage() {
         summaryIsLight && userParticipated ? [account] : addresses;
 
       if (auctionEnded && closed && userIsHighestBidder && !dataForSell) {
-        dataForSell = await auctionInstance.methods
-          .getData()
-          .call({ from: account })
-          .catch(() => "");
+        // Signs one SIWE message per session, then reads with a bearer token.
+        dataForSell = await readWinnerData(address, account).catch(() => "");
       }
 
       // rawTransactions: [{ bidderAddress, value, time }, ...]   // time in SECONDS (string/number)

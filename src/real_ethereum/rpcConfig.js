@@ -1,8 +1,7 @@
-const DEFAULT_RPC_URLS = [
-  "https://sepolia.gateway.tenderly.co",
-  "https://sepolia.rpc.thirdweb.com",
-  "https://ethereum-sepolia-rpc.publicnode.com",
-];
+import { getTargetNetwork } from "./sapphireNetworks";
+
+// Public Sapphire RPCs serve unencrypted reads of public data only.
+const getDefaultRpcUrls = () => getTargetNetwork().rpcUrls;
 
 const endpointHealth = new Map();
 const endpointLanes = new Map();
@@ -67,14 +66,10 @@ const splitRpcUrls = (value) =>
     .filter(Boolean);
 
 export const getConfiguredRpcUrls = () => {
-  const infuraKey = String(process.env.REACT_APP_INFURA_KEY || "").trim();
-  const alchemyKey = String(process.env.REACT_APP_ALCHEMY_API_KEY || "").trim();
   const configured = [
     ...splitRpcUrls(process.env.REACT_APP_RPC_URLS),
     normalizeRpcUrl(process.env.REACT_APP_RPC_URL),
-    infuraKey ? `https://sepolia.infura.io/v3/${infuraKey}` : "",
-    alchemyKey ? `https://eth-sepolia.g.alchemy.com/v2/${alchemyKey}` : "",
-    ...DEFAULT_RPC_URLS,
+    ...getDefaultRpcUrls(),
   ].filter(Boolean);
 
   return [...new Set(configured)];
@@ -374,7 +369,7 @@ export const getFriendlyRpcError = (error) => {
   const kind = getRpcFailureKind(error);
 
   if (kind === "unsupported-plan") {
-    return "An RPC endpoint does not support Sepolia on its current plan and has been disabled for this session.";
+    return "An RPC endpoint does not support this network on its current plan and has been disabled for this session.";
   }
 
   if (kind === "capacity") {

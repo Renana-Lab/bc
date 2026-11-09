@@ -218,7 +218,7 @@ async function finalizeReadyAuctions(factoryAddress) {
           return refundHash ? { address, refundHash } : null;
         }
 
-        if (!isEnded(summary[9], chainTimestamp)) return null;
+        if (!isEnded(summary[8], chainTimestamp)) return null;
 
         inFlight.add(address);
         const gas = await withRpcRetry((web3) =>

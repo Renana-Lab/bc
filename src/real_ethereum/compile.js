@@ -36,7 +36,28 @@ const input = {
 console.log("🛠 Compiling contracts...");
 console.log("🧪 Using solc version:", solc.version());
 
-const compiled = JSON.parse(solc.compile(JSON.stringify(input)));
+// Resolve package imports (e.g. @oasisprotocol/sapphire-contracts) from node_modules.
+// Sapphire's EVM does not execute MCOPY (Cancun), which OpenZeppelin >= 5.2 emits in
+// helpers pulled in by Strings. Resolve OpenZeppelin from the pinned 5.0.2 copy instead.
+const OZ_PREFIX = "@openzeppelin/contracts/";
+const OZ_SAPPHIRE_COMPAT = "oz-sapphire-compat/";
+const findImports = (requestedPath) => {
+  const importPath = requestedPath.startsWith(OZ_PREFIX)
+    ? OZ_SAPPHIRE_COMPAT + requestedPath.slice(OZ_PREFIX.length)
+    : requestedPath;
+  try {
+    const resolved = require.resolve(importPath, {
+      paths: [path.resolve(__dirname, "../..")],
+    });
+    return { contents: fs.readFileSync(resolved, "utf8") };
+  } catch (error) {
+    return { error: `File not found: ${importPath}` };
+  }
+};
+
+const compiled = JSON.parse(
+  solc.compile(JSON.stringify(input), { import: findImports })
+);
 const compilationErrors = (compiled.errors || []).filter(
   (entry) => entry.severity === "error"
 );

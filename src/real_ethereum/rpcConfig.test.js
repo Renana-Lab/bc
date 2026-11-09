@@ -36,13 +36,11 @@ describe("RPC failure classification", () => {
     expect(getFriendlyRpcError(error)).toMatch(/disabled for this session/i);
   });
 
-  test("ships a redundant fallback pool without legacy shared credentials", () => {
+  test("defaults to the Sapphire testnet RPC without legacy shared credentials", () => {
     const urls = getConfiguredRpcUrls();
 
-    expect(urls.length).toBeGreaterThanOrEqual(3);
-    expect(urls).toContain("https://ethereum-sepolia-rpc.publicnode.com");
-    expect(urls).toContain("https://sepolia.gateway.tenderly.co");
-    expect(urls).toContain("https://sepolia.rpc.thirdweb.com");
+    expect(urls).toContain("https://testnet.sapphire.oasis.io");
+    expect(urls.join(",")).not.toMatch(/sepolia/i);
     expect(urls.join(",")).not.toContain("6426761d274542bb9652e9a5aff35a0c");
   });
 

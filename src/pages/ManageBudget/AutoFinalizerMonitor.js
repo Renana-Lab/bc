@@ -142,7 +142,7 @@ const readAuctionFinalizerState = async (address, factoryAddress) => {
       address,
       description: summary[5] || shortAddress(address),
       highestBid: summary[4],
-      endTime: Number(summary[9]),
+      endTime: Number(summary[8]),
       closed: Boolean(closed),
     };
   }

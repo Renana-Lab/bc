@@ -1,8 +1,9 @@
-const NEW_BUDGET_LEDGER_FACTORY_ADDRESS = "0xec38565FAeeef009F57037F2804D186928E63629";
-const DEFAULT_FACTORY_ADDRESS = NEW_BUDGET_LEDGER_FACTORY_ADDRESS;
-const DEFAULT_DEV_FACTORY_ADDRESS = NEW_BUDGET_LEDGER_FACTORY_ADDRESS;
+// No factory is committed: the previous Sepolia factory has an incompatible ABI and
+// is not confidential. Configure REACT_APP_FACTORY_ADDRESS after a Sapphire deploy.
+const DEFAULT_FACTORY_ADDRESS = "";
+const DEFAULT_DEV_FACTORY_ADDRESS = "";
 const MARKET_STORAGE_KEY = "data-market:active-factory";
-const ACTIVE_FACTORY_STORAGE_KEY = "data-market:factory-address:v2";
+const ACTIVE_FACTORY_STORAGE_KEY = "data-market:factory-address:sapphire-v1";
 const ACTIVE_LABEL_STORAGE_KEY = "data-market:market-label";
 export const MARKET_CHANGED_EVENT = "data-market:factory-changed";
 
