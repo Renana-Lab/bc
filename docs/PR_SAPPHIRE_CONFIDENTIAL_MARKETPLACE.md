@@ -26,9 +26,19 @@ spoofing `from` on `eth_call`, and the plaintext is in the factory creation tran
   (payload absent from creation tx input, getSummary, selector, spoofed-from calls, logs, storage; only
   the winner reads it after close).
 - `react-scripts test`: 16 suites / 120 tests pass; `vite build` succeeds.
-- Not done: manual MetaMask pass; no public network was contacted or deployed to.
+- **Not done: the manual MetaMask browser checklist** (docs/SAPPHIRE_CONFIDENTIAL_MARKETPLACE.md) is still pending; no browser check is reported as passed.
+- Localnet suite last ran before the final review-fix commit; no public network was contacted or deployed to.
 
 ## Follow-ups
 - Signed view calls (not supported by the current JS wrappers) could replace SIWE later.
-- Port stress/experiment scripts and `testFinalize.js` to the localnet; regenerate `yarn.lock`.
+- Port stress/experiment scripts and `testFinalize.js` (they default to Sepolia and would send plaintext payloads).
 - Deploy to Sapphire Testnet and set `REACT_APP_FACTORY_ADDRESS` / `FACTORY_SIWE_DOMAIN`.
+
+## Remaining gaps / merge blockers
+- Manual MetaMask checklist pending.
+- Scheduled workflows (auto-finalize, botnet-cycle) need `FACTORY_ADDRESS` and a Sapphire RPC secret before master uses this; they still default to Sepolia.
+- Amplify: production needs `REACT_APP_FACTORY_ADDRESS` and `REACT_APP_NETWORK`. An Amplify webhook fires on pushes; whether it builds this branch was not verified.
+- SIWE domain is fixed per factory; tokens cannot be revoked before expiry.
+- Cosmetic Sepolia Etherscan links/README mentions remain.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
