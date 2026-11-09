@@ -73,7 +73,8 @@ app (web3.js / personal_sign) -> paratime wrapper (encrypts calldata) -> guard -
 * The panel shows the code and a "Request test funds" button when `REACT_APP_FAUCET_URL` is set. For localnet,
   `node scripts/sapphire/faucetServer.mjs` runs the same handler with an in-memory table and a throwaway key.
 * The lab can link a code to the address it funded (pseudonymous towards the lab). For unlinkability even from the lab, use blind tokens.
-* Testnet preparation (not run): `docs/SAPPHIRE_TESTNET_RUNBOOK.md` and `scripts/sapphire/deployTestnet.js`.
+* Testnet and AWS test-environment preparation (not run): `docs/TEST_ENVIRONMENT.md`, `docs/SAPPHIRE_TESTNET_RUNBOOK.md`,
+  `scripts/sapphire/deployTestnet.js`. Rate-limit records are in a separate salted-HMAC table with a short TTL and are never joined with codes.
 
 ## Gas / gasless feasibility (Oasis `EIP155Signer`, localnet only)
 

@@ -14,14 +14,19 @@ const str = (value) => value?.S;
 const num = (value) => (value?.N !== undefined ? Number(value.N) : undefined);
 
 const fakeDynamo = () => {
-  const items = new Map();
+  const tables = new Map();
+  const tableOf = (name) => {
+    if (!tables.has(name)) tables.set(name, new Map());
+    return tables.get(name);
+  };
   const commands = [];
   return {
-    items, commands,
+    tableOf, commands,
     async send(command) {
       const name = command.constructor.name;
       const input = command.input;
       commands.push({ name, input });
+      const items = tableOf(input.TableName);
       const key = input.Key?.pk?.S ?? input.Item?.pk?.S;
       const item = items.get(key);
       const values = input.ExpressionAttributeValues || {};
@@ -62,7 +67,7 @@ const NOW = 1_700_000_000;
 
 test("dynamo store: allowlist insert never overwrites; reserve is exclusive; payment is recorded once", async () => {
   const client = fakeDynamo();
-  const store = createDynamoStore({ table: "t", client });
+  const store = createDynamoStore({ table: "codes", rateTable: "rates", client });
   assert.equal(await store.putPid("h1", NOW), true);
   assert.equal(await store.putPid("h1", NOW), false, "existing code is not overwritten");
   assert.deepEqual(await store.reserve("nope", "0xAbc0000000000000000000000000000000000001", NOW, NOW + 60), { outcome: "unknown" });
@@ -84,7 +89,7 @@ test("dynamo store: allowlist insert never overwrites; reserve is exclusive; pay
 
 test("dynamo store: an expired lease resumes only for the same address and keeps the stored transaction", async () => {
   const client = fakeDynamo();
-  const store = createDynamoStore({ table: "t", client });
+  const store = createDynamoStore({ table: "codes", rateTable: "rates", client });
   await store.putPid("h2", NOW);
   const a = "0x00000000000000000000000000000000000000aa";
   const b = "0x00000000000000000000000000000000000000bb";
@@ -92,20 +97,20 @@ test("dynamo store: an expired lease resumes only for the same address and keeps
   await store.savePending("h2", { rawTx: "0xraw", txHash: "0xhash" });
   assert.equal((await store.reserve("h2", a, NOW + 30, NOW + 90)).outcome, "busy", "lease still live");
   assert.equal((await store.reserve("h2", b, NOW + 100, NOW + 160)).outcome, "mismatch", "other address after expiry");
-  assert.equal(str(client.items.get("pid#h2").address), a, "address never overwritten");
+  assert.equal(str(client.tableOf("codes").get("pid#h2").address), a, "address never overwritten");
   const resumed = await store.reserve("h2", a, NOW + 100, NOW + 160);
   assert.equal(resumed.outcome, "reserved");
   assert.equal(resumed.previous.rawTx, "0xraw");
   assert.equal(resumed.previous.txHash, "0xhash");
   await store.release("h2");
-  assert.equal(client.items.get("pid#h2").status.S, "unclaimed");
-  assert.equal(client.items.get("pid#h2").address, undefined, "release clears the address");
+  assert.equal(client.tableOf("codes").get("pid#h2").status.S, "unclaimed");
+  assert.equal(client.tableOf("codes").get("pid#h2").address, undefined, "release clears the address");
   assert.equal((await store.reserve("h2", b, NOW + 200, NOW + 260)).outcome, "reserved", "usable again after release");
 });
 
 test("dynamo store: rate-limit counters and consistent reads", async () => {
   const client = fakeDynamo();
-  const store = createDynamoStore({ table: "t", client });
+  const store = createDynamoStore({ table: "codes", rateTable: "rates", client });
   assert.equal(await store.hit("ip:abc", 7, NOW + 1200), 1);
   assert.equal(await store.hit("ip:abc", 7, NOW + 1200), 2);
   assert.equal(await store.hit("ip:abc", 8, NOW + 1800), 1, "new window starts again");
@@ -114,4 +119,23 @@ test("dynamo store: rate-limit counters and consistent reads", async () => {
   assert.equal(client.commands.at(-1).input.ConsistentRead, true);
   const reserve = client.commands.find((c) => c.input.ConditionExpression?.includes(":unclaimed"));
   assert.ok(reserve === undefined || reserve.input.ExpressionAttributeNames["#s"] === "status", "reserved word aliased");
+});
+
+test("dynamo store: rate-limit records go to a separate table and never touch the codes table", async () => {
+  const client = fakeDynamo();
+  const store = createDynamoStore({ table: "codes", rateTable: "rates", client });
+  await store.putPid("h9", NOW);
+  await store.reserve("h9", "0x00000000000000000000000000000000000000cc", NOW, NOW + 60);
+  await store.hit("ip:somehmac", 3, NOW + 660);
+  await store.hit("global", 3, NOW + 660);
+  for (const key of client.tableOf("codes").keys()) assert.match(key, /^pid#/, "codes table holds code items only");
+  for (const [key, item] of client.tableOf("rates")) {
+    assert.match(key, /^rl#/, "rate table holds counters only");
+    assert.deepEqual(Object.keys(item).sort(), ["count", "expiresAt", "pk"], "no other attributes (no pid, no ip)");
+  }
+  for (const command of client.commands) {
+    if (command.name === "UpdateItemCommand" && command.input.UpdateExpression.startsWith("ADD")) assert.equal(command.input.TableName, "rates");
+    else assert.equal(command.input.TableName, "codes");
+  }
+  await assert.rejects(createDynamoStore({ table: "codes", client }).hit("x", 1, 1), /rateTable/);
 });

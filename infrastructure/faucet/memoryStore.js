@@ -5,9 +5,10 @@ const tick = () => new Promise((resolve) => setImmediate(resolve));
 
 const createMemoryStore = () => {
   const pids = new Map();
-  const counters = new Map();
+  const counters = new Map(); // key -> { count, expiresAt }  (rate-limit records; no pid inside)
   return {
     pids,
+    counters,
     async get(pidHash) {
       await tick();
       const record = pids.get(pidHash);
@@ -49,11 +50,14 @@ const createMemoryStore = () => {
       if (record?.status !== "pending") throw Object.assign(new Error("condition failed"), { name: "ConditionalCheckFailedException" });
       pids.set(pidHash, { status: "unclaimed", createdAt: record.createdAt });
     },
-    async hit(scope, windowId) {
+    async hit(scope, windowId, expiresAt) {
       await tick();
       const key = `${scope}#${windowId}`;
-      counters.set(key, (counters.get(key) || 0) + 1);
-      return counters.get(key);
+      const record = counters.get(key) || { count: 0, expiresAt };
+      record.count += 1;
+      record.expiresAt = expiresAt;
+      counters.set(key, record);
+      return record.count;
     },
   };
 };

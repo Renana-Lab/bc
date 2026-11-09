@@ -1,5 +1,7 @@
 # Sapphire Testnet runbook (prepared, NOT executed)
 
+See `docs/TEST_ENVIRONMENT.md` for the full test setup (separate Amplify app, `test-` AWS resources). This file covers the on-chain part.
+
 Nothing in this document was run by the assistant. Every step below that sends a transaction or creates AWS resources is
 yours to run. Testnet is a public network; use a dedicated deployer wallet that holds only TEST tokens.
 
@@ -7,7 +9,7 @@ yours to run. Testnet is a public network; use a dedicated deployer wallet that 
 
 * Node 18+, `yarn install` done, `npm run sapphire:compile` run (the build JSONs are committed, so this is optional).
 * AWS CLI authenticated to the account that hosts the site (for the faucet stack).
-* The host users will open the app on, for example `datamarketplaces.net` (**fixed forever in the factory**: SIWE sign-in only
+* The host users will open the app on: the **test** Amplify app's domain (see `docs/TEST_ENVIRONMENT.md`), for example `spike-embedded-wallets-sapphire.<appId>.amplifyapp.com` (**fixed forever in the factory**: SIWE sign-in only
   works on that exact host; a different host later means redeploying the factory).
 
 ## 1. Deployer wallet and TEST tokens
@@ -22,7 +24,7 @@ PowerShell, in the repo root:
 
 ```powershell
 $env:DEPLOY_PRIVATE_KEY = "0x<deployer key>"      # this shell session only; do NOT put it in .env
-$env:FACTORY_SIWE_DOMAIN = "datamarketplaces.net"
+$env:FACTORY_SIWE_DOMAIN = "spike-embedded-wallets-sapphire.<appId>.amplifyapp.com"   # the TEST Amplify app host
 node scripts/sapphire/deployTestnet.js --dry-run                  # checks only: nothing is sent
 node scripts/sapphire/deployTestnet.js --confirm-public-testnet   # sends the deployment transaction
 ```
@@ -38,16 +40,16 @@ Open the browser console on any page of the app after step 6, or run a read call
 
 ## 4. Faucet stack on AWS (see `infrastructure/faucet/README.md`)
 
-1. `node scripts/faucet/createFaucetSecret.js --name bc-faucet/key --region <region>` -> prints the secret ARN and the faucet address.
+1. `node scripts/faucet/createFaucetSecret.js --name test-bc-faucet/key --region <region>` -> prints the secret ARN and the faucet address.
 2. Send TEST tokens to that faucet address (budget: participants x `--amount-wei`, plus gas of up to about 0.007 TEST per payment (measured use is about 22k gas, roughly 0.0022 TEST)).
-3. `node scripts/faucet/deployFaucet.js --dry-run` (offline check), then deploy with the command in the README
+3. `node scripts/faucet/deployFaucet.js --env test --dry-run` (offline check), then deploy with the command in the README
    (`--secret-arn`, `--faucet-address`, `--artifact-bucket`, `--alert-email`, `--origins`, optionally `--amount-wei`, `--low-balance`).
 4. Confirm the SNS email so the low-balance alarm can reach you.
 5. `node scripts/faucet/generatePids.js --count <N> --table <table> ... --out faucet-pids-batch1.csv`; hand each participant their own link.
 
 ## 5. Amplify environment variables
 
-Set on the branch that serves participants, then redeploy:
+Set on the **test** Amplify app (never the production app), then build:
 
 | Variable | Value |
 |---|---|
@@ -69,4 +71,4 @@ Do not set any key in Amplify. (This repo's Amplify build is triggered by pushes
 
 * Balance alarm: below `--low-balance` TEST (or no metric) emails the subscribed address. Top up the faucet address.
 * More codes: run `generatePids.js` again with a new `--out` file.
-* Costs and cleanup: `aws cloudformation delete-stack --stack-name bc-faucet` removes the stack (log group and secret are retained; delete the secret separately).
+* Costs and cleanup: `aws cloudformation delete-stack --stack-name test-bc-faucet` removes the stack (log group and secret are retained; delete the secret separately).

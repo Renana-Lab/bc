@@ -69,6 +69,7 @@ const LocalWalletPanel = () => {
     setModeProvider(provider, async () => wallet.isUnlocked());
     refresh().catch(() => setMessage("Browser storage is unavailable; the local wallet cannot be used."));
     return wallet.subscribe(() => void refresh().catch(() => {}));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refresh only reads the stable wallet object
   }, [wallet, provider]);
 
   const run = async (action) => {

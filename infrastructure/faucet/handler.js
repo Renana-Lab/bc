@@ -6,8 +6,10 @@
 //  * Exactly-once per pid, also under parallel requests: a conditional DynamoDB update (a lease)
 //    lets one request win; the signed transaction is stored BEFORE it is broadcast, so a retry
 //    after a crash re-broadcasts the same transaction (same nonce) instead of paying twice.
-//  * Rate limit per caller (hashed IP) and globally, evaluated BEFORE the pid lookup so guessing
-//    codes is throttled too.
+//  * Rate limit per caller and globally, evaluated BEFORE the pid lookup so guessing codes is throttled too.
+//    Caller records are keyed by an HMAC of (IP, time window) with a secret salt: they cannot be reversed
+//    to an IP without the salt, cannot be linked across windows, live in a SEPARATE table with a short TTL,
+//    and never contain or reference a participant code (the code table never contains an IP).
 //  * The faucet key is read from AWS Secrets Manager only, held in memory, never logged.
 //  * Logs contain only event names, an 8-char pid digest prefix and scrubbed error text.
 const crypto = require("crypto");
@@ -45,6 +47,7 @@ const loadConfig = (env = process.env) => {
     rateLimit: Number(env.RATE_LIMIT_PER_WINDOW || 20),
     globalRateLimit: Number(env.GLOBAL_RATE_LIMIT_PER_WINDOW || 600),
     rateWindowSeconds: Number(env.RATE_WINDOW_SECONDS || 600),
+    rateTtlGraceSeconds: Number(env.RATE_TTL_GRACE_SECONDS || 60),
     leaseSeconds: Number(env.LEASE_SECONDS || 60),
     confirmTimeoutMs: Number(env.CONFIRM_TIMEOUT_MS || 20000),
     absentChecks: 3,
@@ -52,7 +55,7 @@ const loadConfig = (env = process.env) => {
   };
 };
 
-const createFaucetHandler = ({ store, getPrivateKey, chain, config, now = () => Date.now(), log = console.log }) => {
+const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, chain, config, now = () => Date.now(), log = console.log }) => {
   if (!SAPPHIRE_CHAIN_IDS.has(config.chainId)) throw new Error("Unsupported chain id");
   // One signer per process: signing/nonce selection must not interleave (the stack also sets
   // reserved concurrency 1 so there is a single container).
@@ -63,6 +66,15 @@ const createFaucetHandler = ({ store, getPrivateKey, chain, config, now = () => 
     return run;
   };
   const event = (name, fields = {}) => log(JSON.stringify({ event: name, ...fields }));
+  // Secret salt (Secrets Manager); a random per-process salt if none is available. Never logged.
+  let salt = null;
+  const callerKey = async (ip, windowId) => {
+    if (!salt) {
+      try { salt = (await getRateSalt?.()) || null; } catch { salt = null; }
+      if (!salt) salt = crypto.randomBytes(32).toString("hex");
+    }
+    return crypto.createHmac("sha256", salt).update(`ip:${ip || "unknown"}:${windowId}`).digest("hex").slice(0, 32);
+  };
   let cachedWallet = null;
   const getWallet = async () => {
     if (!cachedWallet) {
@@ -176,8 +188,9 @@ const createFaucetHandler = ({ store, getPrivateKey, chain, config, now = () => 
       // 1. Rate limit first (also throttles pid guessing).
       const nowSeconds = Math.floor(now() / 1000);
       const windowId = Math.floor(nowSeconds / config.rateWindowSeconds);
-      const expiresAt = (windowId + 2) * config.rateWindowSeconds;
-      const caller = sha256(`ip:${request.requestContext?.http?.sourceIp || "unknown"}`).slice(0, 32);
+      // The record is only needed until the end of its window (plus a short grace): short TTL.
+      const expiresAt = (windowId + 1) * config.rateWindowSeconds + (config.rateTtlGraceSeconds ?? 60);
+      const caller = await callerKey(request.requestContext?.http?.sourceIp, windowId);
       const [callerCount, globalCount] = await Promise.all([
         store.hit(`ip:${caller}`, windowId, expiresAt),
         store.hit("global", windowId, expiresAt),
@@ -246,11 +259,22 @@ const handler = async (request) => {
     const { createDynamoStore } = require("./store");
     const { SecretsManagerClient, GetSecretValueCommand } = require("@aws-sdk/client-secrets-manager");
     const secrets = new SecretsManagerClient({});
-    const getPrivateKey = async () => {
-      const value = (await secrets.send(new GetSecretValueCommand({ SecretId: process.env.FAUCET_SECRET_ID }))).SecretString || "";
-      try { return JSON.parse(value).privateKey; } catch { return value.trim(); }
+    let secretPromise = null;
+    const readSecret = () => {
+      if (!secretPromise) {
+        secretPromise = secrets.send(new GetSecretValueCommand({ SecretId: process.env.FAUCET_SECRET_ID })).then((result) => {
+          const value = result.SecretString || "";
+          try { return JSON.parse(value); } catch { return { privateKey: value.trim() }; }
+        });
+        secretPromise.catch(() => { secretPromise = null; });
+      }
+      return secretPromise;
     };
-    cachedHandler = createFaucetHandler({ store: createDynamoStore({ table: process.env.FAUCET_TABLE }), getPrivateKey, chain, config });
+    const getPrivateKey = async () => (await readSecret()).privateKey;
+    const getRateSalt = async () => (await readSecret()).rateLimitSalt;
+    cachedHandler = createFaucetHandler({
+      store: createDynamoStore({ table: process.env.FAUCET_TABLE, rateTable: process.env.RATE_TABLE }), getPrivateKey, getRateSalt, chain, config,
+    });
   }
   return cachedHandler(request);
 };

@@ -56,6 +56,7 @@ const setup = async (overrides = {}) => {
   const handler = createFaucetHandler({
     store, chain, config: { ...CONFIG, ...overrides.config },
     getPrivateKey: overrides.getPrivateKey || (async () => faucetKey),
+    getRateSalt: overrides.getRateSalt || (async () => "test-salt-one"),
     now: () => clock.ms, log: (line) => logs.push(line),
   });
   const pids = generatePids(6);
@@ -223,6 +224,42 @@ test("logs never contain the key, raw transactions, pids, addresses or IPs", asy
   const forbidden = [faucetKey.slice(2), ok.chain.sent[0].slice(2), ok.pids[0], failing.pids[0], to, okTo, ip].map((s) => s.toLowerCase());
   for (const secret of forbidden) assert.equal(everything.includes(secret), false, `log leaks ${secret.slice(0, 8)}...`);
   assert.ok(failing.logs.length > 0 && ok.logs.length > 0, "events are still logged");
+});
+
+test("rate-limit records: salted per-window HMAC, short TTL, never joined with participant codes", async () => {
+  const { claim, store, pids, clock } = await setup();
+  const ip = "203.0.113.77";
+  const to = addr();
+  await claim(pids[0], to, ip);
+  const nowSeconds = Math.floor(clock.ms / 1000);
+  const windowEnd = (Math.floor(nowSeconds / 600) + 1) * 600;
+  const recordsJson = JSON.stringify([...store.counters]);
+  // 1. No raw IP, and not the unsalted hash either (an IPv4 hash without a secret salt could be brute-forced).
+  assert.equal(recordsJson.includes(ip), false);
+  assert.equal(recordsJson.includes(sha256(`ip:${ip}`).slice(0, 32)), false);
+  // 2. Short TTL: expires at the end of its window plus a minute, never days.
+  for (const [, record] of store.counters) {
+    assert.ok(record.expiresAt > nowSeconds && record.expiresAt <= windowEnd + 60, `ttl ${record.expiresAt - nowSeconds}s`);
+  }
+  assert.ok([...store.counters.keys()].length >= 2, "caller and global counters exist");
+  // 3. No join: rate records hold nothing about the code, and code records hold nothing about the caller.
+  for (const pid of pids) {
+    assert.equal(recordsJson.includes(pid) || recordsJson.includes(sha256(pid)), false);
+  }
+  const pidJson = JSON.stringify([...store.pids]);
+  for (const key of store.counters.keys()) assert.equal(pidJson.includes(key.split("#")[0].replace("ip:", "")), false);
+  assert.equal(/ip|caller|sourceIp/i.test(Object.keys([...store.pids.values()][0]).join(",")), false);
+  // 4. Unlinkable across windows and across salts: same IP, different window/salt -> different key.
+  const keyAt = async (salt, secondsLater) => {
+    const t = await setup({ getRateSalt: async () => salt });
+    t.clock.ms += secondsLater * 1000;
+    await t.claim(t.pids[0], addr(), ip);
+    return [...t.store.counters.keys()].find((k) => k.startsWith("ip:"));
+  };
+  const base = await keyAt("salt-A", 0);
+  assert.notEqual(await keyAt("salt-A", 700), base, "a different window gives a different record key");
+  assert.notEqual(await keyAt("salt-B", 0), base, "a different salt gives a different record key");
+  assert.equal(await keyAt("salt-A", 0), base, "same salt and window: same key (counting works)");
 });
 
 test("config refuses mainnet and a zero amount; pid format matches the app", () => {

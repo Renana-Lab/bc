@@ -1,7 +1,10 @@
 "use strict";
-// DynamoDB store for the faucet. Table: hash key `pk` (S), TTL attribute `expiresAt`.
+// DynamoDB store for the faucet. Two tables, each with hash key `pk` (S) and TTL attribute `expiresAt`:
+//   FAUCET table (codes)     pid#<sha256(pid)> items only. Never contains an IP, hashed or not.
+//   RATE table (throttling)  rl#<scope>#<window> counters only. Never contains or references a pid.
+// They are separate so that caller records and participant codes can never be joined.
 //   pid#<sha256(pid)>   { status: unclaimed | pending | paid, address?, rawTx?, txHash?, leaseUntil?, paidAt?, amountWei? }
-//   rl#<scope>#<window> { count, expiresAt }                     (rate-limit counters, expire by TTL)
+//   rl#<scope>#<window> { count, expiresAt }                     (RATE table; expires by TTL, ~11 minutes)
 // Every state change is a conditional write, so parallel requests cannot both win.
 // The same contract is implemented in memory by memoryStore.js for tests.
 const stateKey = (pidHash) => ({ pk: { S: `pid#${pidHash}` } });
@@ -17,7 +20,7 @@ const fromItem = (item) => {
 
 const isConditionFailure = (error) => error?.name === "ConditionalCheckFailedException";
 
-const createDynamoStore = ({ table, client } = {}) => {
+const createDynamoStore = ({ table, rateTable, client } = {}) => {
   // Lazily required: the Lambda nodejs20 runtime provides the SDK; tests inject `client` or use memoryStore.
   const sdk = require("@aws-sdk/client-dynamodb");
   const dynamo = client || new sdk.DynamoDBClient({});
@@ -100,8 +103,9 @@ const createDynamoStore = ({ table, client } = {}) => {
     },
     // Atomic counter per (scope, window); the item expires by TTL.
     async hit(scope, windowId, expiresAt) {
+      if (!rateTable || rateTable === table) throw new Error("hit() needs a rateTable that differs from the codes table");
       const result = await send(new sdk.UpdateItemCommand({
-        TableName: table,
+        TableName: rateTable,
         Key: { pk: { S: `rl#${scope}#${windowId}` } },
         UpdateExpression: "ADD #c :one SET expiresAt = :exp",
         ExpressionAttributeNames: { "#c": "count" },
