@@ -58,6 +58,16 @@ const LocalWalletPanel = () => {
           <div>{state.exists ? "Enter your passphrase to unlock." : "Create a wallet. The key stays encrypted in this browser only. Clearing site data deletes it, so download the encrypted backup."}</div>
           <input type="password" autoComplete="off" value={passphrase} onChange={(event) => setPassphrase(event.target.value)} placeholder="Passphrase (12+ chars)" />{" "}
           <button onClick={() => run(() => (state.exists ? wallet.unlock(passphrase) : wallet.create(passphrase)))}>{state.exists ? "Unlock" : "Create"}</button>
+          {state.exists ? null : (
+            <div>
+              Restore from an encrypted backup (uses the passphrase above):{" "}
+              <input type="file" accept="application/json" data-testid="local-wallet-restore"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) run(async () => wallet.importEncryptedBackup(await file.text(), passphrase));
+                }} />
+            </div>
+          )}
         </>
       )}
       {message ? <div role="alert">{message}</div> : null}
