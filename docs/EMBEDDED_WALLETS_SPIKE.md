@@ -54,22 +54,23 @@ app (web3.js / personal_sign) -> paratime wrapper (encrypts calldata) -> guard -
 * Automated localnet checks without a browser: `scripts/sapphire/walletModes.test.mjs` (MetaMask-style simulated provider + real local wallet):
   encrypted calldata, SIWE read by winner only, bypass attempts refused, recovery, key hygiene (key never logged, never in backups).
 
-## Anonymous participant code and protected faucet (design + localnet stub)
+## Anonymous participant code and protected faucet
 
-* **Participant code:** the lab hands out a random code in the link, `http://.../?pid=K7f3QpX9mA2d` (8-24 letters/digits). The app reads it
-  from the URL and keeps it in `sessionStorage` only (`participantId.mjs`). The format check rejects anything that looks like an
-  email or phone number. No email, phone or name is collected anywhere.
-* **Faucet policy (stub: `faucetStub.mjs`, `scripts/sapphire/faucetServer.mjs`, localnet only):** a fixed amount per participant code,
-  **once**, and once per address; the table stores only SHA-256 digests of codes. An optional allowlist of digests restricts who may claim.
-  Concurrent claims for one code pay once; failed sends can be retried.
-* **Not in the stub, needed for a real deployment:**
-  * The funding key lives only in server-side secret storage (never in the repo, the browser or this stub; the stub uses the public
-    localnet dev phrase and refuses non-local RPCs).
-  * Persistent store for claims, rate limiting, request size limits, and monitoring of the faucet balance.
-  * The lab can link a code to an address (pseudonymous, not anonymous towards the lab). If participants must be unlinkable even from
-    the lab, use blind/one-time tokens instead of the code-to-address mapping.
-  * Codes should be single-use and distributed out of band.
-* The panel shows the code and a "Request test funds" button only when `REACT_APP_FAUCET_URL` is set (the localnet stub).
+* **Participant code:** the lab hands out a random code in the link, `https://<host>/?pid=K7f3QpX9mA2d` (8-24 letters/digits; generated
+  codes are 16 characters, about 79 bits). The app reads it from the URL and keeps it in `sessionStorage` only (`participantId.mjs`). The
+  format check rejects anything that looks like an email or phone number. No email, phone or name is collected anywhere.
+* **Faucet:** an AWS Lambda + DynamoDB stack in `infrastructure/faucet/` (see its README): allowlist of code digests, a fixed
+  configurable amount once per code (exactly-once even for parallel requests), per-caller and global rate limits, key only in Secrets
+  Manager, log scrubbing, and a CloudWatch low-balance alarm. `scripts/faucet/` has the code generator/uploader, the secret creator and
+  the deploy script. Nothing was deployed to AWS.
+* **Verified on localnet:** `npm run faucet:test` (unit: parallel claims, crash retry without double payment, rate limits, log hygiene) and
+  `npm run faucet:test:flow` (5 parallel participants: code -> local wallet -> faucet payment -> bid with encrypted
+  calldata -> auction ends -> winner reads, the others cannot; repeated and parallel claims for one code paid once).
+  Not verified: the real DynamoDB store, CloudFormation template and Secrets Manager call (no AWS access/deployment).
+* The panel shows the code and a "Request test funds" button when `REACT_APP_FAUCET_URL` is set. For localnet,
+  `node scripts/sapphire/faucetServer.mjs` runs the same handler with an in-memory table and a throwaway key.
+* The lab can link a code to the address it funded (pseudonymous towards the lab). For unlinkability even from the lab, use blind tokens.
+* Testnet preparation (not run): `docs/SAPPHIRE_TESTNET_RUNBOOK.md` and `scripts/sapphire/deployTestnet.js`.
 
 ## Gas / gasless feasibility (Oasis `EIP155Signer`, localnet only)
 

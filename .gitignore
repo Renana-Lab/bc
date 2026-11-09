@@ -31,3 +31,6 @@ yarn-error.log*
 /market-data
 /build-backend
 /artifacts/backend
+
+# Faucet participant code lists (contain raw codes)
+/faucet-pids-*.csv

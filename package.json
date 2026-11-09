@@ -66,7 +66,9 @@
     "sapphire:compile": "node src/real_ethereum/compile.js",
     "sapphire:test": "node --test src/real_ethereum/siwe.test.mjs scripts/sapphire/sapphireConfidential.test.mjs",
     "sapphire:test:wallets": "node --test scripts/sapphire/walletModes.test.mjs",
-    "sapphire:test:gasless": "node --test scripts/sapphire/gasless/gaslessFeasibility.test.mjs"
+    "sapphire:test:gasless": "node --test scripts/sapphire/gasless/gaslessFeasibility.test.mjs",
+    "faucet:test": "node --test scripts/faucet/faucetHandler.test.mjs",
+    "faucet:test:flow": "node --test scripts/faucet/faucetFlow.test.mjs"
   },
   "eslintConfig": {
     "extends": [
@@ -87,6 +89,8 @@
     ]
   },
   "devDependencies": {
+    "@aws-sdk/client-dynamodb": "3.1164.0",
+    "@aws-sdk/client-secrets-manager": "3.1164.0",
     "@oasisprotocol/sapphire-ethers-v6": "^6.0.1",
     "@vitejs/plugin-react": "4.3.4",
     "oz-sapphire-compat": "npm:@openzeppelin/contracts@5.0.2",
