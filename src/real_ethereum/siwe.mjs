@@ -3,6 +3,7 @@
 // Campaign.getDataWithToken accepts until it expires.
 export const SIWE_SESSION_MINUTES = 60;
 
+/* global globalThis */
 const randomNonce = () => {
   const bytes = new Uint8Array(12);
   globalThis.crypto.getRandomValues(bytes);
