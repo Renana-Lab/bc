@@ -425,7 +425,7 @@ function DeleteAuctionDialog({ auction, act, onClose }) {
     <Dialog open onClose={onClose} fullWidth maxWidth="xs">
       <DialogTitle>Delete auction?</DialogTitle>
       <DialogContent>
-        <p>"{auction.description}" will be hidden from all non-admin users. Its record, bids and ledger entries are kept. Reserved bids are not refunded automatically.</p>
+        <p>"{auction.description}" will be hidden from all non-admin users. Its record, bids and ledger entries are kept. If the auction has not been finalized, the leading bid will be refunded to the bidder and the seller will not be paid. If it was already finalized, nothing is refunded or changed in budgets.</p>
         <TextField label="Note (optional)" value={note} onChange={e => setNote(e.target.value)} fullWidth size="small" multiline minRows={2} inputProps={{ maxLength: 500 }} />
       </DialogContent>
       <DialogActions>

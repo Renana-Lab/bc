@@ -635,7 +635,7 @@ test('soft-deleted auctions are hidden from users but kept for admins and report
   assert.throws(() => s.deleteAuction(randomUUID(), '', admin.id), /Auction not found/);
   assert.throws(() => s.deleteAuction(id, 'n'.repeat(501), admin.id), /too long/);
   assert.equal(s.deleteAuction(id, undefined, admin.id).deleted_note, 'Deleted by admin');
-  assert.equal(s.one('SELECT COUNT(*) n FROM ledger').n, ledgerBefore);
+  assert.equal(s.one('SELECT COUNT(*) n FROM ledger').n, ledgerBefore + 1);
   assert.throws(() => s.deleteAuction(id, 'again', admin.id), /already deleted/);
   const row = s.one('SELECT deleted_at,deleted_by,deleted_note FROM auctions WHERE id=?', id);
   assert.deepEqual({ ...row }, { deleted_at: 1000000, deleted_by: admin.id, deleted_note: 'Deleted by admin' });
@@ -655,11 +655,11 @@ test('soft-deleted auctions are hidden from users but kept for admins and report
   // Admin still sees it, marked deleted.
   assert.equal(s.auction(id, admin.id).deleted_at, 1000000);
   assert.equal(s.auctionsFor(admin.id).find(x => x.id === id).deleted_by, admin.id);
-  assert.equal(s.adminState(admin.id).active.find(x => x.id === id).deleted_at, 1000000);
+  assert.equal(s.adminState(admin.id).active.some(x => x.id === id), false);
   assert.equal(s.report(admin.id).auctions.find(x => x.id === id).deleted_note, 'Deleted by admin');
   assert.equal(s.inspectAuction(id, admin.id).editable, false);
-  // Deleting changes no budgets or ledger entries (bot activity above only touched the other auction).
-  assert.equal(s.user(a.id).budget, budgetBefore);
+  // The leader's reserved bid was released by the deletion.
+  assert.equal(s.user(a.id).budget, budgetBefore + 60);
   s.deleteAuction(other, '  spam  ', admin.id);
   assert.equal(s.one('SELECT deleted_note FROM auctions WHERE id=?', other).deleted_note, 'spam');
 });
@@ -676,4 +676,73 @@ test('migration adds new columns and tables to an existing database', async t =>
   const columns = second.all('PRAGMA table_info(auctions)').map(c => c.name);
   for (const c of ['deleted_at', 'deleted_by', 'deleted_note']) assert.ok(columns.includes(c));
   assert.equal(second.one('SELECT COUNT(*) n FROM user_messages').n, 0);
+});
+
+test('delete with a leading bid refunds the leader and never pays the seller', async t => {
+  const { s, admin, seller, a, auction, advance } = await fixture(t);
+  const total = () => s.all('SELECT budget FROM users').reduce((n, u) => n + u.budget, 0) + s.one('SELECT COALESCE(SUM(highest),0) n FROM auctions WHERE winner_id IS NOT NULL AND finalized_at IS NULL').n;
+  const id = auction(1);
+  const start = s.user(a.id).budget, sellerStart = s.user(seller.id).budget, totalStart = total();
+  s.bid(id, 70, a.id, randomUUID());
+  assert.equal(s.user(a.id).budget, start - 70);
+  const result = s.deleteAuction(id, 'bad data', admin.id);
+  assert.deepEqual({ money: result.money_moved, released: result.released, leader: result.leader, was_finalized: result.was_finalized }, { money: true, released: 70, leader: a.id, was_finalized: false });
+  assert.equal(s.user(a.id).budget, start);
+  const row = s.one('SELECT highest,winner_id,finalized_at FROM auctions WHERE id=?', id);
+  assert.equal(row.highest, 70);
+  assert.equal(row.winner_id, a.id);
+  assert.ok(row.finalized_at);
+  const release = s.all("SELECT user_id,delta,balance,actor_id FROM ledger WHERE auction_id=? AND reason='auction-deleted-release'", id);
+  assert.deepEqual(release.map(r => ({ ...r })), [{ user_id: a.id, delta: 70, balance: start, actor_id: admin.id }]);
+  const event = JSON.parse(s.one("SELECT detail FROM events WHERE type='auction-deleted-by-admin'").detail);
+  assert.equal(event.released, 70);
+  assert.equal(event.leader, a.id);
+  assert.equal(total(), totalStart);
+  // Held-funds queries no longer see it, and the seller is never paid after the end time.
+  assert.equal(s.setBudget(a.id, start, admin.id).budget, start);
+  advance(61000);
+  s.tick();
+  assert.deepEqual(s.finalize(id, admin.id), { id, deleted: true });
+  assert.equal(s.user(seller.id).budget, sellerStart);
+  assert.equal(s.one("SELECT COUNT(*) n FROM ledger WHERE auction_id=? AND reason='seller-payment'", id).n, 0);
+  assert.equal(total(), totalStart);
+});
+
+test('delete with no bids moves no money', async t => {
+  const { s, admin, seller, auction } = await fixture(t);
+  const id = auction(1);
+  const ledger = s.one('SELECT COUNT(*) n FROM ledger').n, budget = s.user(seller.id).budget;
+  const result = s.deleteAuction(id, '', admin.id);
+  assert.equal(result.money_moved, false);
+  assert.equal(result.released, 0);
+  assert.equal(s.one('SELECT COUNT(*) n FROM ledger').n, ledger);
+  assert.equal(s.user(seller.id).budget, budget);
+  assert.ok(s.one('SELECT finalized_at FROM auctions WHERE id=?', id).finalized_at);
+});
+
+test('delete after finalize only hides the auction and moves no money', async t => {
+  const { s, admin, seller, a, auction, advance } = await fixture(t);
+  const id = auction(1);
+  s.bid(id, 80, a.id, randomUUID());
+  advance(61000);
+  s.finalize(id, admin.id);
+  const budgets = s.all('SELECT id,budget FROM users ORDER BY id').map(u => ({ ...u }));
+  const ledger = s.one('SELECT COUNT(*) n FROM ledger').n, finalizedAt = s.one('SELECT finalized_at FROM auctions WHERE id=?', id).finalized_at;
+  const result = s.deleteAuction(id, 'hide', admin.id);
+  assert.equal(result.was_finalized, true);
+  assert.equal(result.money_moved, false);
+  assert.equal(result.outcome, 'hidden-only-no-money-moved');
+  assert.deepEqual(s.all('SELECT id,budget FROM users ORDER BY id').map(u => ({ ...u })), budgets);
+  assert.equal(s.one('SELECT COUNT(*) n FROM ledger').n, ledger);
+  assert.equal(s.one('SELECT finalized_at FROM auctions WHERE id=?', id).finalized_at, finalizedAt);
+  assert.equal(JSON.parse(s.one("SELECT detail FROM events WHERE type='auction-deleted-by-admin'").detail).was_finalized, true);
+  assert.throws(() => s.auction(id, a.id), /Auction not found/);
+  assert.equal(s.user(seller.id).budget >= 80, true);
+});
+
+test('a bid after delete returns not found', async t => {
+  const { s, admin, b, auction } = await fixture(t);
+  const id = auction(5);
+  s.deleteAuction(id, '', admin.id);
+  assert.throws(() => s.bid(id, 100, b.id, randomUUID()), error => error.status === 404);
 });

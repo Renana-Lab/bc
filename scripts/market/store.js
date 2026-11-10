@@ -423,6 +423,7 @@ class MarketStore {
     return this.transaction(() => {
       const a = this.one('SELECT * FROM auctions WHERE id=?', id);
       check(a, 'Auction not found', 404);
+      if (a.deleted_at) return { id, deleted: true };
       check(a.end_at <= this.now(), 'Auction is still open', 409);
       if (a.finalized_at) return {
         id,
@@ -444,22 +445,34 @@ class MarketStore {
     });
   }
   // Soft delete: the row, its bids and the ledger are kept. Hidden from non-admins.
-  // TODO: refund/budget policy for bids on a deleted auction is still open. Until it is
-  // decided, reserved bids are untouched and tick()/finalize() behave as before.
+  // Not yet finalized: the leader's reserved amount is released and the auction is marked
+  // finalized so it leaves every "held" query; the seller is never paid.
+  // Already finalized: only hidden; no money moves.
   deleteAuction(id, note, actor) {
     this.admin(actor);
     check(note === undefined || note === null || typeof note === 'string', 'Invalid note');
     const text = (note || '').trim();
     check(text.length <= 500, 'Note is too long (maximum 500 characters)');
     return this.transaction(() => {
-      const a = this.one('SELECT id,deleted_at FROM auctions WHERE id=?', id);
+      const a = this.one('SELECT * FROM auctions WHERE id=?', id);
       check(a, 'Auction not found', 404);
       check(!a.deleted_at, 'Auction is already deleted', 409);
       const deletedNote = text || 'Deleted by admin';
-      this.run('UPDATE auctions SET deleted_at=?,deleted_by=?,deleted_note=? WHERE id=?', this.now(), actor, deletedNote, id);
-      this.event('auction-deleted-by-admin', actor, { id, note: deletedNote });
+      const wasFinalized = Boolean(a.finalized_at);
+      let released = 0;
+      if (wasFinalized) {
+        this.run('UPDATE auctions SET deleted_at=?,deleted_by=?,deleted_note=? WHERE id=?', this.now(), actor, deletedNote, id);
+      } else {
+        if (a.winner_id && a.highest > 0) {
+          released = a.highest;
+          this.balance(a.winner_id, released, 'auction-deleted-release', actor, id);
+        }
+        this.run('UPDATE auctions SET deleted_at=?,deleted_by=?,deleted_note=?,finalized_at=? WHERE id=?', this.now(), actor, deletedNote, this.now(), id);
+      }
+      const outcome = wasFinalized ? 'hidden-only-no-money-moved' : released ? 'leader-refunded-seller-not-paid' : 'no-bids-nothing-to-refund';
+      this.event('auction-deleted-by-admin', actor, { id, note: deletedNote, outcome, was_finalized: wasFinalized, released, leader: released ? a.winner_id : null });
       this.snapshot('auction-deleted');
-      return { id, deleted: true, deleted_note: deletedNote };
+      return { id, deleted: true, deleted_note: deletedNote, was_finalized: wasFinalized, money_moved: released > 0, released, leader: released ? a.winner_id : null, outcome };
     });
   }
   closeAuction(id, actor) {
