@@ -12,6 +12,9 @@ let generation = 0;
 let pending = null;
 let timer;
 let verifiedMark = 0;
+// Freshness lives on the current snapshot object itself (written in place, no notify),
+// so getWalletAccess() keeps its reference across silent re-checks.
+const setFresh = (value) => { verifiedMark = value; snapshot.verifiedAt = value; };
 let users = 0;
 let discovering = false;
 let boundProvider = null;
@@ -34,8 +37,8 @@ const publish = (status, fields = {}) => {
 const invalidate = (status = "checking", reason = "") => {
   generation += 1;
   pending = null;
-  verifiedMark = 0;
   publish(status, { reason });
+  setFresh(0);
 };
 const announce = (event) => {
   const { info, provider } = event.detail || {};
@@ -118,11 +121,12 @@ export const verifyWalletAccess = () => {
         return snapshot;
       }
       const reasons = { locked: "Unlock MetaMask to continue.", unauthorized: "Connect an account to this website in MetaMask.", "verification-failed": "MetaMask unlock state could not be verified." };
-      verifiedMark = result.status === "connected" ? Date.now() : 0;
-      publish(result.status, { provider, account: result.account || "", verifiedAt: verifiedMark, reason: reasons[result.status] || "" });
+      const stamp = result.status === "connected" ? Date.now() : 0;
+      publish(result.status, { provider, account: result.account || "", verifiedAt: stamp, reason: reasons[result.status] || "" });
+      setFresh(stamp);
     } catch (error) {
       if (generation === epoch) {
-        verifiedMark = 0; // writes re-verify, so a failed check can never authorize one
+        setFresh(0); // writes re-verify, so a failed check can never authorize one
         // A transient failure must not drop a connected session; only a real result does.
         if (snapshot.status !== "connected" || error?.fatal) {
           invalidate("verification-failed", "MetaMask verification failed or timed out. Unlock or update the extension and retry.");
@@ -172,7 +176,7 @@ export const requireWalletAccess = async () => {
   if (result.status !== "connected" || document.hidden || !verifiedMark || Date.now() - verifiedMark >= TIMEOUT) {
     throw new Error(result.reason || "Verify your MetaMask connection before continuing.");
   }
-  return { ...result, verifiedAt: verifiedMark };
+  return result;
 };
 export const walletDiagnostic = () => JSON.stringify({
   build: process.env.REACT_APP_BUILD_ID || [...document.scripts].map((script) => script.src).find((src) => /main\.|\/assets\/index/.test(src)) || "local",

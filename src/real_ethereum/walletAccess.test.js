@@ -1,6 +1,10 @@
 import { getWalletAccess, subscribeWalletAccess, startWalletAccess, verifyWalletAccess, requireWalletAccess, discoverWalletProvider, walletDiagnostic } from "./walletAccess";
 import { createWalletTransport } from "./walletTransport";
 
+// The chain prompt and Sapphire encryption are covered elsewhere; this file tests the session reference.
+jest.mock("./sapphireNetworks", () => ({ ensureTargetChain: async () => ({}) }));
+jest.mock("./sapphireProvider", () => ({ getSapphireProvider: (provider) => provider }));
+
 const address = "0x1234567890abcdef1234567890abcdef12345678";
 let stop;
 let provider;
@@ -166,4 +170,26 @@ test("page cache restoration requires verification again", async () => {
 test("wallet locking between account and final unlock checks is denied", async () => {
   provider._metamask.isUnlocked.mockResolvedValueOnce(true).mockResolvedValue(false);
   stop = startWalletAccess(); await verifyWalletAccess(); expect(getWalletAccess().status).toBe("locked");
+});
+
+test("a transport write succeeds after a silent re-check and keeps the snapshot reference", async () => {
+  stop = startWalletAccess(); await verifyWalletAccess();
+  const session = getWalletAccess(); expect(session.status).toBe("connected");
+  jest.advanceTimersByTime(2000);
+  window.dispatchEvent(new Event("focus")); await flush();
+  expect(getWalletAccess()).toBe(session); // silent: same object
+  provider.request.mockClear();
+  provider.request.mockImplementation(async ({ method }) => (method === "eth_accounts" ? [address] : "0xhash"));
+  const transport = createWalletTransport({ send: jest.fn() });
+  const error = await new Promise((resolve) => transport.send(
+    { id: 1, method: "eth_sendTransaction", params: [{ from: session.account }] }, (e) => resolve(e)));
+  expect(error).toBeNull();
+  expect(provider.request).toHaveBeenCalledWith(expect.objectContaining({ method: "eth_sendTransaction" }));
+  expect(await requireWalletAccess()).toBe(getWalletAccess());
+});
+test("a failed re-check refuses writes without dropping the connected session", async () => {
+  stop = startWalletAccess(); await verifyWalletAccess();
+  provider.request.mockRejectedValue(new Error("transient"));
+  await expect(requireWalletAccess()).rejects.toThrow();
+  expect(getWalletAccess().status).toBe("connected");
 });
