@@ -148,7 +148,12 @@ function createMarketServer(store, options = {}) {
         streams.set(user.id, set);
         set.add(entry);
         // Keep at most MAX_STREAMS_PER_USER; the oldest connections are closed first.
-        while (set.size > MAX_STREAMS_PER_USER) closeStream(set.values().next().value);
+        while (set.size > MAX_STREAMS_PER_USER) {
+          const oldest = set.values().next().value;
+          // Tell the client not to reconnect (EventSource would otherwise evict another tab in a loop).
+          sseWrite(oldest, 'event: superseded\ndata: {}\n\n');
+          closeStream(oldest);
+        }
         res.on('close', () => closeStream(entry));
         // Register before replaying so a message sent meanwhile is not lost (clients dedupe by id).
         sseWrite(entry, ': connected\n\n');

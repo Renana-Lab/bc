@@ -63,9 +63,7 @@ const statusSql = alias => `CASE WHEN ${alias}.deleted_at IS NOT NULL THEN 'dele
   WHEN ${alias}.finalized_at IS NOT NULL AND ${alias}.winner_id IS NOT NULL AND ${alias}.highest>0 THEN 'sold'
   WHEN ${alias}.finalized_at IS NOT NULL THEN 'unsold'
   WHEN ${alias}.end_at<=? THEN 'ended' ELSE 'active' END`;
-// 1 if the auction was deleted before it was finalized, 0 if it was already finalized, NULL if not deleted.
-const deletedBeforeFinalizeSql = alias => `CASE WHEN ${alias}.deleted_at IS NOT NULL THEN
-  (SELECT json_extract(e.detail,'$.was_finalized')=0 FROM events e WHERE e.type='auction-deleted-by-admin' AND json_extract(e.detail,'$.id')=${alias}.id ORDER BY e.id DESC LIMIT 1) END`;
+// deleted_before_finalize is written once when the auction is deleted: 1 = before finalize, 0 = already finalized.
 const withDeletionFlag = row => ({ ...row, deleted_before_finalize: row.status === 'deleted' && row.deleted_before_finalize !== null ? Boolean(row.deleted_before_finalize) : null });
 class MarketStore {
   constructor(filename = ':memory:', clock = Date.now, random = randomInt) {
@@ -117,10 +115,12 @@ class MarketStore {
     if (!auctionColumns.some(column => column.name === 'adjusted_minimum')) {
       this.db.exec('ALTER TABLE auctions ADD COLUMN adjusted_minimum INTEGER');
     }
-    for (const [column, type] of [['deleted_at', 'INTEGER'], ['deleted_by', 'TEXT'], ['deleted_note', 'TEXT']]) {
+    for (const [column, type] of [['deleted_at', 'INTEGER'], ['deleted_by', 'TEXT'], ['deleted_note', 'TEXT'], ['deleted_before_finalize', 'INTEGER']]) {
       if (!auctionColumns.some(c => c.name === column)) this.db.exec(`ALTER TABLE auctions ADD COLUMN ${column} ${type}`);
     }
     this.db.exec('UPDATE auctions SET original_minimum=minimum WHERE original_minimum IS NULL');
+    // Backfill the flag for auctions deleted before the column existed.
+    this.db.exec(`UPDATE auctions SET deleted_before_finalize=COALESCE((SELECT json_extract(e.detail,'$.was_finalized')=0 FROM events e WHERE e.type='auction-deleted-by-admin' AND json_extract(e.detail,'$.id')=auctions.id ORDER BY e.id DESC LIMIT 1),0) WHERE deleted_at IS NOT NULL AND deleted_before_finalize IS NULL`);
     const legacyMarketName = ['Data', 'Market'].join(' ');
     this.run('UPDATE settings SET name=? WHERE id=1 AND name=?', 'Data Marketplace', legacyMarketName);
   }
@@ -294,17 +294,16 @@ class MarketStore {
     this.run('DELETE FROM sessions WHERE token=?', digest(token || ''));
     this.bus.emit('session-closed', { digest: digest(token || '') });
   }
-  // Deleted auctions are excluded unless includeDeleted is set (admin views only).
-  active(includeDeleted = false) {
-    if (!includeDeleted) return this.all('SELECT id,description,seller_id,minimum,original_minimum,adjusted_minimum,end_at,highest,winner_id,deleted_at FROM auctions WHERE finalized_at IS NULL AND end_at>? AND deleted_at IS NULL ORDER BY end_at,id', this.now());
-    return this.all(`SELECT a.id,a.description,a.seller_id,a.minimum,a.original_minimum,a.adjusted_minimum,a.end_at,a.highest,a.winner_id,a.deleted_at,${statusSql('a')} status,${deletedBeforeFinalizeSql('a')} deleted_before_finalize FROM auctions a WHERE a.finalized_at IS NULL AND a.end_at>? ORDER BY a.end_at,a.id`, this.now(), this.now()).map(withDeletionFlag);
+  // Deleted auctions are always finalized, so they never appear here.
+  active() {
+    return this.all(`SELECT a.id,a.description,a.seller_id,a.minimum,a.original_minimum,a.adjusted_minimum,a.end_at,a.highest,a.winner_id,${statusSql('a')} status FROM auctions a WHERE a.finalized_at IS NULL AND a.end_at>? AND a.deleted_at IS NULL ORDER BY a.end_at,a.id`, this.now(), this.now());
   }
   snapshot(reason) {
     this.run('INSERT INTO snapshots(reason,state,created_at) VALUES(?,?,?)', reason, JSON.stringify(this.active()), this.now());
   }
   // Non-admin callers (includeDeleted=false) never see soft-deleted auctions.
   auctions(includeDeleted = false) {
-    const deletedColumns = includeDeleted ? `,a.deleted_at,a.deleted_by,a.deleted_note,${statusSql('a')} status,${deletedBeforeFinalizeSql('a')} deleted_before_finalize` : '';
+    const deletedColumns = includeDeleted ? `,a.deleted_at,a.deleted_by,a.deleted_note,${statusSql('a')} status,a.deleted_before_finalize` : '';
     const rows = this.all(`SELECT a.id,a.description,a.seller_id,u.email seller,u.email seller_identifier,a.minimum,a.original_minimum,a.adjusted_minimum,a.end_at,a.highest,a.winner_id,a.finalized_at,a.created_at${deletedColumns},
       (SELECT COUNT(DISTINCT user_id) FROM bids b WHERE b.auction_id=a.id) bidders FROM auctions a JOIN users u ON u.id=a.seller_id${includeDeleted ? '' : ' WHERE a.deleted_at IS NULL'} ORDER BY a.created_at DESC,a.id`, ...(includeDeleted ? [this.now()] : []));
     return includeDeleted ? rows.map(withDeletionFlag) : rows;
@@ -338,7 +337,7 @@ class MarketStore {
     check(record && (adminOnly || !record.deleted_at), 'Auction not found', 404);
     check(adminOnly || record.seller_id === actor, 'Only the seller can edit this auction', 403);
     const bids = this.all('SELECT b.*,u.email AS identifier FROM bids b JOIN users u ON u.id=b.user_id WHERE auction_id=? ORDER BY b.rowid', id);
-    const derived = adminOnly ? withDeletionFlag(this.one(`SELECT ${statusSql('a')} status,${deletedBeforeFinalizeSql('a')} deleted_before_finalize FROM auctions a WHERE a.id=?`, this.now(), id)) : {};
+    const derived = adminOnly ? withDeletionFlag(this.one(`SELECT ${statusSql('a')} status,a.deleted_before_finalize FROM auctions a WHERE a.id=?`, this.now(), id)) : {};
     return {
       ...derived,
       record, revision: digest(JSON.stringify(record)), bids: adminOnly ? bids : bids.map(({ budget_before, budget_after, ...bid }) => bid),
@@ -442,7 +441,10 @@ class MarketStore {
     return this.transaction(() => {
       const a = this.one('SELECT * FROM auctions WHERE id=?', id);
       check(a, 'Auction not found', 404);
-      if (a.deleted_at) return { id, deleted: true };
+      if (a.deleted_at) {
+        check(actor === 'system' || this.one('SELECT role FROM users WHERE id=?', actor)?.role === 'admin', 'Auction not found', 404);
+        return { id, deleted: true };
+      }
       check(a.end_at <= this.now(), 'Auction is still open', 409);
       if (a.finalized_at) return {
         id,
@@ -481,13 +483,13 @@ class MarketStore {
       const wasFinalized = Boolean(a.finalized_at);
       let released = 0;
       if (wasFinalized) {
-        this.run('UPDATE auctions SET deleted_at=?,deleted_by=?,deleted_note=? WHERE id=?', now, actor, deletedNote, id);
+        this.run('UPDATE auctions SET deleted_at=?,deleted_by=?,deleted_note=?,deleted_before_finalize=0 WHERE id=?', now, actor, deletedNote, id);
       } else {
         if (a.winner_id && a.highest > 0) {
           released = a.highest;
           this.balance(a.winner_id, released, 'auction-deleted-release', actor, id);
         }
-        this.run('UPDATE auctions SET deleted_at=?,deleted_by=?,deleted_note=?,finalized_at=? WHERE id=?', now, actor, deletedNote, now, id);
+        this.run('UPDATE auctions SET deleted_at=?,deleted_by=?,deleted_note=?,finalized_at=?,deleted_before_finalize=1 WHERE id=?', now, actor, deletedNote, now, id);
       }
       const outcome = wasFinalized ? 'hidden-only-no-money-moved' : released ? 'leader-refunded-seller-not-paid' : 'no-bids-nothing-to-refund';
       this.event('auction-deleted-by-admin', actor, { id, note: deletedNote, outcome, was_finalized: wasFinalized, released, leader: released ? a.winner_id : null });
@@ -498,7 +500,7 @@ class MarketStore {
   closeAuction(id, actor) {
     this.admin(actor);
     return this.transaction(() => {
-      check(this.one('SELECT id FROM auctions WHERE id=?', id), 'Auction not found', 404);
+      check(this.one('SELECT id FROM auctions WHERE id=? AND deleted_at IS NULL', id), 'Auction not found', 404);
       this.run('UPDATE auctions SET end_at=MIN(end_at,?) WHERE id=?', this.now(), id);
       this.event('auction-closed-by-admin', actor, {
         id
@@ -709,7 +711,7 @@ class MarketStore {
     return detail;
   }
   tick() {
-    const ended = this.all('SELECT id FROM auctions WHERE end_at<=? AND end_recorded=0', this.now());
+    const ended = this.all('SELECT id FROM auctions WHERE end_at<=? AND end_recorded=0 AND deleted_at IS NULL', this.now());
     if (ended.length) this.transaction(() => {
       for (const a of ended) {
         this.run('UPDATE auctions SET end_recorded=1 WHERE id=?', a.id);
@@ -747,7 +749,7 @@ class MarketStore {
         ...e,
         detail: JSON.parse(e.detail)
       })),
-      active: this.active(true),
+      active: this.active(),
       presence: this.presence(),
       settings: this.settings(),
       system: this.systemState(actor)

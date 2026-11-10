@@ -629,8 +629,8 @@ function AuctionsListView({ auctions, admin, user, act, refresh, allowPostSubmit
             </TableHead>
             <TableBody>
               {sorted.map(a => {
-                const isOpen = a.end_at > Date.now();
-                const isPaid = Boolean(a.finalized_at);
+                const isOpen = !a.deleted_at && a.end_at > Date.now();
+                const isPaid = Boolean(a.finalized_at) && !a.deleted_at;
                 const userWon = isPaid && a.winner_id === user.id;
                 const isLeading = isOpen && a.highest > 0 && a.winner_id === user.id;
                 const rowText = isLeading ? '#176b3a' : '#0d0d4e';
@@ -2445,6 +2445,8 @@ export default function BackendApp() {
     let source = null;
     if (typeof EventSource !== 'undefined') {
       source = new EventSource('/api/market/stream', { withCredentials: true });
+      // Too many tabs: the server closed this stream on purpose; stop so tabs do not evict each other.
+      source.addEventListener('superseded', () => source.close());
       source.addEventListener('message', event => {
         try { enqueue([JSON.parse(event.data)]); } catch { /* Ignore malformed events. */ }
       });

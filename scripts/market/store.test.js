@@ -668,13 +668,13 @@ test('migration adds new columns and tables to an existing database', async t =>
   const dir = mkdtempSync(join(tmpdir(), 'market-migrate-'));
   const file = join(dir, 'm.sqlite');
   const first = new MarketStore(file);
-  first.db.exec('DROP TABLE user_messages; ALTER TABLE auctions DROP COLUMN deleted_at; ALTER TABLE auctions DROP COLUMN deleted_by; ALTER TABLE auctions DROP COLUMN deleted_note');
+  first.db.exec('DROP TABLE user_messages; ALTER TABLE auctions DROP COLUMN deleted_at; ALTER TABLE auctions DROP COLUMN deleted_by; ALTER TABLE auctions DROP COLUMN deleted_note; ALTER TABLE auctions DROP COLUMN deleted_before_finalize');
   first.close();
   const second = new MarketStore(file);
   t.after(() => second.close());
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const columns = second.all('PRAGMA table_info(auctions)').map(c => c.name);
-  for (const c of ['deleted_at', 'deleted_by', 'deleted_note']) assert.ok(columns.includes(c));
+  for (const c of ['deleted_at', 'deleted_by', 'deleted_note', 'deleted_before_finalize']) assert.ok(columns.includes(c));
   assert.equal(second.one('SELECT COUNT(*) n FROM user_messages').n, 0);
 });
 
@@ -786,4 +786,31 @@ test('derived auction status for every state, deletion flag, and report totals',
   assert.deepEqual(report.summary, { auctions_total: 6, sold: 1, unsold: 1, ended: 1, active: 1, deleted: 2, sales_total: 120 });
   assert.equal(report.auctions.filter(x => x.status === 'sold').reduce((n, x) => n + x.highest, 0), 120);
   void seller;
+});
+
+test('deleted auctions: no finalize probing by users, no admin close, no end events', async t => {
+  const { s, admin, a, auction, advance } = await fixture(t);
+  const id = auction(1);
+  s.deleteAuction(id, '', admin.id);
+  assert.throws(() => s.finalize(id, a.id), error => error.status === 404);
+  assert.throws(() => s.finalize(randomUUID(), a.id), error => error.status === 404);
+  assert.deepEqual(s.finalize(id, admin.id), { id, deleted: true });
+  assert.throws(() => s.closeAuction(id, admin.id), /Auction not found/);
+  advance(61000);
+  s.tick();
+  assert.equal(s.one("SELECT COUNT(*) n FROM events WHERE type IN ('auction-ended','auction-closed-by-admin') AND json_extract(detail,'$.id')=?", id).n, 0);
+});
+
+test('deleted_before_finalize is stored at delete time and backfilled for existing rows', async t => {
+  const { s, admin, a, auction, advance } = await fixture(t);
+  const early = auction(1), late = auction(1);
+  s.bid(late, 60, a.id, randomUUID());
+  advance(61000);
+  s.finalize(late, admin.id);
+  s.deleteAuction(early, '', admin.id);
+  s.deleteAuction(late, '', admin.id);
+  assert.equal(s.one('SELECT deleted_before_finalize v FROM auctions WHERE id=?', early).v, 1);
+  assert.equal(s.one('SELECT deleted_before_finalize v FROM auctions WHERE id=?', late).v, 0);
+  s.run('UPDATE auctions SET deleted_before_finalize=NULL');
+  assert.equal(s.auction(early, admin.id).deleted_before_finalize, null);
 });

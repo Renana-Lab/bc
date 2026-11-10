@@ -238,3 +238,36 @@ test('SSE stream closes when its session expires', async t => {
   while (!ended && Date.now() < deadline) ended = (await reader.read()).done;
   assert.equal(ended, true);
 });
+
+test('SSE: the stream evicted by the per-user cap is told it was superseded', async t => {
+  const store = new MarketStore();
+  const admin = await store.createUser({ name: 'Admin', email: 'admin@example.com', password: 'long-admin-password', role: 'admin' }, null, true);
+  const server = createMarketServer(store, { origin: 'http://localhost:3010' });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const readers = [];
+  t.after(async () => {
+    for (const reader of readers) await reader.cancel().catch(() => {});
+    await new Promise(resolve => server.close(resolve));
+    store.close();
+  });
+  const base = `http://127.0.0.1:${server.address().port}/api/market`;
+  const login = await fetch(base + '/login', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'http://localhost:3010' }, body: JSON.stringify({ email: admin.email }) });
+  const cookie = login.headers.get('set-cookie').split(';')[0];
+  const open = async () => {
+    const response = await fetch(base + '/stream', { headers: { Cookie: cookie } });
+    const reader = response.body.getReader();
+    readers.push(reader);
+    return reader;
+  };
+  const oldest = await open();
+  for (let i = 0; i < 5; i++) await open();
+  const decoder = new TextDecoder();
+  let text = '';
+  const deadline = Date.now() + 2000;
+  for (;;) {
+    const { value, done } = await oldest.read();
+    if (value) text += decoder.decode(value);
+    if (done || Date.now() > deadline) break;
+  }
+  assert.match(text, /event: superseded/);
+});
