@@ -418,11 +418,92 @@ function HomePageView({ user }) {
   );
 }
 
+// Admin-only confirm dialog for soft-deleting an auction, with an optional note.
+function DeleteAuctionDialog({ auction, act, onClose }) {
+  const [note, setNote] = useState('');
+  return (
+    <Dialog open onClose={onClose} fullWidth maxWidth="xs">
+      <DialogTitle>Delete auction?</DialogTitle>
+      <DialogContent>
+        <p>"{auction.description}" will be hidden from all non-admin users. Its record, bids and ledger entries are kept. Reserved bids are not refunded automatically.</p>
+        <TextField label="Note (optional)" value={note} onChange={e => setNote(e.target.value)} fullWidth size="small" multiline minRows={2} inputProps={{ maxLength: 500 }} />
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>Cancel</Button>
+        <Button color="error" variant="contained" onClick={async () => { if (await act(`/admin/auctions/${auction.id}/delete`, { note: note.trim() || undefined })) onClose(); }}>Delete</Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+// Admin-only dialog to send a popup message to one user and review its history.
+function SendMessageDialog({ target, onClose, notify }) {
+  const [body, setBody] = useState('');
+  const [history, setHistory] = useState([]);
+  const [sending, setSending] = useState(false);
+  const load = useCallback(() => api(`/admin/users/${target.id}/messages`).then(r => setHistory(r.messages)).catch(() => {}), [target.id]);
+  useEffect(() => { load(); }, [load]);
+  const send = async () => {
+    if (!body.trim() || sending) return;
+    setSending(true);
+    try {
+      await api(`/admin/users/${target.id}/messages`, { body });
+      setBody('');
+      notify(`Message sent to ${target.name}`);
+      await load();
+    } catch (err) {
+      notify(err.message);
+    } finally {
+      setSending(false);
+    }
+  };
+  return (
+    <Dialog open onClose={onClose} fullWidth maxWidth="sm">
+      <DialogTitle>Send message to {target.name}</DialogTitle>
+      <DialogContent>
+        <TextField label="Message" value={body} onChange={e => setBody(e.target.value)} fullWidth multiline minRows={3} margin="dense" inputProps={{ maxLength: 1000 }} helperText={`${body.length}/1000`} />
+        {history.length > 0 && (
+          <div style={{ marginTop: 12 }}>
+            <strong>History</strong>
+            {history.map(m => (
+              <div key={m.id} style={{ borderTop: '1px solid #ddd', padding: '6px 0' }}>
+                <div style={{ whiteSpace: 'pre-wrap' }}>{m.body}</div>
+                <small>{new Date(m.created_at).toLocaleString()} - {m.read_at ? `read ${new Date(m.read_at).toLocaleString()}` : 'unread'}</small>
+              </div>
+            ))}
+          </div>
+        )}
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>Close</Button>
+        <Button variant="contained" disabled={!body.trim() || sending} onClick={send}>Send</Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+// Shows the oldest unread admin message; rendered as plain text (React escapes it).
+function AdminMessageModal({ message, onAck }) {
+  if (!message) return null;
+  return (
+    <Dialog open>
+      <DialogTitle>Message from the administrator</DialogTitle>
+      <DialogContent>
+        <div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{message.body}</div>
+      </DialogContent>
+      <DialogActions>
+        <Button variant="contained" autoFocus onClick={() => onAck(message)}>Got it</Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
 function AuctionsListView({ auctions, admin, user, act, refresh, allowPostSubmitEdit }) {
   const navigate = useNavigate();
   const [query, setQuery] = useState('');
   const [sortMode, setSortMode] = useState('normal');
   const [recordId, setRecordId] = useState(null);
+  const [deleting, setDeleting] = useState(null);
 
   const filtered = auctions.filter(a =>
     `${a.description} ${a.seller_identifier} ${a.highest}`.toLowerCase().includes(query.toLowerCase())
@@ -559,7 +640,7 @@ function AuctionsListView({ auctions, admin, user, act, refresh, allowPostSubmit
                     onClick={() => navigate(`/auction/${a.id}`)}
                   >
                     <TableCell align="center" style={{ color: rowText, fontWeight: 600 }}>
-                      <div>{a.description}</div>
+                      <div>{a.description}{a.deleted_at && <strong style={{ color: '#b00020' }} title={a.deleted_note}> (deleted)</strong>}</div>
                       <small style={{ color: '#5e638a', display: 'block' }}>{a.seller}</small>
                       <BidPosition auction={a} userId={user.id} />
                     </TableCell>
@@ -600,6 +681,11 @@ function AuctionsListView({ auctions, admin, user, act, refresh, allowPostSubmit
                       </Tooltip>
                       {admin && <IconAction title={`Manage database record: ${a.description}`} onClick={e => { e.stopPropagation(); setRecordId(a.id); }}><StorageOutlinedIcon fontSize="small" /></IconAction>}
                       {!admin && allowPostSubmitEdit && a.seller_id === user.id && isOpen && !a.bidders && <IconAction title={`Edit minimum bid: ${a.description}`} onClick={e => { e.stopPropagation(); setRecordId(a.id); }}><EditOutlinedIcon fontSize="small" /></IconAction>}
+                      {admin && !a.deleted_at && (
+                        <IconAction title={`Delete auction: ${a.description}`} onClick={e => { e.stopPropagation(); setDeleting(a); }}>
+                          <DeleteOutlineIcon color="error" />
+                        </IconAction>
+                      )}
                       {admin && isOpen && (
                         <IconAction
                           title="Close auction early"
@@ -627,6 +713,7 @@ function AuctionsListView({ auctions, admin, user, act, refresh, allowPostSubmit
         )}
       </TableContainer>
       </div>
+      {deleting && <DeleteAuctionDialog auction={deleting} act={act} onClose={() => setDeleting(null)} />}
       {recordId && <AuctionDatabaseDialog id={recordId} administrative={admin} onClose={() => setRecordId(null)} refresh={refresh} />}
     </section>
   );
@@ -1524,6 +1611,8 @@ function AdminView({ auctions, act, revision, notify }) {
   const [reportFromDate, setReportFromDate] = useState('');
   const [reportToDate, setReportToDate] = useState('');
   const [reportIncludeAll, setReportIncludeAll] = useState(true);
+  const [messaging, setMessaging] = useState(null);
+  const [deleting, setDeleting] = useState(null);
 
   useEffect(() => {
     let live = true, pending = false;
@@ -1679,6 +1768,8 @@ function AdminView({ auctions, act, revision, notify }) {
 
   return (
     <div className="market-page-data backend-admin-page">
+      {messaging && <SendMessageDialog target={messaging} notify={notify} onClose={() => setMessaging(null)} />}
+      {deleting && <DeleteAuctionDialog auction={deleting} act={act} onClose={() => setDeleting(null)} />}
       <div className="adminContainer">
         <Typography component="h1" variant="h4" gutterBottom style={{ textAlign: 'center' }}>
           Admin Zone
@@ -1884,6 +1975,7 @@ function AdminView({ auctions, act, revision, notify }) {
                       >
                         {u.disabled ? 'Enable' : 'Disable'}
                       </Button>
+                      {u.role !== 'bot' && <Button size="small" onClick={() => setMessaging(u)}>Send message</Button>}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -2098,7 +2190,7 @@ function AdminView({ auctions, act, revision, notify }) {
                   const isActive = a.end_at > Date.now();
                   return (
                     <TableRow key={a.id}>
-                      <TableCell align="center"><strong>{a.description}</strong><br /><small>{a.seller}</small></TableCell>
+                      <TableCell align="center"><strong>{a.description}</strong>{a.deleted_at && <strong style={{ color: '#b00020' }} title={a.deleted_note}> (deleted)</strong>}<br /><small>{a.seller}</small></TableCell>
                       <TableCell align="center">{date(a.end_at)}</TableCell>
                       <TableCell align="center">
                         <Countdown end={a.end_at} />
@@ -2107,6 +2199,11 @@ function AdminView({ auctions, act, revision, notify }) {
                       <TableCell align="center">{a.bidders}</TableCell>
                       <TableCell align="center">
                         <Button component={Link} to={`/auction/${a.id}`} size="small">View</Button>
+                        {!a.deleted_at && (
+                          <IconAction title={`Delete auction: ${a.description}`} onClick={() => setDeleting(a)}>
+                            <DeleteOutlineIcon color="error" />
+                          </IconAction>
+                        )}
                         {isActive && (
                           <IconAction title="Close auction early" onClick={() => window.confirm('Close auction early?') && act(`/admin/auctions/${a.id}/close`, {})}>
                             <StopIcon color="error" />
@@ -2282,6 +2379,7 @@ export default function BackendApp() {
   const [busy, setBusy] = useState(false);
   const [drawer, setDrawer] = useState(false);
   const [revision, setRevision] = useState(0);
+  const [messages, setMessages] = useState([]);
 
   const navigate = useNavigate();
   const location = useLocation();
@@ -2319,8 +2417,16 @@ export default function BackendApp() {
   }, [refresh]);
 
   useEffect(() => {
+    setMessages([]);
     if (!session?.user?.id) return;
-    const beat = () => { if (!document.hidden) api('/heartbeat', {}).catch(() => {}); };
+    const beat = () => {
+      if (document.hidden) return;
+      api('/heartbeat', {}).then(r => {
+        const incoming = Array.isArray(r?.messages) ? r.messages : [];
+        // Keep messages already queued; add only ones not yet known.
+        if (incoming.length) setMessages(old => [...old, ...incoming.filter(m => !old.some(o => o.id === m.id))]);
+      }).catch(() => {});
+    };
     beat();
     const timer = setInterval(beat, 15000);
     return () => clearInterval(timer);
@@ -2352,9 +2458,21 @@ export default function BackendApp() {
     }
   };
 
+  const acknowledgeMessage = async m => {
+    try {
+      await api(`/messages/${m.id}/read`, {});
+      setMessages(old => old.filter(o => o.id !== m.id));
+    } catch (err) {
+      // Keep the popup so the user can retry; a missing message cannot be shown again.
+      if (err.status === 404) setMessages(old => old.filter(o => o.id !== m.id));
+      else notify(err.message);
+    }
+  };
+
   const handleLogout = async () => {
     await act('/logout', {});
     setSession(null);
+    setMessages([]);
     navigate('/login');
   };
 
@@ -2537,6 +2655,8 @@ export default function BackendApp() {
           <IconButton size="small" onClick={() => setMessage('')}><CloseIcon fontSize="small" /></IconButton>
         </div>
       )}
+
+      {user && <AdminMessageModal message={messages[0]} onAck={acknowledgeMessage} />}
 
       <main aria-busy={busy} style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
         <Routes>

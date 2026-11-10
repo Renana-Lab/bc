@@ -592,3 +592,88 @@ test('cheapest selection handles 200000 active candidates without argument sprea
   assert.equal(round.sent, 1);
   assert.equal(round.decisions[0].auction, '199999');
 });
+
+test('admin messages: only admins send, validated, delivered oldest first, read only by the owner', async t => {
+  const { s, admin, a, b, advance } = await fixture(t);
+  assert.throws(() => s.sendMessage(a.id, 'hi', a.id), /Administrator access required/);
+  assert.throws(() => s.sendMessage(a.id, '   ', admin.id), /Text is required/);
+  assert.throws(() => s.sendMessage(a.id, 'x'.repeat(1001), admin.id), /maximum 1000/);
+  assert.throws(() => s.sendMessage(randomUUID(), 'hi', admin.id), /Account not found/);
+  const bot = await s.createUser({ name: 'Bot', email: 'g@bot.invalid', role: 'bot' }, admin.id);
+  assert.throws(() => s.sendMessage(bot.id, 'hi', admin.id), /bot accounts/);
+  const first = s.sendMessage(a.id, '<b>first</b>', admin.id).id;
+  advance(10);
+  const second = s.sendMessage(a.id, 'second', admin.id).id;
+  assert.equal(s.all("SELECT id FROM events WHERE type='admin-message-sent'").length, 2);
+  const login = s.identifierLogin('a@example.com');
+  const beat = s.heartbeat(login.token);
+  assert.deepEqual(beat.messages.map(m => m.id), [first, second]);
+  assert.equal(beat.messages[0].body, '<b>first</b>');
+  assert.deepEqual(s.heartbeat(s.identifierLogin('b@example.com').token).messages, []);
+  assert.throws(() => s.markMessageRead(first, b.id), /Message not found/);
+  assert.equal(s.one('SELECT read_at FROM user_messages WHERE id=?', first).read_at, null);
+  advance(5);
+  s.markMessageRead(first, a.id);
+  const readAt = s.one('SELECT read_at FROM user_messages WHERE id=?', first).read_at;
+  advance(5);
+  s.markMessageRead(first, a.id);
+  assert.equal(s.one('SELECT read_at FROM user_messages WHERE id=?', first).read_at, readAt);
+  assert.deepEqual(s.heartbeat(login.token).messages.map(m => m.id), [second]);
+  const history = s.userMessages(a.id, admin.id).messages;
+  assert.deepEqual(history.map(m => m.id), [second, first]);
+  assert.equal(history[1].read_at, readAt);
+  assert.throws(() => s.userMessages(a.id, a.id), /Administrator access required/);
+});
+
+test('soft-deleted auctions are hidden from users but kept for admins and reports', async t => {
+  const { s, admin, seller, a, auction } = await fixture(t);
+  const id = auction(5), other = auction(5);
+  s.bid(id, 60, a.id, randomUUID());
+  const budgetBefore = s.user(a.id).budget;
+  const ledgerBefore = s.one('SELECT COUNT(*) n FROM ledger').n;
+  assert.throws(() => s.deleteAuction(id, 'x', seller.id), /Administrator access required/);
+  assert.throws(() => s.deleteAuction(randomUUID(), '', admin.id), /Auction not found/);
+  assert.throws(() => s.deleteAuction(id, 'n'.repeat(501), admin.id), /too long/);
+  assert.equal(s.deleteAuction(id, undefined, admin.id).deleted_note, 'Deleted by admin');
+  assert.equal(s.one('SELECT COUNT(*) n FROM ledger').n, ledgerBefore);
+  assert.throws(() => s.deleteAuction(id, 'again', admin.id), /already deleted/);
+  const row = s.one('SELECT deleted_at,deleted_by,deleted_note FROM auctions WHERE id=?', id);
+  assert.deepEqual({ ...row }, { deleted_at: 1000000, deleted_by: admin.id, deleted_note: 'Deleted by admin' });
+  assert.equal(s.one('SELECT COUNT(*) n FROM auctions').n, 2);
+  assert.ok(s.one("SELECT id FROM events WHERE type='auction-deleted-by-admin'"));
+  // Hidden from users: list, detail, record, bids and the active list used by bots.
+  assert.deepEqual(s.auctionsFor(a.id).map(x => x.id), [other]);
+  assert.equal('deleted_at' in s.auctionsFor(a.id)[0], false);
+  assert.throws(() => s.auction(id, a.id), /Auction not found/);
+  assert.throws(() => s.auction(id, seller.id), /Auction not found/);
+  assert.throws(() => s.inspectAuction(id, seller.id, false), /Auction not found/);
+  assert.throws(() => s.bid(id, 100, a.id, randomUUID()), /Auction not found/);
+  assert.deepEqual(s.active().map(x => x.id), [other]);
+  const bot = await s.createUser({ name: 'Bot', email: 'g@bot.invalid', role: 'bot' }, admin.id);
+  s.runBots(true);
+  assert.equal(s.one('SELECT COUNT(*) n FROM bids WHERE auction_id=? AND user_id=?', id, bot.id).n, 0);
+  // Admin still sees it, marked deleted.
+  assert.equal(s.auction(id, admin.id).deleted_at, 1000000);
+  assert.equal(s.auctionsFor(admin.id).find(x => x.id === id).deleted_by, admin.id);
+  assert.equal(s.adminState(admin.id).active.find(x => x.id === id).deleted_at, 1000000);
+  assert.equal(s.report(admin.id).auctions.find(x => x.id === id).deleted_note, 'Deleted by admin');
+  assert.equal(s.inspectAuction(id, admin.id).editable, false);
+  // Deleting changes no budgets or ledger entries (bot activity above only touched the other auction).
+  assert.equal(s.user(a.id).budget, budgetBefore);
+  s.deleteAuction(other, '  spam  ', admin.id);
+  assert.equal(s.one('SELECT deleted_note FROM auctions WHERE id=?', other).deleted_note, 'spam');
+});
+
+test('migration adds new columns and tables to an existing database', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'market-migrate-'));
+  const file = join(dir, 'm.sqlite');
+  const first = new MarketStore(file);
+  first.db.exec('DROP TABLE user_messages; ALTER TABLE auctions DROP COLUMN deleted_at; ALTER TABLE auctions DROP COLUMN deleted_by; ALTER TABLE auctions DROP COLUMN deleted_note');
+  first.close();
+  const second = new MarketStore(file);
+  t.after(() => second.close());
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const columns = second.all('PRAGMA table_info(auctions)').map(c => c.name);
+  for (const c of ['deleted_at', 'deleted_by', 'deleted_note']) assert.ok(columns.includes(c));
+  assert.equal(second.one('SELECT COUNT(*) n FROM user_messages').n, 0);
+});

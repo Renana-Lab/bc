@@ -129,17 +129,24 @@ function createMarketServer(store, options = {}) {
         adminAccess: user.role === 'admin',
         serverTime: store.now()
       };else if (route === '/heartbeat' && req.method === 'POST') {
-        store.heartbeat(token);
-        result = {
-          ok: true
-        };
+        result = { ok: true, messages: store.heartbeat(token).messages };
+      } else if (parts[0] === 'messages' && parts[2] === 'read' && parts.length === 3 && req.method === 'POST') {
+        result = store.markMessageRead(parts[1], user.id);
       } else if (route === '/password' && req.method === 'POST') result = await store.changePassword(user.id, body.password, user.id, body.currentPassword);else if (route === '/auctions' && req.method === 'GET') result = {
-        auctions: store.auctions(),
+        auctions: store.auctionsFor(user.id),
         serverTime: store.now()
       };else if (route === '/auctions' && req.method === 'POST') result = store.createAuction(body, user.id);else if (parts[0] === 'auctions' && parts.length === 2 && req.method === 'GET') result = store.auction(parts[1], user.id);else if (parts[0] === 'auctions' && parts[2] === 'bid' && req.method === 'POST') result = store.bid(parts[1], body.amount, user.id, req.headers['idempotency-key']);else if (parts[0] === 'auctions' && parts[2] === 'finalize' && req.method === 'POST') result = store.finalize(parts[1], user.id);else if (parts[0] === 'admin') {
         store.admin(user.id);
         if (parts[1] === 'auctions' && parts[3] === 'record' && parts.length === 4 && ['GET', 'POST'].includes(req.method)) {
           result = req.method === 'GET' ? store.inspectAuction(parts[2], user.id) : store.editAuction(parts[2], body, user.id);
+          send(200, result); return;
+        }
+        if (parts[1] === 'users' && parts[3] === 'messages' && parts.length === 4 && ['GET', 'POST'].includes(req.method)) {
+          result = req.method === 'GET' ? store.userMessages(parts[2], user.id) : store.sendMessage(parts[2], body.body, user.id);
+          send(200, result); return;
+        }
+        if (parts[1] === 'auctions' && parts[3] === 'delete' && parts.length === 4 && req.method === 'POST') {
+          result = store.deleteAuction(parts[2], body.note, user.id);
           send(200, result); return;
         }
         if (route === '/admin/bots' && req.method === 'POST') {
