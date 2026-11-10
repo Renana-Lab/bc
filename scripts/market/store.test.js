@@ -746,3 +746,44 @@ test('a bid after delete returns not found', async t => {
   s.deleteAuction(id, '', admin.id);
   assert.throws(() => s.bid(id, 100, b.id, randomUUID()), error => error.status === 404);
 });
+
+test('derived auction status for every state, deletion flag, and report totals', async t => {
+  const { s, admin, seller, a, b, auction, advance } = await fixture(t);
+  const status = id => s.auctionsFor(admin.id).find(x => x.id === id);
+  const active = auction(10), ended = auction(1), sold = auction(1), unsold = auction(1);
+  const deletedLive = auction(10), deletedAfter = auction(1);
+  s.bid(sold, 120, a.id, randomUUID());
+  s.bid(deletedLive, 300, b.id, randomUUID());
+  s.bid(deletedAfter, 200, a.id, randomUUID());
+  advance(61000);
+  s.finalize(sold, admin.id);
+  s.finalize(unsold, admin.id);
+  s.finalize(deletedAfter, admin.id);
+  const beforeRefund = s.user(b.id).budget;
+  s.deleteAuction(deletedLive, 'refund me', admin.id);
+  s.deleteAuction(deletedAfter, 'hide only', admin.id);
+  assert.equal(s.user(b.id).budget, beforeRefund + 300);
+  const got = Object.fromEntries([active, ended, sold, unsold, deletedLive, deletedAfter].map(id => [id, status(id)]));
+  assert.equal(got[active].status, 'active');
+  assert.equal(got[ended].status, 'ended');
+  assert.equal(got[sold].status, 'sold');
+  assert.equal(got[unsold].status, 'unsold');
+  assert.equal(got[deletedLive].status, 'deleted');
+  assert.equal(got[deletedLive].deleted_before_finalize, true);
+  assert.equal(got[deletedAfter].status, 'deleted');
+  assert.equal(got[deletedAfter].deleted_before_finalize, false);
+  assert.equal(got[sold].deleted_before_finalize, null);
+  // Same value from the other admin views.
+  assert.equal(s.inspectAuction(sold, admin.id).status, 'sold');
+  assert.equal(s.inspectAuction(deletedLive, admin.id).status, 'deleted');
+  assert.equal(s.inspectAuction(deletedLive, admin.id).deleted_before_finalize, true);
+  assert.equal(s.adminState(admin.id).active.find(x => x.id === active).status, 'active');
+  // Non-admins never get the field or the deleted rows.
+  assert.equal('status' in s.auctionsFor(a.id)[0], false);
+  // Report rows and totals: only status 'sold' counts; the deleted auction with a refunded leader is excluded.
+  const report = s.report(admin.id);
+  assert.equal(report.auctions.find(x => x.id === deletedLive).status, 'deleted');
+  assert.deepEqual(report.summary, { auctions_total: 6, sold: 1, unsold: 1, ended: 1, active: 1, deleted: 2, sales_total: 120 });
+  assert.equal(report.auctions.filter(x => x.status === 'sold').reduce((n, x) => n + x.highest, 0), 120);
+  void seller;
+});

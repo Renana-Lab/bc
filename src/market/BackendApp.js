@@ -418,6 +418,15 @@ function HomePageView({ user }) {
   );
 }
 
+const STATUS_COLORS = { active: '#1565c0', ended: '#ef6c00', sold: '#2e7d32', unsold: '#616161', deleted: '#b00020' };
+// Small admin label for the derived auction status (computed by the server).
+function StatusLabel({ auction }) {
+  const status = auction.status;
+  if (!status) return null;
+  const detail = status === 'deleted' ? `${auction.deleted_note || 'Deleted by admin'} (${auction.deleted_before_finalize ? 'deleted before finalize' : 'deleted after finalize'})` : status;
+  return <span title={detail} style={{ display: 'inline-block', marginLeft: 6, padding: '1px 8px', borderRadius: 10, fontSize: '0.7rem', fontWeight: 700, textTransform: 'uppercase', color: '#fff', background: STATUS_COLORS[status] || '#616161' }}>{status}</span>;
+}
+
 // Admin-only confirm dialog for soft-deleting an auction, with an optional note.
 function DeleteAuctionDialog({ auction, act, onClose }) {
   const [note, setNote] = useState('');
@@ -640,7 +649,7 @@ function AuctionsListView({ auctions, admin, user, act, refresh, allowPostSubmit
                     onClick={() => navigate(`/auction/${a.id}`)}
                   >
                     <TableCell align="center" style={{ color: rowText, fontWeight: 600 }}>
-                      <div>{a.description}{a.deleted_at && <strong style={{ color: '#b00020' }} title={a.deleted_note}> (deleted)</strong>}</div>
+                      <div>{a.description}{admin && a.status && <StatusLabel auction={a} />}</div>
                       <small style={{ color: '#5e638a', display: 'block' }}>{a.seller}</small>
                       <BidPosition auction={a} userId={user.id} />
                     </TableCell>
@@ -1669,9 +1678,9 @@ function AdminView({ auctions, act, revision, notify }) {
       const cell = v => `"${String(v ?? '').replace(/^[=+@-]/, "'$&").replace(/"/g, '""')}"`;
       return downloadBlob([headers.map(h => h.endsWith('_at') ? `${h} (UTC)` : h), ...report.bids.map(r => headers.map(h => formatReportValue(h, r[h])))].map(row => row.map(cell).join(',')).join('\r\n'), 'text/csv', 'market-bids.csv');
     }
-    const tables = ['users', 'auctions', 'bids', 'ledger', 'events', 'snapshots', 'rounds', 'activity', 'participants', 'payments', 'flags'].map(name => ({
+    const tables = ['users', 'auctions', 'bids', 'ledger', 'events', 'snapshots', 'rounds', 'activity', 'participants', 'payments', 'flags', 'summary'].map(name => ({
       name,
-      rows: (report[name] || []).map(row => Object.fromEntries(Object.entries(row).map(([k, v]) => [k, v !== null && typeof v === 'object' ? JSON.stringify(v) : v])))
+      rows: (Array.isArray(report[name]) ? report[name] : report[name] ? [report[name]] : []).map(row => Object.fromEntries(Object.entries(row).map(([k, v]) => [k, v !== null && typeof v === 'object' ? JSON.stringify(v) : v])))
     }));
     if (kind === 'xls') return downloadBlob(buildMarketWorkbook(tables), 'application/vnd.ms-excel', 'market-workbook.xls');
 
@@ -2190,7 +2199,7 @@ function AdminView({ auctions, act, revision, notify }) {
                   const isActive = a.end_at > Date.now();
                   return (
                     <TableRow key={a.id}>
-                      <TableCell align="center"><strong>{a.description}</strong>{a.deleted_at && <strong style={{ color: '#b00020' }} title={a.deleted_note}> (deleted)</strong>}<br /><small>{a.seller}</small></TableCell>
+                      <TableCell align="center"><strong>{a.description}</strong> <StatusLabel auction={a} /><br /><small>{a.seller}</small></TableCell>
                       <TableCell align="center">{date(a.end_at)}</TableCell>
                       <TableCell align="center">
                         <Countdown end={a.end_at} />
