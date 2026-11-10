@@ -498,7 +498,7 @@ function AdminMessageModal({ message, onAck }) {
     <Dialog open>
       <DialogTitle>Message from the administrator</DialogTitle>
       <DialogContent>
-        <div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{message.body}</div>
+        <div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: '1.3rem', lineHeight: 1.5 }}>{message.body}</div>
       </DialogContent>
       <DialogActions>
         <Button variant="contained" autoFocus onClick={() => onAck(message)}>Got it</Button>
