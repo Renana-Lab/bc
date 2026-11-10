@@ -20,7 +20,8 @@ test('backend report joins cohorts and flags missing payments', () => {
       winner_id: 'u',
       highest: 500,
       end_at: 50,
-      finalized_at: null
+      finalized_at: null,
+      status: 'ended'
     }],
     bids: [{
       auction_id: 'a',
@@ -36,6 +37,23 @@ test('backend report joins cohorts and flags missing payments', () => {
     auction: 'a',
     reason: 'Seller payment pending'
   }]);
+});
+test('report totals count only sold auctions and exclude a deleted auction with a refunded leader', () => {
+  const report = {
+    generatedAt: 1000,
+    users: [{ id: 'u', name: 'U', role: 'user', budget: 2000 }],
+    auctions: [
+      { id: 'sold', seller_id: 's', winner_id: 'u', highest: 120, end_at: 10, finalized_at: 20, status: 'sold' },
+      { id: 'gone', seller_id: 's', winner_id: 'u', highest: 500, end_at: 900, finalized_at: 50, deleted_at: 50, status: 'deleted', deleted_before_finalize: true }
+    ],
+    bids: [{ auction_id: 'sold', user_id: 'u', amount: 120 }, { auction_id: 'gone', user_id: 'u', amount: 500 }],
+    ledger: [{ auction_id: 'sold', reason: 'seller-payment' }]
+  };
+  const result = analyzeMarketReport(report);
+  expect(result.summary).toMatchObject({ auctions_total: 2, sold: 1, deleted: 1, sales_total: 120 });
+  expect(result.participants[0]).toMatchObject({ wins: 1, spent: 120 });
+  expect(result.payments.find(p => p.auction === 'gone')).toMatchObject({ amount: 0, status: 'deleted', deleted_before_finalize: true });
+  expect(result.flags).toEqual([]);
 });
 test('workbook keeps user text as escaped strings rather than formulas', () => {
   const xml = buildMarketWorkbook([{

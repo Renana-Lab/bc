@@ -13,6 +13,7 @@ const {
   promisify
 } = require('node:util');
 const fs = require('node:fs');
+const { EventEmitter } = require('node:events');
 const path = require('node:path');
 const derive = promisify(scrypt);
 const LIMIT = 1_000_000_000;
@@ -57,9 +58,18 @@ async function verifyPassword(password, hash) {
   const actual = await derive(password, salt, 64);
   return timingSafeEqual(actual, Buffer.from(expected, 'hex'));
 }
+// Derived auction status (never stored, so it cannot drift). Takes one bound parameter: now.
+const statusSql = alias => `CASE WHEN ${alias}.deleted_at IS NOT NULL THEN 'deleted'
+  WHEN ${alias}.finalized_at IS NOT NULL AND ${alias}.winner_id IS NOT NULL AND ${alias}.highest>0 THEN 'sold'
+  WHEN ${alias}.finalized_at IS NOT NULL THEN 'unsold'
+  WHEN ${alias}.end_at<=? THEN 'ended' ELSE 'active' END`;
+// deleted_before_finalize is written once when the auction is deleted: 1 = before finalize, 0 = already finalized.
+const withDeletionFlag = row => ({ ...row, deleted_before_finalize: row.status === 'deleted' && row.deleted_before_finalize !== null ? Boolean(row.deleted_before_finalize) : null });
 class MarketStore {
   constructor(filename = ':memory:', clock = Date.now, random = randomInt) {
     this.now = clock;
+    // In-process notifications for the HTTP layer (message push, closing streams).
+    this.bus = new EventEmitter();
     this.random = random;
     this.filename = filename === ':memory:' ? filename : path.resolve(filename);
     this.db = new DatabaseSync(filename);
@@ -78,6 +88,8 @@ class MarketStore {
       CREATE TABLE IF NOT EXISTS bots (user_id TEXT PRIMARY KEY REFERENCES users(id), enabled INTEGER NOT NULL DEFAULT 1, running INTEGER NOT NULL DEFAULT 0, interval_seconds INTEGER NOT NULL DEFAULT 60, max_bids INTEGER NOT NULL DEFAULT 1, max_bid INTEGER NOT NULL DEFAULT 2000, bid_increment INTEGER NOT NULL DEFAULT 10, max_above_opening INTEGER, next_at INTEGER NOT NULL DEFAULT 0, cycles INTEGER NOT NULL DEFAULT 0, sent INTEGER NOT NULL DEFAULT 0, last_seen INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS rounds (id INTEGER PRIMARY KEY, detail TEXT NOT NULL, created_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS activity (id INTEGER PRIMARY KEY, detail TEXT NOT NULL, created_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS user_messages (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), body TEXT NOT NULL, created_by TEXT NOT NULL, created_at INTEGER NOT NULL, read_at INTEGER);
+      CREATE INDEX IF NOT EXISTS user_messages_unread ON user_messages(user_id,read_at,created_at);
       CREATE TABLE IF NOT EXISTS requests (user_id TEXT NOT NULL, key TEXT NOT NULL, fingerprint TEXT NOT NULL, response TEXT NOT NULL, PRIMARY KEY(user_id,key));
       CREATE TRIGGER IF NOT EXISTS ledger_no_update BEFORE UPDATE ON ledger BEGIN SELECT RAISE(ABORT,'Ledger is immutable'); END;
       CREATE TRIGGER IF NOT EXISTS ledger_no_delete BEFORE DELETE ON ledger BEGIN SELECT RAISE(ABORT,'Ledger is immutable'); END;`);
@@ -103,7 +115,12 @@ class MarketStore {
     if (!auctionColumns.some(column => column.name === 'adjusted_minimum')) {
       this.db.exec('ALTER TABLE auctions ADD COLUMN adjusted_minimum INTEGER');
     }
+    for (const [column, type] of [['deleted_at', 'INTEGER'], ['deleted_by', 'TEXT'], ['deleted_note', 'TEXT'], ['deleted_before_finalize', 'INTEGER']]) {
+      if (!auctionColumns.some(c => c.name === column)) this.db.exec(`ALTER TABLE auctions ADD COLUMN ${column} ${type}`);
+    }
     this.db.exec('UPDATE auctions SET original_minimum=minimum WHERE original_minimum IS NULL');
+    // Backfill the flag for auctions deleted before the column existed.
+    this.db.exec(`UPDATE auctions SET deleted_before_finalize=COALESCE((SELECT json_extract(e.detail,'$.was_finalized')=0 FROM events e WHERE e.type='auction-deleted-by-admin' AND json_extract(e.detail,'$.id')=auctions.id ORDER BY e.id DESC LIMIT 1),0) WHERE deleted_at IS NOT NULL AND deleted_before_finalize IS NULL`);
     const legacyMarketName = ['Data', 'Market'].join(' ');
     this.run('UPDATE settings SET name=? WHERE id=1 AND name=?', 'Data Marketplace', legacyMarketName);
   }
@@ -242,24 +259,61 @@ class MarketStore {
   heartbeat(token) {
     const user = this.session(token);
     this.run('UPDATE sessions SET seen_at=? WHERE token=?', this.now(), digest(token));
-    return user;
+    return { user, messages: this.unreadMessages(user.id) };
+  }
+  unreadMessages(userId) {
+    return this.all('SELECT id,body,created_at FROM user_messages WHERE user_id=? AND read_at IS NULL ORDER BY created_at,rowid', userId);
+  }
+  sendMessage(userId, body, actor) {
+    this.admin(actor);
+    const text = label(body, 1000);
+    const result = this.transaction(() => {
+      const target = this.one('SELECT id,role FROM users WHERE id=?', userId);
+      check(target, 'Account not found', 404);
+      check(target.role !== 'bot', 'Messages cannot be sent to bot accounts');
+      const id = randomUUID(), createdAt = this.now();
+      this.run('INSERT INTO user_messages(id,user_id,body,created_by,created_at) VALUES(?,?,?,?,?)', id, userId, text, actor, createdAt);
+      this.event('admin-message-sent', actor, { id: userId, message: id, length: text.length });
+      return { id, message: { id, body: text, created_at: createdAt } };
+    });
+    this.bus.emit('message', { userId, message: result.message });
+    return { id: result.id };
+  }
+  markMessageRead(id, userId) {
+    const message = this.one('SELECT id,read_at FROM user_messages WHERE id=? AND user_id=?', id, userId);
+    check(message, 'Message not found', 404);
+    if (message.read_at === null) this.run('UPDATE user_messages SET read_at=? WHERE id=? AND read_at IS NULL', this.now(), id);
+    return { id, read: true };
+  }
+  userMessages(userId, actor) {
+    this.admin(actor);
+    check(this.one('SELECT id FROM users WHERE id=?', userId), 'Account not found', 404);
+    return { messages: this.all('SELECT id,body,created_by,created_at,read_at FROM user_messages WHERE user_id=? ORDER BY created_at DESC,rowid DESC', userId) };
   }
   logout(token) {
     this.run('DELETE FROM sessions WHERE token=?', digest(token || ''));
+    this.bus.emit('session-closed', { digest: digest(token || '') });
   }
+  // Deleted auctions are always finalized, so they never appear here.
   active() {
-    return this.all('SELECT id,description,seller_id,minimum,original_minimum,adjusted_minimum,end_at,highest,winner_id FROM auctions WHERE finalized_at IS NULL AND end_at>? ORDER BY end_at,id', this.now());
+    return this.all(`SELECT a.id,a.description,a.seller_id,a.minimum,a.original_minimum,a.adjusted_minimum,a.end_at,a.highest,a.winner_id,${statusSql('a')} status FROM auctions a WHERE a.finalized_at IS NULL AND a.end_at>? AND a.deleted_at IS NULL ORDER BY a.end_at,a.id`, this.now(), this.now());
   }
   snapshot(reason) {
     this.run('INSERT INTO snapshots(reason,state,created_at) VALUES(?,?,?)', reason, JSON.stringify(this.active()), this.now());
   }
-  auctions() {
-    return this.all(`SELECT a.id,a.description,a.seller_id,u.email seller,u.email seller_identifier,a.minimum,a.original_minimum,a.adjusted_minimum,a.end_at,a.highest,a.winner_id,a.finalized_at,a.created_at,
-      (SELECT COUNT(DISTINCT user_id) FROM bids b WHERE b.auction_id=a.id) bidders FROM auctions a JOIN users u ON u.id=a.seller_id ORDER BY a.created_at DESC,a.id`);
+  // Non-admin callers (includeDeleted=false) never see soft-deleted auctions.
+  auctions(includeDeleted = false) {
+    const deletedColumns = includeDeleted ? `,a.deleted_at,a.deleted_by,a.deleted_note,${statusSql('a')} status,a.deleted_before_finalize` : '';
+    const rows = this.all(`SELECT a.id,a.description,a.seller_id,u.email seller,u.email seller_identifier,a.minimum,a.original_minimum,a.adjusted_minimum,a.end_at,a.highest,a.winner_id,a.finalized_at,a.created_at${deletedColumns},
+      (SELECT COUNT(DISTINCT user_id) FROM bids b WHERE b.auction_id=a.id) bidders FROM auctions a JOIN users u ON u.id=a.seller_id${includeDeleted ? '' : ' WHERE a.deleted_at IS NULL'} ORDER BY a.created_at DESC,a.id`, ...(includeDeleted ? [this.now()] : []));
+    return includeDeleted ? rows.map(withDeletionFlag) : rows;
+  }
+  auctionsFor(actor) {
+    return this.auctions(this.user(actor).role === 'admin');
   }
   auction(id, actor) {
-    this.user(actor);
-    const item = this.auctions().find(a => a.id === id);
+    const isAdmin = this.user(actor).role === 'admin';
+    const item = this.auctions(isAdmin).find(a => a.id === id);
     check(item, 'Auction not found', 404);
     const canViewHistory = item.seller_id === actor || this.user(actor).role === 'admin';
     const bids = canViewHistory ? this.all(`SELECT b.id,b.amount,b.cumulative,b.created_at,
@@ -280,15 +334,17 @@ class MarketStore {
   inspectAuction(id, actor, adminOnly = true) {
     if (adminOnly) this.admin(actor); else this.user(actor);
     const record = this.one('SELECT * FROM auctions WHERE id=?', id);
-    check(record, 'Auction not found', 404);
+    check(record && (adminOnly || !record.deleted_at), 'Auction not found', 404);
     check(adminOnly || record.seller_id === actor, 'Only the seller can edit this auction', 403);
     const bids = this.all('SELECT b.*,u.email AS identifier FROM bids b JOIN users u ON u.id=b.user_id WHERE auction_id=? ORDER BY b.rowid', id);
+    const derived = adminOnly ? withDeletionFlag(this.one(`SELECT ${statusSql('a')} status,a.deleted_before_finalize FROM auctions a WHERE a.id=?`, this.now(), id)) : {};
     return {
+      ...derived,
       record, revision: digest(JSON.stringify(record)), bids: adminOnly ? bids : bids.map(({ budget_before, budget_after, ...bid }) => bid),
       seller_identifier: this.one('SELECT email FROM users WHERE id=?', record.seller_id).email,
       ledger: adminOnly ? this.all('SELECT * FROM ledger WHERE auction_id=? ORDER BY id', id) : [],
       events: adminOnly ? this.all("SELECT * FROM events WHERE json_extract(detail,'$.id')=? ORDER BY id DESC LIMIT 100", id) : [],
-      editable: (adminOnly || Boolean(this.settings().allow_post_submit_edit)) && !bids.length && !record.finalized_at && record.end_at > this.now()
+      editable: !record.deleted_at && (adminOnly || Boolean(this.settings().allow_post_submit_edit)) && !bids.length && !record.finalized_at && record.end_at > this.now()
     };
   }
   editAuction(id, input, actor, adminOnly = true) {
@@ -353,7 +409,7 @@ class MarketStore {
         return JSON.parse(previous.response);
       }
       const a = this.one('SELECT * FROM auctions WHERE id=?', id);
-      check(a, 'Auction not found', 404);
+      check(a && !a.deleted_at, 'Auction not found', 404);
       check(!a.finalized_at && a.end_at > this.now(), 'Auction has ended', 409);
       check(a.seller_id !== actor, 'You cannot bid on your own auction', 403);
       const own = this.one('SELECT COALESCE(SUM(amount),0) total FROM bids WHERE auction_id=? AND user_id=?', id, actor).total;
@@ -385,6 +441,10 @@ class MarketStore {
     return this.transaction(() => {
       const a = this.one('SELECT * FROM auctions WHERE id=?', id);
       check(a, 'Auction not found', 404);
+      if (a.deleted_at) {
+        check(actor === 'system' || this.one('SELECT role FROM users WHERE id=?', actor)?.role === 'admin', 'Auction not found', 404);
+        return { id, deleted: true };
+      }
       check(a.end_at <= this.now(), 'Auction is still open', 409);
       if (a.finalized_at) return {
         id,
@@ -405,10 +465,42 @@ class MarketStore {
       };
     });
   }
+  // Soft delete: the row, its bids and the ledger are kept. Hidden from non-admins.
+  // Not yet finalized: the leader's reserved amount is released and the auction is marked
+  // finalized so it leaves every "held" query; the seller is never paid.
+  // Already finalized: only hidden; no money moves.
+  deleteAuction(id, note, actor) {
+    this.admin(actor);
+    check(note === undefined || note === null || typeof note === 'string', 'Invalid note');
+    const text = (note || '').trim();
+    check(text.length <= 500, 'Note is too long (maximum 500 characters)');
+    return this.transaction(() => {
+      const a = this.one('SELECT * FROM auctions WHERE id=?', id);
+      check(a, 'Auction not found', 404);
+      check(!a.deleted_at, 'Auction is already deleted', 409);
+      const deletedNote = text || 'Deleted by admin';
+      const now = this.now();
+      const wasFinalized = Boolean(a.finalized_at);
+      let released = 0;
+      if (wasFinalized) {
+        this.run('UPDATE auctions SET deleted_at=?,deleted_by=?,deleted_note=?,deleted_before_finalize=0 WHERE id=?', now, actor, deletedNote, id);
+      } else {
+        if (a.winner_id && a.highest > 0) {
+          released = a.highest;
+          this.balance(a.winner_id, released, 'auction-deleted-release', actor, id);
+        }
+        this.run('UPDATE auctions SET deleted_at=?,deleted_by=?,deleted_note=?,finalized_at=?,deleted_before_finalize=1 WHERE id=?', now, actor, deletedNote, now, id);
+      }
+      const outcome = wasFinalized ? 'hidden-only-no-money-moved' : released ? 'leader-refunded-seller-not-paid' : 'no-bids-nothing-to-refund';
+      this.event('auction-deleted-by-admin', actor, { id, note: deletedNote, outcome, was_finalized: wasFinalized, released, leader: released ? a.winner_id : null });
+      this.snapshot('auction-deleted');
+      return { id, deleted: true, deleted_note: deletedNote, was_finalized: wasFinalized, money_moved: released > 0, released, leader: released ? a.winner_id : null, outcome };
+    });
+  }
   closeAuction(id, actor) {
     this.admin(actor);
     return this.transaction(() => {
-      check(this.one('SELECT id FROM auctions WHERE id=?', id), 'Auction not found', 404);
+      check(this.one('SELECT id FROM auctions WHERE id=? AND deleted_at IS NULL', id), 'Auction not found', 404);
       this.run('UPDATE auctions SET end_at=MIN(end_at,?) WHERE id=?', this.now(), id);
       this.event('auction-closed-by-admin', actor, {
         id
@@ -456,6 +548,7 @@ class MarketStore {
     this.run('UPDATE users SET disabled=? WHERE id=?', Number(disabled), id);
     this.run('DELETE FROM sessions WHERE user_id=?', id);
     if (disabled) this.run('UPDATE bots SET running=0 WHERE user_id=?', id);
+    this.bus.emit('user-sessions-closed', { userId: id });
     this.event('account-disabled', actor, {
       id,
       disabled
@@ -498,6 +591,7 @@ class MarketStore {
       check(this.one('SELECT password FROM users WHERE id=?', id).password === target.password, 'Password changed. Please retry.', 409);
       this.run('UPDATE users SET password=? WHERE id=?', hash, id);
       this.run('DELETE FROM sessions WHERE user_id=?', id);
+      this.bus.emit('user-sessions-closed', { userId: id });
       this.event('password-changed', actor, {
         id
       });
@@ -617,7 +711,7 @@ class MarketStore {
     return detail;
   }
   tick() {
-    const ended = this.all('SELECT id FROM auctions WHERE end_at<=? AND end_recorded=0', this.now());
+    const ended = this.all('SELECT id FROM auctions WHERE end_at<=? AND end_recorded=0 AND deleted_at IS NULL', this.now());
     if (ended.length) this.transaction(() => {
       for (const a of ended) {
         this.run('UPDATE auctions SET end_recorded=1 WHERE id=?', a.id);
@@ -715,6 +809,20 @@ class MarketStore {
       }
     };
   }
+  // Sales figures count only status='sold'; deleted auctions never contribute.
+  salesSummary() {
+    const rows = this.all(`SELECT ${statusSql('a')} status,COUNT(*) n,COALESCE(SUM(CASE WHEN ${statusSql('a')}='sold' THEN a.highest END),0) sales FROM auctions a GROUP BY 1`, this.now(), this.now());
+    const count = status => rows.find(r => r.status === status)?.n || 0;
+    return {
+      auctions_total: rows.reduce((n, r) => n + r.n, 0),
+      sold: count('sold'),
+      unsold: count('unsold'),
+      ended: count('ended'),
+      active: count('active'),
+      deleted: count('deleted'),
+      sales_total: rows.find(r => r.status === 'sold')?.sales || 0
+    };
+  }
   report(actor) {
     this.admin(actor);
     return this.transaction(() => {
@@ -726,7 +834,8 @@ class MarketStore {
         generatedAt: this.now(),
         settings: this.settings(),
         users: this.all('SELECT id,name,email AS identifier,role,budget,disabled FROM users'),
-        auctions: this.auctions(),
+        auctions: this.auctions(true),
+        summary: this.salesSummary(),
         bids: this.all('SELECT * FROM bids ORDER BY rowid'),
         ledger: this.all('SELECT * FROM ledger ORDER BY id'),
         events: this.all('SELECT * FROM events ORDER BY id'),

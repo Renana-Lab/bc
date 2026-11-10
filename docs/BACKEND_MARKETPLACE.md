@@ -113,6 +113,23 @@ exact HTTPS origin, without a trailing slash. HTTPS enables Secure cookies.
 Do not expose the database directory through the web server. Restrict filesystem
 access to the service account. Do not place SQLite on a network share.
 
+The reverse proxy must not buffer or time out `/api/market/stream`, the
+Server-Sent Events stream used to push admin messages to users. For nginx:
+
+```nginx
+location /api/market/stream {
+    proxy_pass http://127.0.0.1:3011;
+    proxy_http_version 1.1;
+    proxy_set_header Connection '';
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 1h;
+}
+```
+
+The server also sends `X-Accel-Buffering: no` and a keep-alive comment every 25
+seconds. Clients fall back to the 15-second heartbeat if the stream is blocked.
+
 Amplify's static-only hosting cannot execute this backend. Use a Node/container/VM
 service for this variant; no deployment has been performed by these changes.
 Run a **single service replica**. For horizontal scaling, move the transactional
