@@ -66,6 +66,7 @@ const ToolbarComponent = (props) => {
   const { status, account } = useMetaMask();
   const authenticated = status === "connected" && Boolean(account);
   const accountRef = useRef("");
+  const budgetAccountRef = useRef("");
   accountRef.current = authenticated ? account : "";
   const [budget, setBudget] = useState(null);
   const [budgetRefreshing, setBudgetRefreshing] = useState(false);
@@ -106,11 +107,19 @@ const ToolbarComponent = (props) => {
   }, []);
 
   useEffect(() => {
+    if (authenticated) {
+      if (budgetAccountRef.current === account) return; // same account re-verified: keep the budget
+      budgetAccountRef.current = account;
+    } else if (status === "checking" && budgetAccountRef.current) {
+      return; // brief re-check: keep what is shown for the same account
+    } else {
+      budgetAccountRef.current = "";
+    }
     budgetRequestIdRef.current += 1;
     setBudget(null);
     setBudgetRefreshing(false);
     if (authenticated) fetchBudget();
-  }, [fetchBudget, authenticated, account]);
+  }, [fetchBudget, authenticated, account, status]);
 
   useEffect(() => {
     return subscribeToBudgetChanges(async ({ userAddress, factoryAddress, budget: nextBudget }) => {
