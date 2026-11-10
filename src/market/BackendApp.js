@@ -1957,7 +1957,7 @@ function AdminView({ auctions, act, revision, notify }) {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {state.users.map(u => (
+                {[...state.users].reverse().map(u => (
                   <TableRow key={u.id}>
                     <TableCell style={{ fontWeight: 600 }}>{u.name}</TableCell>
                     <TableCell>{u.identifier}</TableCell>
