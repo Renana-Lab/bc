@@ -13,6 +13,7 @@ const {
   promisify
 } = require('node:util');
 const fs = require('node:fs');
+const { EventEmitter } = require('node:events');
 const path = require('node:path');
 const derive = promisify(scrypt);
 const LIMIT = 1_000_000_000;
@@ -60,6 +61,8 @@ async function verifyPassword(password, hash) {
 class MarketStore {
   constructor(filename = ':memory:', clock = Date.now, random = randomInt) {
     this.now = clock;
+    // In-process notifications for the HTTP layer (message push, closing streams).
+    this.bus = new EventEmitter();
     this.random = random;
     this.filename = filename === ':memory:' ? filename : path.resolve(filename);
     this.db = new DatabaseSync(filename);
@@ -255,15 +258,17 @@ class MarketStore {
   sendMessage(userId, body, actor) {
     this.admin(actor);
     const text = label(body, 1000);
-    return this.transaction(() => {
+    const result = this.transaction(() => {
       const target = this.one('SELECT id,role FROM users WHERE id=?', userId);
       check(target, 'Account not found', 404);
       check(target.role !== 'bot', 'Messages cannot be sent to bot accounts');
-      const id = randomUUID();
-      this.run('INSERT INTO user_messages(id,user_id,body,created_by,created_at) VALUES(?,?,?,?,?)', id, userId, text, actor, this.now());
+      const id = randomUUID(), createdAt = this.now();
+      this.run('INSERT INTO user_messages(id,user_id,body,created_by,created_at) VALUES(?,?,?,?,?)', id, userId, text, actor, createdAt);
       this.event('admin-message-sent', actor, { id: userId, message: id, length: text.length });
-      return { id };
+      return { id, message: { id, body: text, created_at: createdAt } };
     });
+    this.bus.emit('message', { userId, message: result.message });
+    return { id: result.id };
   }
   markMessageRead(id, userId) {
     const message = this.one('SELECT id,read_at FROM user_messages WHERE id=? AND user_id=?', id, userId);
@@ -278,6 +283,7 @@ class MarketStore {
   }
   logout(token) {
     this.run('DELETE FROM sessions WHERE token=?', digest(token || ''));
+    this.bus.emit('session-closed', { digest: digest(token || '') });
   }
   // Deleted auctions are excluded unless includeDeleted is set (admin views only).
   active(includeDeleted = false) {
@@ -526,6 +532,7 @@ class MarketStore {
     this.run('UPDATE users SET disabled=? WHERE id=?', Number(disabled), id);
     this.run('DELETE FROM sessions WHERE user_id=?', id);
     if (disabled) this.run('UPDATE bots SET running=0 WHERE user_id=?', id);
+    this.bus.emit('user-sessions-closed', { userId: id });
     this.event('account-disabled', actor, {
       id,
       disabled
@@ -568,6 +575,7 @@ class MarketStore {
       check(this.one('SELECT password FROM users WHERE id=?', id).password === target.password, 'Password changed. Please retry.', 409);
       this.run('UPDATE users SET password=? WHERE id=?', hash, id);
       this.run('DELETE FROM sessions WHERE user_id=?', id);
+      this.bus.emit('user-sessions-closed', { userId: id });
       this.event('password-changed', actor, {
         id
       });

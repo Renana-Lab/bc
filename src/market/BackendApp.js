@@ -2380,6 +2380,7 @@ export default function BackendApp() {
   const [drawer, setDrawer] = useState(false);
   const [revision, setRevision] = useState(0);
   const [messages, setMessages] = useState([]);
+  const acknowledged = useRef(new Set());
 
   const navigate = useNavigate();
   const location = useLocation();
@@ -2418,18 +2419,31 @@ export default function BackendApp() {
 
   useEffect(() => {
     setMessages([]);
+    acknowledged.current = new Set();
     if (!session?.user?.id) return;
+    // Queue a message once: skip ones already queued or already acknowledged.
+    const enqueue = incoming => {
+      const fresh = incoming.filter(m => m && typeof m.id === 'string' && typeof m.body === 'string' && !acknowledged.current.has(m.id));
+      if (fresh.length) setMessages(old => [...old, ...fresh.filter(m => !old.some(o => o.id === m.id))]);
+    };
     const beat = () => {
       if (document.hidden) return;
-      api('/heartbeat', {}).then(r => {
-        const incoming = Array.isArray(r?.messages) ? r.messages : [];
-        // Keep messages already queued; add only ones not yet known.
-        if (incoming.length) setMessages(old => [...old, ...incoming.filter(m => !old.some(o => o.id === m.id))]);
-      }).catch(() => {});
+      // Fallback delivery if the stream is unavailable.
+      api('/heartbeat', {}).then(r => enqueue(Array.isArray(r?.messages) ? r.messages : [])).catch(() => {});
     };
     beat();
     const timer = setInterval(beat, 15000);
-    return () => clearInterval(timer);
+    let source = null;
+    if (typeof EventSource !== 'undefined') {
+      source = new EventSource('/api/market/stream', { withCredentials: true });
+      source.addEventListener('message', event => {
+        try { enqueue([JSON.parse(event.data)]); } catch { /* Ignore malformed events. */ }
+      });
+    }
+    return () => {
+      clearInterval(timer);
+      if (source) source.close();
+    };
   }, [session?.user?.id]);
 
   useEffect(() => {
@@ -2461,6 +2475,7 @@ export default function BackendApp() {
   const acknowledgeMessage = async m => {
     try {
       await api(`/messages/${m.id}/read`, {});
+      acknowledged.current.add(m.id);
       setMessages(old => old.filter(o => o.id !== m.id));
     } catch (err) {
       // Keep the popup so the user can retry; a missing message cannot be shown again.

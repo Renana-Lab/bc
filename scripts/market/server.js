@@ -1,13 +1,37 @@
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
-const { randomUUID } = require('node:crypto');
+const { randomUUID, createHash } = require('node:crypto');
 const {
   MarketStore,
   MarketError,
   check
 } = require('./store');
+const MAX_STREAMS_PER_USER = 5;
+const STREAM_PING_MS = 25000;
 function createMarketServer(store, options = {}) {
+  // Open Server-Sent Event streams: userId -> Set of { res, userId, digest (session token hash), timer }.
+  const streams = new Map();
+  const closeStream = entry => {
+    const set = streams.get(entry.userId);
+    set?.delete(entry);
+    if (set && !set.size) streams.delete(entry.userId);
+    clearInterval(entry.timer);
+    if (!entry.res.writableEnded) entry.res.end();
+  };
+  const closeWhere = predicate => {
+    for (const set of [...streams.values()]) for (const entry of [...set]) if (predicate(entry)) closeStream(entry);
+  };
+  const sseWrite = (entry, text) => {
+    try { entry.res.write(text); } catch { closeStream(entry); }
+  };
+  const sendMessageEvent = (entry, message) => sseWrite(entry, `event: message\ndata: ${JSON.stringify(message)}\n\n`);
+  const onMessage = ({ userId, message }) => { for (const entry of [...(streams.get(userId) || [])]) sendMessageEvent(entry, message); };
+  const onSessionClosed = ({ digest }) => closeWhere(entry => entry.digest === digest);
+  const onUserClosed = ({ userId }) => closeWhere(entry => entry.userId === userId);
+  store.bus.on('message', onMessage);
+  store.bus.on('session-closed', onSessionClosed);
+  store.bus.on('user-sessions-closed', onUserClosed);
   const attempts = new Map();
   const origin = options.origin || 'http://localhost:3010';
   const secure = new URL(origin).protocol === 'https:';
@@ -109,6 +133,32 @@ function createMarketServer(store, options = {}) {
         return;
       }
       const user = store.session(token);
+      if (route === '/stream' && req.method === 'GET') {
+        check(user.role !== 'bot', 'Streams are not available for this account', 403);
+        req.socket.setTimeout(0);
+        req.socket.setNoDelay(true);
+        res.writeHead(200, {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          Connection: 'keep-alive',
+          'X-Accel-Buffering': 'no'
+        });
+        const entry = { res, userId: user.id, digest: createHash('sha256').update(token).digest('hex'), timer: null };
+        const set = streams.get(user.id) || new Set();
+        streams.set(user.id, set);
+        set.add(entry);
+        // Keep at most MAX_STREAMS_PER_USER; the oldest connections are closed first.
+        while (set.size > MAX_STREAMS_PER_USER) closeStream(set.values().next().value);
+        res.on('close', () => closeStream(entry));
+        // Register before replaying so a message sent meanwhile is not lost (clients dedupe by id).
+        sseWrite(entry, ': connected\n\n');
+        for (const message of store.unreadMessages(user.id)) sendMessageEvent(entry, message);
+        entry.timer = setInterval(() => {
+          try { store.session(token); } catch { closeStream(entry); return; }
+          sseWrite(entry, ': ping\n\n');
+        }, options.streamPingMs || STREAM_PING_MS);
+        return;
+      }
       if (route === '/admin/access' && req.method === 'GET') {
         const access = store.adminAccess(token);
         send(200, { unlocked: access.unlocked }); return;
@@ -182,6 +232,14 @@ function createMarketServer(store, options = {}) {
     }
   });
   server.requestTimeout = 15000;
+  const closeServer = server.close.bind(server);
+  server.close = callback => {
+    store.bus.off('message', onMessage);
+    store.bus.off('session-closed', onSessionClosed);
+    store.bus.off('user-sessions-closed', onUserClosed);
+    closeWhere(() => true);
+    return closeServer(callback);
+  };
   return server;
 }
 if (require.main === module) {
