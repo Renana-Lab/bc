@@ -4,13 +4,14 @@ import { getModeProvider, subscribeModeProvider } from "./wallets/modeProvider";
 
 const ACCOUNT = /^0x[0-9a-fA-F]{40}$/;
 const TIMEOUT = 3000;
+const POLL_INTERVAL = 5000;
 const listeners = new Set();
 const announcements = new Map();
 let snapshot = { status: "checking", account: "", provider: null, verifiedAt: 0, reason: "" };
 let generation = 0;
 let pending = null;
 let timer;
-let expiry;
+let verifiedMark = 0;
 let users = 0;
 let discovering = false;
 let boundProvider = null;
@@ -22,14 +23,18 @@ export const subscribeWalletAccess = (listener) => {
   return () => listeners.delete(listener);
 };
 const publish = (status, fields = {}) => {
-  snapshot = { ...snapshot, status, account: "", verifiedAt: 0, ...fields };
+  const next = { ...snapshot, status, account: "", verifiedAt: 0, ...fields };
+  // Re-verifications that confirm what is already known must not re-render the app.
+  if (next.status === snapshot.status && next.account === snapshot.account &&
+      next.provider === snapshot.provider && next.reason === snapshot.reason) return;
+  snapshot = next;
   setWalletSessionAccount(status === "connected" ? snapshot.account : "");
   listeners.forEach((listener) => listener());
 };
 const invalidate = (status = "checking", reason = "") => {
   generation += 1;
   pending = null;
-  clearTimeout(expiry);
+  verifiedMark = 0;
   publish(status, { reason });
 };
 const announce = (event) => {
@@ -75,6 +80,7 @@ const reconcileProvider = () => {
   }
   return provider;
 };
+const fatal = (message) => Object.assign(new Error(message), { fatal: true });
 const deadline = (promise) => new Promise((resolve, reject) => {
   const id = setTimeout(() => reject(new Error("MetaMask verification timed out. Open the extension and retry.")), TIMEOUT);
   Promise.resolve(promise).then(resolve, reject).finally(() => clearTimeout(id));
@@ -92,30 +98,36 @@ export const verifyWalletAccess = () => {
     try {
       const probe = getWalletMode() === "metamask" ? provider._metamask : provider;
       if (typeof probe?.isUnlocked !== "function") {
-        throw new Error("This wallet cannot verify its unlock state. Update the MetaMask extension and retry.");
+        throw fatal("This wallet cannot verify its unlock state. Update the MetaMask extension and retry.");
       }
       const result = await deadline((async () => {
         const unlocked = await probe.isUnlocked();
         if (unlocked !== true) return { status: unlocked === false ? "locked" : "verification-failed" };
         const accounts = await provider.request({ method: "eth_accounts" });
         if (!Array.isArray(accounts) || accounts.some((account) => !ACCOUNT.test(account))) {
-          throw new Error("MetaMask returned an invalid account response.");
+          throw fatal("MetaMask returned an invalid account response.");
         }
         if (!accounts.length) return { status: "unauthorized" };
         if (await probe.isUnlocked() !== true) return { status: "locked" };
         return { status: "connected", account: accounts[0] };
       })());
       if (generation !== epoch) return snapshot;
-      if (document.hidden || discoverWalletProvider() !== provider) {
+      if (document.hidden) return snapshot;
+      if (discoverWalletProvider() !== provider) {
         invalidate("checking");
         return snapshot;
       }
       const reasons = { locked: "Unlock MetaMask to continue.", unauthorized: "Connect an account to this website in MetaMask.", "verification-failed": "MetaMask unlock state could not be verified." };
-      clearTimeout(expiry);
-      publish(result.status, { provider, account: result.account || "", verifiedAt: result.status === "connected" ? Date.now() : 0, reason: reasons[result.status] || "" });
-      if (result.status === "connected") expiry = setTimeout(() => invalidate("verification-failed", "Wallet verification expired. Retry the connection."), TIMEOUT);
+      verifiedMark = result.status === "connected" ? Date.now() : 0;
+      publish(result.status, { provider, account: result.account || "", verifiedAt: verifiedMark, reason: reasons[result.status] || "" });
     } catch (error) {
-      if (generation === epoch) invalidate("verification-failed", "MetaMask verification failed or timed out. Unlock or update the extension and retry.");
+      if (generation === epoch) {
+        verifiedMark = 0; // writes re-verify, so a failed check can never authorize one
+        // A transient failure must not drop a connected session; only a real result does.
+        if (snapshot.status !== "connected" || error?.fatal) {
+          invalidate("verification-failed", "MetaMask verification failed or timed out. Unlock or update the extension and retry.");
+        }
+      }
     }
     return snapshot;
   })();
@@ -124,8 +136,9 @@ export const verifyWalletAccess = () => {
   return task;
 };
 const suspend = () => invalidate("checking");
-const resume = () => { suspend(); void verifyWalletAccess(); };
-const visibility = () => document.hidden ? suspend() : resume();
+// Background re-checks are silent: the session stays as it was until a check says otherwise.
+const resume = () => { void verifyWalletAccess(); };
+const visibility = () => { if (!document.hidden) resume(); };
 export const startWalletAccess = () => {
   users += 1;
   if (users === 1) {
@@ -133,10 +146,9 @@ export const startWalletAccess = () => {
     boundProvider = null;
     unsubscribeMode = subscribeModeProvider(() => { reconcileProvider(); void verifyWalletAccess(); });
     void verifyWalletAccess();
-    timer = setInterval(() => { if (!document.hidden) void verifyWalletAccess(); }, 1000);
+    timer = setInterval(() => { if (!document.hidden) void verifyWalletAccess(); }, POLL_INTERVAL);
     window.addEventListener("focus", resume);
     window.addEventListener("pageshow", resume);
-    window.addEventListener("pagehide", suspend);
     document.addEventListener("visibilitychange", visibility);
   }
   return () => {
@@ -149,7 +161,6 @@ export const startWalletAccess = () => {
     boundProvider = null;
     window.removeEventListener("focus", resume);
     window.removeEventListener("pageshow", resume);
-    window.removeEventListener("pagehide", suspend);
     document.removeEventListener("visibilitychange", visibility);
     window.removeEventListener("eip6963:announceProvider", announce);
     announcements.clear();
@@ -158,15 +169,15 @@ export const startWalletAccess = () => {
 };
 export const requireWalletAccess = async () => {
   const result = await verifyWalletAccess();
-  if (result.status !== "connected" || document.hidden || Date.now() - result.verifiedAt >= TIMEOUT) {
+  if (result.status !== "connected" || document.hidden || !verifiedMark || Date.now() - verifiedMark >= TIMEOUT) {
     throw new Error(result.reason || "Verify your MetaMask connection before continuing.");
   }
-  return result;
+  return { ...result, verifiedAt: verifiedMark };
 };
 export const walletDiagnostic = () => JSON.stringify({
   build: process.env.REACT_APP_BUILD_ID || [...document.scripts].map((script) => script.src).find((src) => /main\.|\/assets\/index/.test(src)) || "local",
   browser: navigator.userAgent,
   provider: announcements.get(snapshot.provider) || (snapshot.provider ? "legacy-metamask" : "none"),
-  status: snapshot.status, verifiedAt: snapshot.verifiedAt,
+  status: snapshot.status, verifiedAt: verifiedMark,
   reason: snapshot.reason.replace(/0x[0-9a-f]+/gi, "[redacted]"),
 }, null, 2);

@@ -248,9 +248,20 @@ function ShowAuctionPage() {
     }
   };
 
+  // Time-based: flips at endTime even if no refetch happens while the page is open.
+  const [clock, setClock] = useState(() => Date.now());
+  useEffect(() => {
+    const endMs = Number(state.endTime) * 1000;
+    const wait = endMs - Date.now();
+    if (!Number.isFinite(endMs) || endMs <= 0 || wait <= 0) return undefined;
+    // setTimeout is capped at ~24.8 days; auctions last at most 30 minutes.
+    const id = window.setTimeout(() => setClock(Date.now()), wait + 50);
+    return () => window.clearTimeout(id);
+  }, [state.endTime]);
   const isAuctionActive = useMemo(
-    () => Number(state.endTime + "000") > Date.now(),
-    [state.endTime],
+    () => Number(state.endTime) * 1000 > Math.max(clock, Date.now()),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [state.endTime, clock],
   );
   const isManager = useMemo(
     () =>
@@ -824,6 +835,15 @@ function ShowAuctionPage() {
                 <InfoItem label="Data acquired" value={state.dataForSell} />
               </div>
             )}
+          </div>
+        )}
+        {!isAuctionActive && !isManager && !hasUserBid && !isHighestBidder && (
+          <div className={showPageStyles.contributeForm}>
+            <Typography variant="h6" textAlign="center" role="status">
+              {state.closed
+                ? "This auction has ended."
+                : "This auction has ended and is awaiting finalization."}
+            </Typography>
           </div>
         )}
         {!isAuctionActive && !isManager && hasUserBid && !isHighestBidder && (

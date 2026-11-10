@@ -13,12 +13,29 @@ import { Typography } from "@mui/material";
 import toast from "react-hot-toast";
 
 
-  const ERROR_OUTBID = "Your were outbid by another user";
+  const ERROR_OUTBID = "You were outbid by another user";
   const ERROR_DEADLINE = "Your bid was submitted after the deadline";
   const ERROR_USER_DENIED_CONTRIBUTE = "You decided to cancel your bid";
   const USER_DENIED_PREFIX = "User denied transaction signature";
   const READ_OPTIONS = { preferInjected: false, allowInjectedFallback: false };
 
+
+const ERROR_NO_GAS = "Not enough funds to pay the network fee (gas). Add test funds to your wallet and try again.";
+const ERROR_WALLET_LOCKED = "Your wallet is locked. Unlock it and try again.";
+const ERROR_VERIFICATION = "Wallet verification expired. Re-check your wallet connection and try again.";
+
+// Maps a failed bid to a message that matches the real cause.
+export function describeBidError(err, auctionClosed = false) {
+  const message = String(err?.message || err?.data?.message || "");
+  const code = err?.code ?? err?.cause?.code;
+  if (code === 4001 || message.includes(USER_DENIED_PREFIX)) return ERROR_USER_DENIED_CONTRIBUTE;
+  if (code === 4100) return ERROR_WALLET_LOCKED;
+  if (/insufficient funds/i.test(message)) return ERROR_NO_GAS;
+  if (/verification (expired|failed|timed out)|verify your metamask connection/i.test(message)) return ERROR_VERIFICATION;
+  if (/Bid must exceed current highest/i.test(message)) return ERROR_OUTBID;
+  if (/Auction ended/i.test(message) || auctionClosed) return ERROR_DEADLINE;
+  return message || "Your bid could not be placed.";
+}
 
 class ContributeForm extends Component {
   state = {
@@ -165,24 +182,13 @@ class ContributeForm extends Component {
       this.setState({ bidAmount: "", transactionIsLoading: false });
     } catch (err) {
 
-        const message = err?.message || "";
-        let flagForOutput = false;
-
-        const isAuctionClosed = (Number(endTime + "000") < Date.now());
-
-
-        if (message.includes(USER_DENIED_PREFIX)) {
-          flagForOutput = true;
-          toast.error(ERROR_USER_DENIED_CONTRIBUTE);
-        } else {
-          toast.error(isAuctionClosed ? ERROR_DEADLINE : ERROR_OUTBID);
-        }
+        const message = describeBidError(err, Number(endTime + "000") < Date.now());
+        toast.error(message);
 
         this.setState({
           transactionIsLoading: false,
           error: true,
-          errorMessage: 
-          flagForOutput ? ERROR_USER_DENIED_CONTRIBUTE : isAuctionClosed ? ERROR_DEADLINE : ERROR_OUTBID,
+          errorMessage: message,
         });
     }
   };

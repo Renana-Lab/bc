@@ -1,4 +1,4 @@
-import { getWalletAccess, startWalletAccess, verifyWalletAccess, requireWalletAccess, discoverWalletProvider, walletDiagnostic } from "./walletAccess";
+import { getWalletAccess, subscribeWalletAccess, startWalletAccess, verifyWalletAccess, requireWalletAccess, discoverWalletProvider, walletDiagnostic } from "./walletAccess";
 import { createWalletTransport } from "./walletTransport";
 
 const address = "0x1234567890abcdef1234567890abcdef12345678";
@@ -51,19 +51,65 @@ test("account event invalidates old requests and never grants access itself", as
   emit("accountsChanged", [address]); resolve([address]); await flush();
   expect(getWalletAccess().status).toBe("locked");
 });
-test("one request is shared and stalled verification expires access", async () => {
+test("one request is shared; a stalled re-check keeps the session but never authorizes a write", async () => {
   stop = startWalletAccess(); await verifyWalletAccess();
   provider.request.mockImplementation(() => new Promise(() => {}));
   const a = verifyWalletAccess(); const b = verifyWalletAccess(); expect(a).toBe(b);
+  const write = requireWalletAccess().catch((error) => error);
   await flush(); jest.advanceTimersByTime(3000); await flush();
-  expect(getWalletAccess().status).not.toBe("connected");
+  expect(getWalletAccess().status).toBe("connected");
+  expect(await write).toBeInstanceOf(Error);
 });
-test("background suspension hides access and late results cannot restore it", async () => {
+test("a connected session never expires on its own timer", async () => {
+  stop = startWalletAccess(); await verifyWalletAccess();
+  const listener = jest.fn(); const off = subscribeWalletAccess(listener);
+  jest.advanceTimersByTime(3500); await flush();
+  expect(getWalletAccess().status).toBe("connected"); expect(listener).not.toHaveBeenCalled(); off();
+});
+test("focus, pageshow, visibility and the periodic tick keep a connected session untouched", async () => {
+  stop = startWalletAccess(); await verifyWalletAccess();
+  const before = getWalletAccess(); const listener = jest.fn(); const off = subscribeWalletAccess(listener);
+  const seen = [];
+  const check = () => seen.push(getWalletAccess().status);
+  for (const fire of [
+    () => window.dispatchEvent(new Event("focus")),
+    () => window.dispatchEvent(new Event("pageshow")),
+    () => document.dispatchEvent(new Event("visibilitychange")),
+    () => jest.advanceTimersByTime(5000),
+  ]) {
+    provider.request.mockClear(); fire(); check(); await flush(); check();
+    expect(provider.request).toHaveBeenCalled(); // really re-verified
+  }
+  expect(seen.every((status) => status === "connected")).toBe(true);
+  expect(getWalletAccess()).toBe(before); expect(listener).not.toHaveBeenCalled(); off();
+});
+test("hiding the page keeps the session but writes are refused", async () => {
   stop = startWalletAccess(); await verifyWalletAccess();
   Object.defineProperty(document, "hidden", { configurable: true, value: true });
   document.dispatchEvent(new Event("visibilitychange"));
-  expect(getWalletAccess().status).toBe("checking");
+  expect(getWalletAccess().status).toBe("connected");
   await expect(requireWalletAccess()).rejects.toThrow();
+});
+test("a silent re-check that finds the wallet locked moves to locked", async () => {
+  stop = startWalletAccess(); await verifyWalletAccess();
+  provider._metamask.isUnlocked.mockResolvedValue(false);
+  window.dispatchEvent(new Event("focus")); await flush();
+  expect(getWalletAccess().status).toBe("locked");
+});
+test("an account change still goes through checking", async () => {
+  stop = startWalletAccess(); await verifyWalletAccess();
+  let release; provider.request.mockImplementation(() => new Promise((r) => { release = r; }));
+  emit("accountsChanged", [address]); expect(getWalletAccess().status).toBe("checking"); await flush();
+  release([address]); await flush(); expect(getWalletAccess().status).toBe("connected");
+});
+test("requireWalletAccess verifies fresh before a write", async () => {
+  stop = startWalletAccess(); await verifyWalletAccess();
+  provider._metamask.isUnlocked.mockResolvedValue(false);
+  await expect(requireWalletAccess()).rejects.toThrow();
+  provider._metamask.isUnlocked.mockResolvedValue(true);
+  provider.request.mockClear();
+  await expect(requireWalletAccess()).resolves.toMatchObject({ status: "connected", account: address });
+  expect(provider.request).toHaveBeenCalled();
 });
 test("announced identity wins over an injected impersonator", async () => {
   stop = startWalletAccess(); await verifyWalletAccess();
@@ -83,7 +129,7 @@ test("Strict Mode setup cleanup does not duplicate listeners or timers", async (
   expect(Object.keys(provider.handlers)).toHaveLength(0);
   stop = startWalletAccess(); await verifyWalletAccess();
   expect(Object.keys(provider.handlers)).toHaveLength(3);
-  expect(jest.getTimerCount()).toBe(2);
+  expect(jest.getTimerCount()).toBe(1);
 });
 test("transport denies locked transactions and never forwards them to fallback", async () => {
   stop = startWalletAccess(); await verifyWalletAccess();
@@ -98,7 +144,7 @@ test("diagnostic excludes account addresses", async () => {
 });
 test("late injection becomes verifiable on the next poll", async () => {
   delete window.ethereum; stop = startWalletAccess(); expect(getWalletAccess().status).toBe("unavailable");
-  window.ethereum = provider; jest.advanceTimersByTime(1000); await flush();
+  window.ethereum = provider; jest.advanceTimersByTime(5000); await flush();
   expect(getWalletAccess().status).toBe("connected");
 });
 test("legacy provider replacement during verification cannot admit the previous wallet", async () => {
@@ -113,7 +159,7 @@ test("multiple ambiguous legacy providers remain blocked", async () => {
 });
 test("page cache restoration requires verification again", async () => {
   stop = startWalletAccess(); await verifyWalletAccess();
-  window.dispatchEvent(new Event("pagehide")); expect(getWalletAccess().status).toBe("checking");
+  window.dispatchEvent(new Event("pagehide")); expect(getWalletAccess().status).toBe("connected");
   provider._metamask.isUnlocked.mockResolvedValue(false);
   window.dispatchEvent(new Event("pageshow")); await flush(); expect(getWalletAccess().status).toBe("locked");
 });

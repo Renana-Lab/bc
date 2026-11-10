@@ -32,3 +32,18 @@ test('budget is hidden before verification and immediately after wallet access i
   expect(screen.queryByText('Budget:')).toBeNull();
   expect(screen.queryByText('2000')).toBeNull();
 });
+
+test('budget is kept when the wallet briefly re-checks with the same account', async () => {
+  const account = '0x1234567890abcdef1234567890abcdef12345678';
+  const toolbar = () => <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}><ToolbarComponent openDrawerHandler={() => {}} /></MemoryRouter>;
+  mockSession = { status: 'connected', account };
+  const view = render(toolbar());
+  await waitFor(() => expect(screen.getByText('2000')).toBeTruthy());
+  getDefaultBudget.mockClear();
+  mockSession = { status: 'checking', account: '' };
+  view.rerender(toolbar());
+  mockSession = { status: 'connected', account };
+  view.rerender(toolbar());
+  expect(screen.getByText('2000')).toBeTruthy();
+  expect(getDefaultBudget).not.toHaveBeenCalled();
+});

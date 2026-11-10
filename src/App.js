@@ -153,18 +153,25 @@ const AppLoadingFallback = ({
   </>
 );
 
-const RequireWallet = ({ children }) => {
+const REDIRECT_AFTER_ADMISSION = new Set(["locked", "unauthorized", "unavailable"]);
+
+export const RequireWallet = ({ children }) => {
   const { status } = useMetaMask();
   const location = useLocation();
   const admitted = useRef(false);
   if (status === "connected") admitted.current = true;
 
-  if (status !== "connected" && status !== "checking") {
+  // After the first admission, background re-checks ("checking") never hide the page;
+  // only a definite locked/unauthorized/unavailable result sends the user away.
+  const redirect = admitted.current
+    ? REDIRECT_AFTER_ADMISSION.has(status)
+    : status !== "connected" && status !== "checking";
+  if (redirect) {
     return <Navigate to="/metamask-login" replace state={{ from: `${location.pathname}${location.search}` }} />;
   }
+  if (admitted.current) return <>{children}</>;
   return <>
-    {status === "checking" && <AppLoadingFallback copy="Verifying your MetaMask connection" status="Checking wallet access" />}
-    <div hidden={status !== "connected"}>{admitted.current && children}</div>
+    <AppLoadingFallback copy="Verifying your MetaMask connection" status="Checking wallet access" />
   </>;
 };
 
