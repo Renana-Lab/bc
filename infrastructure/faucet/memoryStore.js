@@ -6,9 +6,11 @@ const tick = () => new Promise((resolve) => setImmediate(resolve));
 const createMemoryStore = () => {
   const pids = new Map();
   const counters = new Map(); // key -> { count, expiresAt }  (rate-limit records; no pid inside)
+  const shared = { state: null, budget: 0 }; // open/closed switch and the payout-slot counter
   return {
     pids,
     counters,
+    shared,
     async get(pidHash) {
       await tick();
       const record = pids.get(pidHash);
@@ -48,13 +50,32 @@ const createMemoryStore = () => {
       await tick();
       const record = pids.get(pidHash);
       if (record?.status !== "pending") throw Object.assign(new Error("condition failed"), { name: "ConditionalCheckFailedException" });
+      if (record.slot) shared.budget -= 1; // a released reservation gives its payout slot back
       pids.set(pidHash, { status: "unclaimed", createdAt: record.createdAt });
     },
-    async hit(scope, windowId, expiresAt) {
+    // Atomically takes one payout slot for a pending pid (false when the cap is reached).
+    async takeSlot(pidHash, max) {
+      await tick();
+      const record = pids.get(pidHash);
+      if (record?.status !== "pending" || record.slot) throw Object.assign(new Error("condition failed"), { name: "ConditionalCheckFailedException" });
+      if (shared.budget >= max) return false;
+      shared.budget += 1;
+      pids.set(pidHash, { ...record, slot: true });
+      return true;
+    },
+    async getState() {
+      await tick();
+      return shared.state ? { ...shared.state } : null;
+    },
+    async setState(open, updatedAt) {
+      await tick();
+      shared.state = { open: Boolean(open), updatedAt };
+    },
+    async hit(scope, windowId, expiresAt, by = 1) {
       await tick();
       const key = `${scope}#${windowId}`;
       const record = counters.get(key) || { count: 0, expiresAt };
-      record.count += 1;
+      record.count += by;
       record.expiresAt = expiresAt;
       counters.set(key, record);
       return record.count;

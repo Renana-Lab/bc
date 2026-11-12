@@ -38,8 +38,19 @@ const fakeDynamo = () => {
       }
       if (name !== "UpdateItemCommand") throw new Error(`unexpected command ${name}`);
       const update = input.UpdateExpression;
+      if (key === "counter#payouts") { // payout-slot counter: conditional increment / decrement
+        const current = num(item?.count) || 0;
+        if (input.ConditionExpression && current >= Number(values[":max"].N)) throw conditionFailed();
+        const next = current + Number((values[":one"] || values[":minus"]).N);
+        items.set(key, { pk: { S: key }, count: { N: String(next) } });
+        return {};
+      }
+      if (key === "config#faucet") { // open/closed switch
+        items.set(key, { pk: { S: key }, open: values[":open"], updatedAt: values[":at"] });
+        return {};
+      }
       if (update.startsWith("ADD")) {
-        const next = (num(item?.count) || 0) + 1;
+        const next = (num(item?.count) || 0) + Number(values[":by"].N);
         items.set(key, { pk: { S: key }, count: { N: String(next) }, expiresAt: values[":exp"] });
         return { Attributes: { count: { N: String(next) } } };
       }
@@ -52,12 +63,17 @@ const fakeDynamo = () => {
         return { Attributes: old };
       }
       if (status !== "pending") throw conditionFailed(); // savePending, markPaid, release all require `pending`
-      if (update.startsWith("SET rawTx")) items.set(key, { ...item, rawTx: values[":raw"], txHash: values[":hash"] });
+      if (update === "SET slot = :yes") {
+        if (item.slot) throw conditionFailed();
+        items.set(key, { ...item, slot: values[":yes"] });
+      } else if (update.startsWith("SET rawTx")) items.set(key, { ...item, rawTx: values[":raw"], txHash: values[":hash"] });
       else if (update.includes(":paid")) {
         const { rawTx, leaseUntil, ...rest } = item;
         items.set(key, { ...rest, status: { S: "paid" }, txHash: values[":hash"], amountWei: values[":amount"], paidAt: values[":at"] });
-      } else if (update.includes(":unclaimed")) items.set(key, { pk: item.pk, status: { S: "unclaimed" }, createdAt: item.createdAt });
-      else throw new Error(`unexpected update ${update}`);
+      } else if (update.includes(":unclaimed")) {
+        items.set(key, { pk: item.pk, status: { S: "unclaimed" }, createdAt: item.createdAt });
+        return input.ReturnValues === "ALL_OLD" ? { Attributes: structuredClone(item) } : {};
+      } else throw new Error(`unexpected update ${update}`);
       return {};
     },
   };
@@ -138,4 +154,32 @@ test("dynamo store: rate-limit records go to a separate table and never touch th
     else assert.equal(command.input.TableName, "codes");
   }
   await assert.rejects(createDynamoStore({ table: "codes", client }).hit("x", 1, 1), /rateTable/);
+});
+
+test("dynamo store: payout slots are capped atomically and a release gives the slot back", async () => {
+  const client = fakeDynamo();
+  const store = createDynamoStore({ table: "codes", rateTable: "rates", client });
+  const address = "0x00000000000000000000000000000000000000dd";
+  for (const hash of ["s1", "s2", "s3"]) { await store.putPid(hash, NOW); await store.reserve(hash, address, NOW, NOW + 60); }
+  assert.equal(await store.takeSlot("s1", 2), true);
+  assert.equal(await store.takeSlot("s2", 2), true);
+  assert.equal(await store.takeSlot("s3", 2), false, "cap reached");
+  assert.equal(num(client.tableOf("codes").get("counter#payouts").count), 2);
+  assert.equal((await store.reserve("s1", address, NOW + 100, NOW + 160)).previous.slot, true);
+  await store.release("s3");
+  assert.equal(num(client.tableOf("codes").get("counter#payouts").count), 2, "releasing a pid without a slot changes nothing");
+  await store.release("s1");
+  assert.equal(num(client.tableOf("codes").get("counter#payouts").count), 1, "released reservation returned its slot");
+  assert.equal(client.tableOf("codes").get("pid#s1").slot, undefined);
+});
+
+test("dynamo store: the open/closed switch defaults to closed and stores only open and updatedAt", async () => {
+  const client = fakeDynamo();
+  const store = createDynamoStore({ table: "codes", rateTable: "rates", client });
+  assert.equal(await store.getState(), null);
+  await store.setState(true, NOW);
+  assert.deepEqual(await store.getState(), { open: true, updatedAt: NOW });
+  await store.setState(false, NOW + 5);
+  assert.deepEqual(await store.getState(), { open: false, updatedAt: NOW + 5 });
+  assert.deepEqual(Object.keys(client.tableOf("codes").get("config#faucet")).sort(), ["open", "pk", "updatedAt"]);
 });

@@ -4,7 +4,7 @@
 //
 //   node scripts/faucet/deployFaucet.js --dry-run                      builds the bundles and template locally, no AWS calls
 //   node scripts/faucet/deployFaucet.js --region us-east-1 --artifact-bucket my-bucket \
-//        --secret-arn arn:aws:secretsmanager:... --faucet-address 0x... --alert-email ops@example.org
+//        --secret-arn arn:aws:secretsmanager:... --admin-secret-arn arn:aws:secretsmanager:... --faucet-address 0x... --alert-email ops@example.org
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -29,17 +29,30 @@ const faucetAddress = read("--faucet-address");
 const alertEmail = read("--alert-email");
 const rpcUrl = read("--rpc-url", "https://testnet.sapphire.oasis.io");
 const chainId = Number(read("--chain-id", "23295"));
-const amountWei = read("--amount-wei", "100000000000000000"); // 0.1 TEST
+const amountWei = read("--amount-wei", "1500000000000000000"); // 1.5 TEST
 const lowBalance = Number(read("--low-balance", "5")); // alarm when the faucet holds fewer than this many TEST
 // CORS origins: the TEST Amplify app domain (never the production domain). Localhost is allowed for local testing.
 const origins = read("--origins", "http://localhost:3000");
 if (/datamarketplaces\.net/.test(origins)) throw new Error("The test environment must not allow the production domain in --origins");
 const rateLimit = read("--rate-limit", "20");
+const pidMode = read("--pid-mode", "allowlist");
+const maxPayouts = read("--max-payouts");
+const requiredStudyId = read("--required-study-id");
+const adminSecretArn = read("--admin-secret-arn");
+// Static shared experiment string. Read from the environment (not argv) so it stays out of shell history.
+const experimentCode = process.env.FAUCET_EXPERIMENT_CODE || "";
 const reservedConcurrency = Number(read("--reserved-concurrency", "1"));
 
 if (chainId !== 23295 && chainId !== 23293) throw new Error("--chain-id must be 23295 (Sapphire testnet) or 23293 (localnet); mainnet is refused");
 if (!/^\d+$/.test(amountWei) || BigInt(amountWei) <= 0n) throw new Error("--amount-wei must be a positive integer");
+if (!["allowlist", "prolific", "open"].includes(pidMode)) throw new Error("--pid-mode must be allowlist, prolific or open");
+if (pidMode !== "allowlist" && !/^[1-9][0-9]{0,9}$/.test(maxPayouts)) throw new Error(`--max-payouts (positive integer) is required with --pid-mode ${pidMode}`);
+if (pidMode === "allowlist" && (maxPayouts || requiredStudyId || experimentCode)) throw new Error("--max-payouts, --required-study-id and FAUCET_EXPERIMENT_CODE only apply with --pid-mode prolific or open");
+if (pidMode === "open") console.error("WARNING: --pid-mode open does not verify identity. Any pid of 1-128 printable ASCII characters can claim once; only --max-payouts, the rate limits and the admin open/closed switch limit the spend.");
+if (requiredStudyId && !/^[A-Za-z0-9_-]{1,64}$/.test(requiredStudyId)) throw new Error("--required-study-id has an unexpected format");
+if (experimentCode && !/^[A-Za-z0-9_.~-]{1,64}$/.test(experimentCode)) throw new Error("FAUCET_EXPERIMENT_CODE must match [A-Za-z0-9_.~-]{1,64} (the same characters the app accepts in ?exp=)");
 if (!dryRun) {
+  if (!/^arn:aws[a-z-]*:secretsmanager:/.test(adminSecretArn)) throw new Error("--admin-secret-arn is required (store the output of scripts/faucet/setAdminPassword.js in Secrets Manager first)");
   if (!artifactBucket) throw new Error("--artifact-bucket is required (S3 bucket for the Lambda packages)");
   if (!/^arn:aws[a-z-]*:secretsmanager:/.test(secretArn)) throw new Error("--secret-arn is required (run scripts/faucet/createFaucetSecret.js first)");
   if (!/^0x[0-9a-fA-F]{40}$/.test(faucetAddress)) throw new Error("--faucet-address must be the public faucet address");
@@ -61,6 +74,7 @@ bundle("monitor.js", "monitor");
 
 const template = buildTemplate({
   origins, alertEmail, secretArn, faucetAddress, rpcUrl, chainId, amountWei, lowBalance, rateLimit, reservedConcurrency,
+  pidMode, maxPayouts, requiredStudyId, adminSecretArn,
   faucetCodeDir: path.join(work, "faucet"), monitorCodeDir: path.join(work, "monitor"),
 });
 
@@ -87,7 +101,7 @@ try {
   runAws(["cloudformation", "package", "--template-file", templatePath, "--s3-bucket", artifactBucket, "--output-template-file", packaged, "--region", region]);
   runAws([
     "cloudformation", "deploy", "--template-file", packaged, "--stack-name", stackName, "--region", region,
-    "--capabilities", "CAPABILITY_IAM", "--parameter-overrides", `AllowedOrigins=${origins}`, "--tags", "Environment=test", "Project=bc-data-market", "--no-fail-on-empty-changeset",
+    "--capabilities", "CAPABILITY_IAM", "--parameter-overrides", `AllowedOrigins=${origins}`, `ExperimentCode=${experimentCode}`, "--tags", "Environment=test", "Project=bc-data-market", "--no-fail-on-empty-changeset",
   ]);
   const output = (key) => runAws(["cloudformation", "describe-stacks", "--stack-name", stackName, "--region", region,
     "--query", `Stacks[0].Outputs[?OutputKey=='${key}'].OutputValue | [0]`, "--output", "text"], true);

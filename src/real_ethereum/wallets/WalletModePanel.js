@@ -1,7 +1,8 @@
 /* global BigInt */
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { getWalletMode } from "./walletMode.mjs";
-import { getParticipantId } from "./participantId.mjs";
+import { getParticipantContext, stripParticipantParams } from "./participantId.mjs";
+import { claimFunds, fetchFaucetStatus, FAUCET_MESSAGES } from "./faucetClient.mjs";
 import { setModeProvider } from "./modeProvider";
 import { createIndexedDbStorage, createLocalProvider, createLocalWallet } from "./localWallet.mjs";
 import { getTargetNetwork } from "../sapphireNetworks";
@@ -28,23 +29,18 @@ const LocalWalletPanel = () => {
   const [backedUp, setBackedUp] = useState(false);
   const [funded, setFunded] = useState(false);
   const [balance, setBalance] = useState(null);
-  const pid = useMemo(() => {
+  // A Prolific id (?PROLIFIC_PID= / ?pid=) or lab code, plus the optional study and experiment values.
+  const { pid: strictPid, openPid, studyId, experimentCode } = useMemo(() => {
     let storage;
     try { storage = window.sessionStorage; } catch { storage = undefined; }
-    const code = getParticipantId({ search: window.location.search, storage });
-    // The code is a faucet capability: keep it out of the address bar, history and Referer headers.
-    try {
-      const url = new URL(window.location.href);
-      if (url.searchParams.has("pid")) {
-        url.searchParams.delete("pid");
-        window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
-      }
-    } catch {
-      // not fatal
-    }
-    return code;
+    const context = getParticipantContext({ search: window.location.search, storage });
+    stripParticipantParams(window); // keep the id (a faucet capability) out of the address bar, history and Referer headers
+    return context;
   }, []);
   const faucetUrl = process.env.REACT_APP_FAUCET_URL;
+  const [faucetPidMode, setFaucetPidMode] = useState(null); // from GET /status; null = unknown
+  // In open mode the server accepts any printable-ASCII id and decides; otherwise only the strict formats are sent.
+  const pid = faucetPidMode === "open" ? openPid || strictPid : strictPid;
 
   // Informational only: a failed read just shows a dash.
   const loadBalance = async () => {
@@ -56,32 +52,28 @@ const LocalWalletPanel = () => {
     }
   };
 
+  const [faucetOpen, setFaucetOpen] = useState(null); // null = unknown
+  useEffect(() => {
+    if (!faucetUrl || !state.address) return undefined;
+    let cancelled = false;
+    fetchFaucetStatus({ faucetUrl }).then((status) => {
+      if (cancelled) return;
+      setFaucetOpen(status.open);
+      setFaucetPidMode(status.pidMode);
+    });
+    return () => { cancelled = true; };
+  }, [faucetUrl, state.address]);
   const requestFunds = () => run(async () => {
-    const friendly = {
-      not_eligible: "This participant code cannot receive funds (unknown or already used).",
-      faucet_empty: "The faucet is empty. Tell the experimenter.",
-      transfer_failed: "The transfer failed. Use a normal wallet address.",
-      rate_limited: "Too many requests. Wait a few minutes.",
-    };
-    // 429 (Lambda throttling), 202 (payment still confirming), 409 (in progress) and 5xx are retried.
-    for (let attempt = 0; attempt < 6; attempt += 1) {
-      const response = await fetch(`${faucetUrl}/claim`, {
-        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pid, address: wallet.address }),
-      });
-      const body = await response.json().catch(() => ({}));
-      if (response.status === 200 && (body.status === "paid" || body.status === "already_paid")) {
-        setNotice("Test funds sent. They are in your wallet.");
-        setFunded(true);
-        void loadBalance();
-        return;
-      }
-      if ([400, 403, 422, 503].includes(response.status) || body.error === "rate_limited") {
-        throw new Error(friendly[body.error] || "Faucet request refused.");
-      }
-      setNotice("Faucet is busy, retrying...");
-      await new Promise((resolve) => setTimeout(resolve, 2000 * (attempt + 1)));
+    try {
+      await claimFunds({ faucetUrl, pid, address: wallet.address, studyId, experimentCode, onBusy: () => setNotice("Faucet is busy, retrying...") });
+    } catch (error) {
+      if (error.code === "faucet_closed") setFaucetOpen(false);
+      throw error; // already a friendly message
     }
-    throw new Error("The faucet is busy. Try again in a minute.");
+    setFaucetOpen(true);
+    setNotice("Test funds sent. They are in your wallet.");
+    setFunded(true);
+    void loadBalance();
   });
 
   const refresh = async () => setState({ exists: await wallet.exists(), address: wallet.address });
@@ -197,7 +189,8 @@ const LocalWalletPanel = () => {
                 <div className={styles.stepBody}>
                   {unlocked ? <p className={styles.balance}>Balance: {balance === null ? "—" : `${balance} ${symbol}`}</p> : null}
                   {unlocked && canFund ? <button type="button" className={styles.button} onClick={requestFunds}>Request test funds</button> : null}
-                  {unlocked && !canFund ? <p className={styles.hint}>Test funds need a participant link from the experimenter.</p> : null}
+                  {unlocked && !canFund ? <p className={styles.hint}>To receive test funds, open the link from your study (it contains your participant id).</p> : null}
+                  {unlocked && canFund && faucetOpen === false ? <p className={styles.hint} data-testid="faucet-closed-notice">{FAUCET_MESSAGES.faucet_closed}</p> : null}
                 </div>
               </li>
             </ol>

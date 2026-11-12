@@ -69,3 +69,80 @@ test("locking the same wallet keeps backup progress", async () => {
   await screen.findByText("Unlock your wallet", {}, { timeout: 5000 });
   expect(step("Save an encrypted backup").textContent).toContain("✓");
 });
+
+describe("faucet step with a non-hex pid", () => {
+  const OPEN_PID = "Participant_42!";
+  const reply = (status, body) => ({ status, ok: status >= 200 && status < 300, json: async () => body });
+  beforeEach(() => {
+    process.env.REACT_APP_FAUCET_URL = "https://faucet.example";
+    window.history.pushState({}, "", `/?pid=${encodeURIComponent(OPEN_PID)}`);
+  });
+  afterEach(() => { delete process.env.REACT_APP_FAUCET_URL; window.sessionStorage.clear(); });
+
+  test("an open-mode faucet receives the non-hex pid exactly as typed (case preserved)", async () => {
+    const calls = [];
+    global.fetch = jest.fn(async (url, init) => {
+      calls.push({ url, init });
+      return url.endsWith("/status") ? reply(200, { open: true, updatedAt: null, pidMode: "open" }) : reply(200, { status: "paid" });
+    });
+    render(<WalletModePanel />);
+    await create();
+    fireEvent.click(await screen.findByRole("button", { name: "Request test funds" }));
+    await waitFor(() => expect(calls.some((c) => c.url.endsWith("/claim"))).toBe(true));
+    expect(JSON.parse(calls.find((c) => c.url.endsWith("/claim")).init.body).pid).toBe(OPEN_PID);
+    await screen.findByText(/Test funds sent/); // let the claim finish before the test ends
+  });
+
+  test("a prolific or allowlist faucet never receives it (the button is not offered)", async () => {
+    for (const pidMode of ["prolific", "allowlist"]) {
+      global.fetch = jest.fn(async (url) => (url.endsWith("/status") ? reply(200, { open: true, updatedAt: null, pidMode }) : reply(200, { status: "paid" })));
+      const { unmount } = render(<WalletModePanel />);
+      await create();
+      await waitFor(() => expect(global.fetch).toHaveBeenCalled());
+      expect(screen.queryByRole("button", { name: "Request test funds" })).toBeNull();
+      expect(global.fetch.mock.calls.some(([url]) => url.endsWith("/claim"))).toBe(false);
+      unmount();
+      window.history.pushState({}, "", `/?pid=${encodeURIComponent(OPEN_PID)}`);
+    }
+  });
+});
+
+describe("faucet step with a Prolific link", () => {
+  const PID = "5f1a2b3c4d5e6f7a8b9c0d1e";
+  const reply = (status, body) => ({ status, ok: status >= 200 && status < 300, json: async () => body });
+  beforeEach(() => {
+    process.env.REACT_APP_FAUCET_URL = "https://faucet.example";
+    window.history.pushState({}, "", `/?PROLIFIC_PID=${PID}&STUDY_ID=study1`);
+  });
+  afterEach(() => { delete process.env.REACT_APP_FAUCET_URL; window.sessionStorage.clear(); });
+
+  test("a closed faucet shows the friendly message (from /status and from a refused claim), never a raw error", async () => {
+    const calls = [];
+    global.fetch = jest.fn(async (url, init) => {
+      calls.push({ url, init });
+      return url.endsWith("/status") ? reply(200, { open: false, updatedAt: null }) : reply(403, { error: "faucet_closed" });
+    });
+    render(<WalletModePanel />);
+    await create();
+    expect(window.location.search).toBe(""); // pid and study stripped from the address bar
+    await screen.findByText("Test funds are not available right now.");
+    fireEvent.click(screen.getByRole("button", { name: "Request test funds" }));
+    await waitFor(() => expect(calls.some((c) => c.url.endsWith("/claim"))).toBe(true));
+    expect(JSON.parse(calls.find((c) => c.url.endsWith("/claim")).init.body)).toEqual({ pid: PID, address: `0x${"1".repeat(40)}`, studyId: "study1" });
+    expect(screen.queryByRole("alert")?.textContent || "").not.toMatch(/403|faucet_closed|Failed to fetch/);
+    expect(screen.getAllByText("Test funds are not available right now.").length).toBeGreaterThan(0);
+  });
+
+  test("a network failure shows a friendly message instead of Failed to fetch", async () => {
+    global.fetch = jest.fn(async (url) => {
+      if (url.endsWith("/status")) return reply(200, { open: true, updatedAt: null });
+      throw new TypeError("Failed to fetch");
+    });
+    render(<WalletModePanel />);
+    await create();
+    fireEvent.click(await screen.findByRole("button", { name: "Request test funds" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/Could not reach the test-funds service/);
+    expect(alert.textContent).not.toMatch(/Failed to fetch/);
+  });
+});
