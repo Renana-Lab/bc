@@ -50,6 +50,7 @@ import {
 import { getActiveFactoryAddress } from "../../real_ethereum/marketConfig";
 import { notifyBudgetChanged } from "../../real_ethereum/budget";
 import { markAuctionClosed } from "../../real_ethereum/activeAuctionRegistry";
+import { useAdminAccess } from "../ManageBudget/useAdminAccess";
 import {
   getEthereumAccounts,
   waitForEthereumProvider,
@@ -223,6 +224,9 @@ const reducer = (state, action) => {
 };
 
 function ShowAuctionPage() {
+  // Admin = wallet on the public allowlist that signed the Admin Zone gate this session (UI only).
+  const { isAdmin: isAdminViewer } = useAdminAccess();
+  const [exportingCsv, setExportingCsv] = useState(false);
   const [finalizingPayment, setFinalizingPayment] = useState(false);
   const [state, dispatch] = useReducer(reducer, initialState);
   const fetchInFlightRef = useRef(false);
@@ -727,6 +731,28 @@ function ShowAuctionPage() {
             onClick={() => dispatch({ type: "TOGGLE_DIALOG" })}
           >
             Display Bidding History
+          </Button>
+        )}
+        {isAdminViewer && (
+          <Button
+            variant="outlined"
+            disabled={exportingCsv}
+            style={{ marginTop: "0.7rem", width: "24rem" }}
+            onClick={async () => {
+              setExportingCsv(true);
+              try {
+                const { exportAuctionTransactionsCsv } = await import("../ManageBudget/reportUtils");
+                const { count, note } = await exportAuctionTransactionsCsv(address);
+                toast.success(`Exported ${count} transactions`);
+                if (note) toast(`Transaction hashes: ${note}`, { duration: 8000 });
+              } catch (error) {
+                toast.error(error?.message || "Could not export transactions");
+              } finally {
+                setExportingCsv(false);
+              }
+            }}
+          >
+            {exportingCsv ? "Exporting..." : "Export transactions (CSV)"}
           </Button>
         )}
         <br />

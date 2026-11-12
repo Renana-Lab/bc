@@ -45,6 +45,9 @@ import {
   requestEthereumAccounts,
   waitForEthereumProvider,
 } from "../../real_ethereum/ethereumProvider";
+import { ADMIN_GATE_NOTE } from "./adminGate";
+import { AdminGatePrompt, useAdminAccess } from "./useAdminAccess";
+import AdminOpsCards from "./AdminOpsCards";
 import {
   BULK_DRAFT_KEY,
   BULK_MAX_AUCTIONS,
@@ -82,7 +85,6 @@ const BotnetControlPanel = lazy(() => import("./BotnetControlPanel"));
 const ExperimentEvidencePanel = lazy(() => import("./ExperimentEvidencePanel"));
 
 const LOCAL_STORAGE_KEY = "globalBudgetStore";
-const ADMIN_SECRET = "1234"; // Do not store production secrets on the frontend.
 const DEFAULT_GLOBAL_BUDGET = 2000;
 const DEFAULT_REPORT_READ_CONCURRENCY = 6;
 const MAX_REPORT_READ_CONCURRENCY = 10;
@@ -345,8 +347,8 @@ const requestConnectedAccount = async () => {
 const ManageBudgetPage = () => {
   const navigate = useNavigate();
   const [budget, setBudget] = useState(DEFAULT_GLOBAL_BUDGET);
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [pass, setPass] = useState("");
+  const adminAccess = useAdminAccess();
+  const isAdmin = adminAccess.isAdmin;
   const [error, setError] = useState("");
   const [reportState, setReportState] = useState({
     loading: false,
@@ -480,16 +482,6 @@ const ManageBudgetPage = () => {
   useEffect(() => {
     return () => window.clearTimeout(switchTimerRef.current);
   }, []);
-
-  const authenticate = useCallback(() => {
-    if (pass === ADMIN_SECRET) {
-      setIsAdmin(true);
-      setError("");
-      toast.success("Admin access granted");
-    } else {
-      setError("Incorrect admin key");
-    }
-  }, [pass]);
 
   useEffect(() => {
     setPresenceAdminRole(isAdmin);
@@ -1480,17 +1472,6 @@ const ManageBudgetPage = () => {
     }
   };
 
-  useEffect(() => {
-    const handleKeyDown = (e) => {
-      if (e.key === "Enter") {
-        authenticate();
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [authenticate]);
-
   const reportProgress =
     reportState.total > 0
       ? Math.round((reportState.current / reportState.total) * 100)
@@ -1669,6 +1650,16 @@ const ManageBudgetPage = () => {
               health, batch auction creation, and exports from one operational
               control area.
             </Typography>
+            <Typography
+              variant="caption"
+              textAlign="center"
+              sx={{ maxWidth: 680, mb: 2, color: "#8a5a00" }}
+              data-testid="admin-gate-note"
+            >
+              {ADMIN_GATE_NOTE}
+            </Typography>
+
+            <AdminOpsCards />
 
             <Box
               sx={{
@@ -3810,36 +3801,7 @@ const ManageBudgetPage = () => {
             </Box>
           </>
         ) : (
-          <>
-            <Typography variant="h5" gutterBottom>
-              Admin Access Required
-            </Typography>
-            <TextField
-              label="Admin Key"
-              type="password"
-              value={pass}
-              onChange={(e) => setPass(e.target.value)}
-              fullWidth
-              sx={{ mt: 2 }}
-            />
-            <Button
-              variant="contained"
-              color="primary"
-              fullWidth
-              sx={{ mt: 3 }}
-              onClick={authenticate}
-            >
-              Unlock
-            </Button>
-            {error && (
-              <Typography color="error" sx={{ mt: 2 }}>
-                {error}
-              </Typography>
-            )}
-            <Typography variant="caption" color="text.secondary" sx={{ mt: 2 }}>
-              Press Enter after typing your key
-            </Typography>
-          </>
+          <AdminGatePrompt access={adminAccess} shortAddress={shortAddress} />
         )}
       </Box>
     </Layout>
