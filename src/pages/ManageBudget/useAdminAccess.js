@@ -28,6 +28,13 @@ export const useAdminAccess = ({ allowlist } = {}) => {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const timerRef = useRef(null);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   const recheck = useCallback(() => {
     const next = connectedAccount();
@@ -84,11 +91,13 @@ export const useAdminAccess = ({ allowlist } = {}) => {
         uri: window.location.origin,
         allowlist: list,
       });
-      recheck();
+      if (mountedRef.current) recheck();
     } catch (gateError) {
-      setError(gateError?.code === 4001 ? "Signature request was rejected." : gateError?.message || "Admin sign-in failed.");
+      if (mountedRef.current) {
+        setError(gateError?.code === 4001 ? "Signature request was rejected." : gateError?.message || "Admin sign-in failed.");
+      }
     } finally {
-      setBusy(false);
+      if (mountedRef.current) setBusy(false);
     }
   }, [list, recheck]);
 

@@ -392,25 +392,44 @@ export const readAuctionOption = async (address, index) => {
   };
 };
 
-// Attach transaction hashes (from BidRecorded logs) to ledger rows without guessing: when the log window
-// is complete the hashes line up with the newest rows; otherwise leave them blank and say why.
-export const alignBidHashes = (rows, logs, { complete }) => {
-  const hashes = new Array(rows.length).fill("");
-  if (!logs.length) return { hashes, note: complete ? "No BidRecorded logs found." : "" };
-  if (logs.length > rows.length) {
-    return { hashes, note: "More BidRecorded logs than ledger rows; hashes left blank." };
-  }
-  if (logs.length < rows.length && !complete) {
-    return { hashes, note: "Log window incomplete; hashes left blank." };
-  }
-  const offset = rows.length - logs.length;
-  logs.forEach((log, index) => {
-    hashes[offset + index] = log.transactionHash || "";
+// Attach transaction hashes to ledger rows by identity, not position: a log matches a row when bidder,
+// cumulative total and time agree (rows from the legacy getTransactions() lack a cumulative total and
+// match on bidder, amount and time). Each log is used once. Rows without a match keep a blank hash.
+const bidKey = (bidder, total, time) =>
+  [String(bidder || "").toLowerCase(), String(total ?? ""), String(time ?? "")].join(":");
+
+export const alignBidHashes = (rows, logs) => {
+  const queues = new Map();
+  logs.forEach((log) => {
+    const key = bidKey(log.bidder, log.cumulativeBid, log.time);
+    const legacyKey = bidKey(log.bidder, `amount=${log.amount}`, log.time);
+    [key, legacyKey].forEach((k) => {
+      if (!queues.has(k)) queues.set(k, []);
+      queues.get(k).push(log);
+    });
   });
-  return {
-    hashes,
-    note: offset > 0 ? `Hashes only for the latest ${logs.length} of ${rows.length} bids (older bids are outside the log window).` : "",
-  };
+  const used = new Set();
+  const hashes = rows.map((row) => {
+    const key =
+      row.cumulativeBid !== undefined
+        ? bidKey(row.bidderAddress, row.cumulativeBid, row.time)
+        : bidKey(row.bidderAddress, `amount=${row.value}`, row.time);
+    const match = (queues.get(key) || []).find((log) => !used.has(log));
+    if (!match) return "";
+    used.add(match);
+    return match.transactionHash || "";
+  });
+  const missing = hashes.filter((hash) => !hash).length;
+  const note = !rows.length
+    ? ""
+    : missing === rows.length
+      ? logs.length
+        ? "No BidRecorded log matched any ledger row; hashes left blank."
+        : "No BidRecorded logs found in the log window; hashes left blank."
+      : missing
+        ? `${missing} of ${rows.length} bids have no matching log in the log window; their hashes are blank.`
+        : "";
+  return { hashes, note };
 };
 
 // Reads BidRecorded logs in <=90-block chunks over a bounded recent window (the public Sapphire RPC
@@ -430,7 +449,24 @@ const readBidLogs = async (address) => {
               topics: [web3.eth.abi.encodeEventSignature(topic)],
               fromBlock: from,
               toBlock: to,
-            }),
+            }).then((logs) =>
+              logs.flatMap((log) => {
+                try {
+                  const args = web3.eth.abi.decodeLog(topic.inputs, log.data, log.topics.slice(1));
+                  return [{
+                    blockNumber: log.blockNumber,
+                    logIndex: log.logIndex,
+                    transactionHash: log.transactionHash,
+                    bidder: args.bidder,
+                    amount: String(args.amount),
+                    cumulativeBid: String(args.cumulativeBid),
+                    time: String(args.time),
+                  }];
+                } catch (_) {
+                  return []; // an undecodable log can never be matched
+                }
+              })
+            ),
           undefined,
           READ_OPTIONS
         ),
@@ -466,7 +502,7 @@ const readAuctionTransactions = async (address) => {
         undefined,
         READ_OPTIONS
       ).catch(() => []);
-  const { hashes, note } = alignBidHashes(rows, bidLogs.logs, { complete: bidLogs.complete });
+  const { hashes, note } = alignBidHashes(rows, bidLogs.logs);
   return {
     rows: rows.map((row, index) => ({ ...row, transactionHash: hashes[index] })),
     note: [bidLogs.health, note].filter(Boolean).join("; "),

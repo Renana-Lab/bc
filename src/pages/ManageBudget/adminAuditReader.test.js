@@ -4,6 +4,7 @@ import {
   MAX_AUDIT_LOOKBACK_BLOCKS,
   getAuditLookbackBlocks,
   getAuditSnapshot,
+  isRevertError,
   readAllUsers,
   resetAuditCache,
 } from "./adminAuditReader";
@@ -61,6 +62,17 @@ describe("shared audit snapshot cache", () => {
     await getAuditSnapshot("0xF", options);
     expect(reader).toHaveBeenCalledTimes(3);
   });
+  test("cache entries are per factory address", async () => {
+    const reader = jest.fn(async (factory) => ({ factory, events: [] }));
+    const a = await getAuditSnapshot("0xAAA", { reader });
+    const b = await getAuditSnapshot("0xBBB", { reader }); // inside the TTL, must not reuse A's result
+    expect(reader).toHaveBeenCalledTimes(2);
+    expect(a.factory).toBe("0xAAA");
+    expect(b.factory).toBe("0xBBB");
+    expect(await getAuditSnapshot("0xaaa", { reader })).toBe(a);
+    expect(await getAuditSnapshot("0xbbb", { reader })).toBe(b);
+    expect(reader).toHaveBeenCalledTimes(2);
+  });
   test("failures are not cached", async () => {
     const reader = jest.fn().mockRejectedValueOnce(new Error("rpc down")).mockResolvedValueOnce({ events: [] });
     await expect(getAuditSnapshot("0xF", { reader })).rejects.toThrow("rpc down");
@@ -70,46 +82,74 @@ describe("shared audit snapshot cache", () => {
 
 describe("readAllUsers", () => {
   const revert = () => Object.assign(new Error("execution reverted"), { code: 3 });
-  const rpcDown = () => Object.assign(new Error("fetch failed"), { rpc: true });
-  const isRpcError = (error) => Boolean(error.rpc);
 
   test("a revert at the end index is the end of the list, not an error", async () => {
-    const result = await readAllUsers(async (i) => (i < 13 ? `0x${i}` : Promise.reject(revert())), { isRpcError });
+    const result = await readAllUsers(async (i) => (i < 13 ? `0x${i}` : Promise.reject(revert())));
     expect(result.addresses).toHaveLength(13);
     expect(result).toMatchObject({ complete: true, warning: "" });
   });
-  test("an RPC error is not treated as the end: the list is flagged incomplete", async () => {
-    const result = await readAllUsers(async (i) => (i < 4 ? `0x${i}` : Promise.reject(rpcDown())), { isRpcError });
+  test("revert detection is by message, case-insensitively", async () => {
+    expect(isRevertError(new Error("VM Exception: Reverted with reason"))).toBe(true);
+    expect(isRevertError(new Error("fetch failed"))).toBe(false);
+    const result = await readAllUsers(async (i) => (i < 2 ? `0x${i}` : Promise.reject(new Error("call REVERT exception"))));
+    expect(result).toMatchObject({ complete: true, warning: "" });
+  });
+  test("an RPC error is not the end: the list is flagged incomplete", async () => {
+    const result = await readAllUsers(async (i) => (i < 4 ? `0x${i}` : Promise.reject(new Error("fetch failed"))));
     expect(result.addresses).toHaveLength(4);
     expect(result.complete).toBe(false);
-    expect(result.warning).toMatch(/RPC error while reading user #4/);
+    expect(result.warning).toMatch(/Error while reading user #4/);
+  });
+  test("an unfamiliar error message is never treated as end-of-list", async () => {
+    const result = await readAllUsers(async (i) => (i < 3 ? `0x${i}` : Promise.reject(new Error("Returned values aren't valid, did it run Out of Gas?"))));
+    expect(result.addresses).toHaveLength(3);
+    expect(result.complete).toBe(false);
+    expect(result.warning).toMatch(/Out of Gas/);
+    const odd = await readAllUsers(async () => Promise.reject({ weird: true }));
+    expect(odd.complete).toBe(false);
+    expect(odd.warning).not.toBe("");
   });
   test("warns when the cap is reached", async () => {
-    const result = await readAllUsers(async (i) => `0x${i}`, { cap: 25, isRpcError });
+    const result = await readAllUsers(async (i) => `0x${i}`, { cap: 25 });
     expect(result.addresses).toHaveLength(25);
     expect(result.complete).toBe(false);
     expect(result.warning).toMatch(/25-user read cap/);
   });
 });
 
-describe("transaction hash alignment for the per-auction CSV", () => {
-  const rows = [{}, {}, {}];
-  test("complete window: hashes line up one to one", () => {
-    const { hashes, note } = alignBidHashes(rows, [{ transactionHash: "a" }, { transactionHash: "b" }, { transactionHash: "c" }], { complete: true });
+describe("transaction hash matching for the per-auction CSV", () => {
+  const A = "0xAbC0000000000000000000000000000000000001";
+  const B = "0xdef0000000000000000000000000000000000002";
+  const row = (bidderAddress, cumulativeBid, time) => ({ bidderAddress, cumulativeBid: String(cumulativeBid), time: String(time), value: "1" });
+  const log = (bidder, cumulativeBid, time, transactionHash) => ({ bidder: bidder.toLowerCase(), cumulativeBid: String(cumulativeBid), time: String(time), amount: "1", transactionHash });
+  const rows = [row(A, 10, 100), row(B, 20, 110), row(A, 30, 120)];
+
+  test("matches by bidder + new total + time, regardless of order or case", () => {
+    const { hashes, note } = alignBidHashes(rows, [log(A, 30, 120, "c"), log(A, 10, 100, "a"), log(B, 20, 110, "b")]);
     expect(hashes).toEqual(["a", "b", "c"]);
     expect(note).toBe("");
   });
-  test("window shorter than the auction: hashes attach to the newest bids with a note", () => {
-    const { hashes, note } = alignBidHashes(rows, [{ transactionHash: "b" }, { transactionHash: "c" }], { complete: true });
+  test("older bids outside the window get blank hashes and a note, never a wrong hash", () => {
+    const { hashes, note } = alignBidHashes(rows, [log(B, 20, 110, "b"), log(A, 30, 120, "c")]);
     expect(hashes).toEqual(["", "b", "c"]);
-    expect(note).toMatch(/latest 2 of 3/);
+    expect(note).toMatch(/1 of 3 bids have no matching log/);
   });
-  test("failed ranges: never guess, leave blank and say so", () => {
-    const { hashes, note } = alignBidHashes(rows, [{ transactionHash: "c" }], { complete: false });
+  test("a mismatching log (different total or time) is not used", () => {
+    const { hashes, note } = alignBidHashes(rows, [log(A, 11, 100, "x"), log(B, 20, 111, "y")]);
     expect(hashes).toEqual(["", "", ""]);
-    expect(note).toMatch(/incomplete/);
+    expect(note).toMatch(/No BidRecorded log matched/);
   });
-  test("more logs than rows is refused", () => {
-    expect(alignBidHashes([{}], [{ transactionHash: "a" }, { transactionHash: "b" }], { complete: true }).hashes).toEqual([""]);
+  test("each log is used at most once", () => {
+    const twins = [row(A, 10, 100), row(A, 10, 100)];
+    expect(alignBidHashes(twins, [log(A, 10, 100, "only")]).hashes).toEqual(["only", ""]);
+  });
+  test("legacy rows without a cumulative total match on bidder, amount and time", () => {
+    const legacy = [{ bidderAddress: A, value: "1", time: "100" }];
+    expect(alignBidHashes(legacy, [log(A, 10, 100, "a")]).hashes).toEqual(["a"]);
+  });
+  test("no logs: blank hashes with an explanation", () => {
+    const { hashes, note } = alignBidHashes(rows, []);
+    expect(hashes).toEqual(["", "", ""]);
+    expect(note).toMatch(/No BidRecorded logs found/);
   });
 });

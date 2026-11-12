@@ -3,7 +3,6 @@
 import CampaignFactory from "../../real_ethereum/build/CampaignFactory.json";
 import Campaign from "../../real_ethereum/build/Campaign.json";
 import { readOnlyExecute } from "../../real_ethereum/readOnly";
-import { isRpcProviderFailure } from "../../real_ethereum/rpcConfig";
 import { getActiveAuctionSnapshot } from "../../real_ethereum/activeAuctionRegistry";
 import { readLogsChunked } from "../../real_ethereum/chunkedLogs";
 import { mergeAuditEvents, normalizeAuditEvent } from "./adminCardData";
@@ -173,12 +172,12 @@ export const getAuditSnapshot = (factoryAddress, { force = false, reader = readA
 // ---- allUsers --------------------------------------------------------------------------------
 
 // allUsers is a public array with no length getter. readIndex(i) resolves to an address or throws.
-// A contract revert (index out of range) means "end of list"; an RPC failure is NOT the end: the list
-// stops there with an error so the UI can warn instead of silently truncating.
-export const readAllUsers = async (
-  readIndex,
-  { chunk = USER_READ_CHUNK, cap = USER_READ_CAP, isRpcError = isRpcProviderFailure } = {}
-) => {
+// Only an error whose message says "revert" (index out of range) means "end of list". Any other error
+// (RPC failure, timeout, anything unfamiliar) is NOT the end: the list stops there as incomplete with a
+// warning so the UI never silently truncates.
+export const isRevertError = (error) => /revert/i.test(String(error?.message ?? error ?? ""));
+
+export const readAllUsers = async (readIndex, { chunk = USER_READ_CHUNK, cap = USER_READ_CAP } = {}) => {
   const addresses = [];
   for (let start = 0; start < cap; start += chunk) {
     const size = Math.min(chunk, cap - start);
@@ -193,14 +192,12 @@ export const readAllUsers = async (
     for (let offset = 0; offset < results.length; offset += 1) {
       const { value, error } = results[offset];
       if (error) {
-        if (isRpcError(error)) {
-          return {
-            addresses,
-            complete: false,
-            warning: `RPC error while reading user #${start + offset}: the list may be incomplete (${error.message || error}).`,
-          };
-        }
-        return { addresses, complete: true, warning: "" }; // reverted: end of list
+        if (isRevertError(error)) return { addresses, complete: true, warning: "" }; // end of list
+        return {
+          addresses,
+          complete: false,
+          warning: `Error while reading user #${start + offset}: the list may be incomplete (${error?.message || error}).`,
+        };
       }
       addresses.push(value);
     }

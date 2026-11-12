@@ -100,6 +100,26 @@ describe("Admin gate UI", () => {
     await waitFor(() => expect(screen.queryByText("ADMIN ZONE")).toBeNull());
   });
 
+  test("unmounting while the wallet is signing does not update state or warn", async () => {
+    const provider = connect(admin);
+    const original = provider.request.getMockImplementation();
+    let release;
+    provider.request.mockImplementation(async (args) => {
+      if (args.method === "personal_sign") await new Promise((resolve) => (release = resolve));
+      return original(args);
+    });
+    const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+    const { unmount } = render(<Harness />);
+    fireEvent.click(screen.getByRole("button", { name: /sign to unlock/i }));
+    await waitFor(() => expect(signCalls(provider)).toHaveLength(1));
+    unmount();
+    await act(async () => {
+      release();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
   test("a rejected signature keeps the page locked and shows a message", async () => {
     const provider = connect(admin);
     const original = provider.request.getMockImplementation();
