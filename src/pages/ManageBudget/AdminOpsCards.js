@@ -26,6 +26,13 @@ import { subscribeActiveAuctionRegistry } from "../../real_ethereum/activeAuctio
 import { getLivePresence, isPresenceConfigured } from "../../telemetry/presenceClient";
 import { LOCAL_BOTS_KEY } from "../../telemetry/botPresence";
 import { mapWithConcurrency, shortAddress } from "./reportUtils";
+import { describeRangeHealth } from "../../real_ethereum/chunkedLogs";
+import {
+  AUDIT_CAMPAIGN_LIMIT,
+  getAuditLookbackBlocks,
+  getAuditSnapshot,
+  readAllUsers,
+} from "./adminAuditReader";
 import {
   AUDIT_EVENT_TYPES,
   filterAuditEvents,
@@ -33,20 +40,10 @@ import {
   joinUrl,
   mapBotConfig,
   mapUserRows,
-  mergeAuditEvents,
-  namedArgs,
-  normalizeAuditEvent,
   toServiceRow,
 } from "./adminCardData";
 
 const READ_OPTIONS = { preferInjected: false, allowInjectedFallback: false };
-const USER_READ_CHUNK = 10;
-const USER_READ_CAP = 500;
-const AUDIT_LOOKBACK_BLOCKS = Math.max(
-  1000,
-  Number(process.env.REACT_APP_ADMIN_AUDIT_LOOKBACK_BLOCKS || 50000)
-);
-const AUDIT_CAMPAIGN_LIMIT = 25;
 const PROBE_TIMEOUT_MS = 6000;
 const LIVE_FACTORY_EVENTS = ["BudgetChanged", "AuctionCreatedDetailed", "AuctionFinalizationFailed"];
 
@@ -149,93 +146,51 @@ const ErrorLine = ({ error }) =>
 
 const monoSx = { fontFamily: "monospace", fontSize: 12, wordBreak: "break-all" };
 
-// ---- Audit events (shared by the Audit card and the Users card) ------------------------------
-
-const readAuditEvents = async (factoryAddress) => {
-  const options = { ...READ_OPTIONS, factoryAddress };
-  const latest = Number(await readOnlyExecute(({ web3 }) => web3.eth.getBlockNumber(), undefined, options));
-  const fromBlock = Math.max(0, latest - AUDIT_LOOKBACK_BLOCKS);
-  const getFactoryEvents = (name) =>
-    readOnlyExecute(
-      ({ factory }) => factory.getPastEvents(name, { fromBlock, toBlock: latest }),
-      undefined,
-      options
-    );
-  const [budget, created, failed] = await Promise.all([
-    getFactoryEvents("BudgetChanged"),
-    getFactoryEvents("AuctionCreatedDetailed"),
-    getFactoryEvents("AuctionFinalizationFailed"),
-  ]);
-  const factoryEvents = [...budget, ...created, ...failed].map((event) => normalizeAuditEvent(event, "factory"));
-
-  // Campaign events: only the most recently created auctions, to keep RPC load bounded.
-  const recentCampaigns = created
-    .map((event) => namedArgs(event.returnValues).campaignAddress)
-    .filter(Boolean)
-    .slice(-AUDIT_CAMPAIGN_LIMIT);
-  const campaignEvents = (
-    await mapWithConcurrency(recentCampaigns, 3, async (address) => {
-      try {
-        const lists = await Promise.all(
-          ["SellerPaid", "RefundProcessed"].map((name) =>
-            readOnlyExecute(
-              ({ campaign }) => campaign(address).getPastEvents(name, { fromBlock, toBlock: latest }),
-              undefined,
-              options
-            )
-          )
-        );
-        return lists.flat().map((event) => normalizeAuditEvent(event, "campaign"));
-      } catch (_) {
-        return [];
-      }
-    })
-  ).flat();
-
-  return { latest, fromBlock, events: mergeAuditEvents(factoryEvents, campaignEvents) };
-};
-
 // ---- Users and budgets -------------------------------------------------------------------------
 
 export const UsersBudgetsCard = () => {
   const [open, toggle] = useCardState(false);
-  const [state, setState] = useState({ rows: [], loading: false, error: "", fromBlock: 0 });
+  const [state, setState] = useState({ rows: [], loading: false, error: "", warnings: [], audit: null, historyError: "" });
   const requestRef = useRef(0);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (force = false) => {
     const requestId = ++requestRef.current;
     setState((current) => ({ ...current, loading: true, error: "" }));
     try {
       const factoryAddress = getActiveFactoryAddress();
       const options = { ...READ_OPTIONS, factoryAddress };
-      const addresses = [];
-      // allUsers is a public array with no length getter: read in chunks until an index reverts.
-      for (let start = 0; start < USER_READ_CAP; start += USER_READ_CHUNK) {
-        const chunk = await Promise.all(
-          Array.from({ length: USER_READ_CHUNK }, (_, offset) =>
-            readOnlyCall(({ factory }) => factory.methods.allUsers(start + offset), 1, options).catch(() => null)
-          )
-        );
-        const found = chunk.filter(Boolean);
-        addresses.push(...found);
-        if (found.length < USER_READ_CHUNK) break;
+      const users = await readAllUsers((index) =>
+        readOnlyCall(({ factory }) => factory.methods.allUsers(index), 1, options)
+      );
+      let budgetErrors = 0;
+      const budgetPairs = await mapWithConcurrency(users.addresses, 4, async (address) => {
+        try {
+          return [address.toLowerCase(), String(await readOnlyCall(({ factory }) => factory.methods.usersBudget(address), 1, options))];
+        } catch (_) {
+          budgetErrors += 1;
+          return [address.toLowerCase(), "unavailable"];
+        }
+      });
+      // One audit read is shared with the Audit events card.
+      let audit = null;
+      let historyError = "";
+      try {
+        audit = await getAuditSnapshot(factoryAddress, { force });
+      } catch (auditError) {
+        historyError = auditError?.message || "audit read failed";
       }
-      const budgetPairs = await mapWithConcurrency(addresses, 4, async (address) => [
-        address.toLowerCase(),
-        String(
-          await readOnlyCall(({ factory }) => factory.methods.usersBudget(address), 1, options).catch(() => "")
-        ),
-      ]);
-      const audit = await readAuditEvents(factoryAddress).catch(() => ({ events: [], fromBlock: 0 }));
       const { labels, bots } = readLocalBots();
       const rows = mapUserRows({
-        addresses,
+        addresses: users.addresses,
         budgets: Object.fromEntries(budgetPairs),
-        events: audit.events.filter((event) => event.name === "BudgetChanged"),
+        events: (audit?.events || []).filter((event) => event.name === "BudgetChanged"),
         labels,
         bots,
       });
-      if (requestId === requestRef.current) setState({ rows, loading: false, error: "", fromBlock: audit.fromBlock });
+      const warnings = [users.warning, budgetErrors ? `${budgetErrors} budget reads failed.` : ""].filter(Boolean);
+      if (requestId === requestRef.current) {
+        setState({ rows, loading: false, error: "", warnings, audit, historyError });
+      }
     } catch (error) {
       if (requestId === requestRef.current) {
         setState((current) => ({ ...current, loading: false, error: error?.message || "Could not read users." }));
@@ -246,7 +201,10 @@ export const UsersBudgetsCard = () => {
   useEffect(() => {
     if (open) load();
   }, [open, load]);
-  useAdminLiveRefresh(() => open && load());
+  useAdminLiveRefresh(() => open && load(true));
+
+  const history = state.historyError ? "unavailable" : state.audit?.failedRanges?.length ? "partial" : "ok";
+  const historyNote = describeRangeHealth(state.audit || {});
 
   return (
     <AdminCard
@@ -254,13 +212,22 @@ export const UsersBudgetsCard = () => {
       description="Registered wallets from the factory, their current budget and last budget change. Read-only."
       open={open}
       onToggle={toggle}
-      onRefresh={load}
+      onRefresh={() => load(true)}
       loading={state.loading}
     >
       <ErrorLine error={state.error} />
+      {state.warnings.map((warning) => (
+        <Typography key={warning} variant="body2" sx={{ color: "#8a5a00", mb: 0.5 }}>
+          {warning}
+        </Typography>
+      ))}
+      {history !== "ok" ? (
+        <Typography variant="body2" sx={{ color: "#8a5a00", mb: 0.5 }}>
+          {history === "unavailable" ? `Budget history unavailable (${state.historyError}).` : `Budget history incomplete: ${historyNote}.`}
+        </Typography>
+      ) : null}
       <Typography variant="caption" color="text.secondary">
-        {state.rows.length} users. Newest activity first. Budget changes are read from the last{" "}
-        {AUDIT_LOOKBACK_BLOCKS.toLocaleString()} blocks (from block {state.fromBlock}). Labels come from this browser's bot config.
+        {state.rows.length} users. Newest activity first. Budget changes are read from the last {state.audit?.lookback ?? getAuditLookbackBlocks()} blocks. Labels come from this browser's bot config.
       </Typography>
       <Box sx={{ overflowX: "auto", mt: 1 }}>
         <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 13 }}>
@@ -285,7 +252,9 @@ export const UsersBudgetsCard = () => {
                 <td style={{ fontSize: 12 }}>
                   {row.lastChange
                     ? `${row.lastChange.direction} ${row.lastChange.amount} at block ${row.lastChange.blockNumber}`
-                    : "none in window"}
+                    : history === "unavailable"
+                      ? "budget history unavailable"
+                      : `none in last ${state.audit?.lookback ?? getAuditLookbackBlocks()} blocks`}
                 </td>
               </tr>
             ))}
@@ -400,10 +369,10 @@ export const AuditEventsCard = () => {
   const [query, setQuery] = useState("");
   const [inspected, setInspected] = useState(null);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (force = false) => {
     setState((current) => ({ ...current, loading: true, error: "" }));
     try {
-      const audit = await readAuditEvents(getActiveFactoryAddress());
+      const audit = await getAuditSnapshot(getActiveFactoryAddress(), { force });
       setState({ ...audit, loading: false, error: "" });
     } catch (error) {
       setState((current) => ({ ...current, loading: false, error: error?.message || "Could not read events." }));
@@ -413,8 +382,9 @@ export const AuditEventsCard = () => {
   useEffect(() => {
     if (open) load();
   }, [open, load]);
-  useAdminLiveRefresh(() => open && load());
+  useAdminLiveRefresh(() => open && load(true));
 
+  const health = describeRangeHealth(state);
   const visible = useMemo(() => filterAuditEvents(state.events, { types, query }), [state.events, types, query]);
   const toggleType = (name) =>
     setTypes((current) => (current.includes(name) ? current.filter((entry) => entry !== name) : [...current, name]));
@@ -425,10 +395,20 @@ export const AuditEventsCard = () => {
       description="Factory and recent campaign events, newest first. Read-only."
       open={open}
       onToggle={toggle}
-      onRefresh={load}
+      onRefresh={() => load(true)}
       loading={state.loading}
     >
       <ErrorLine error={state.error} />
+      {health ? (
+        <Typography variant="body2" sx={{ color: "#8a5a00", mb: 0.5 }} data-testid="audit-range-health">
+          Partial data: {health}.
+        </Typography>
+      ) : null}
+      {(state.failedRanges || []).slice(0, 3).map((range) => (
+        <Typography key={range.from} variant="caption" display="block" color="text.secondary" sx={monoSx}>
+          blocks {range.from}-{range.to}: {range.error}
+        </Typography>
+      ))}
       <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1, alignItems: "center" }}>
         {AUDIT_EVENT_TYPES.map((name) => (
           <FormControlLabel
@@ -440,8 +420,8 @@ export const AuditEventsCard = () => {
         <TextField size="small" label="Search" value={query} onChange={(event) => setQuery(event.target.value)} />
       </Box>
       <Typography variant="caption" color="text.secondary">
-        {visible.length} of {state.events.length} events, blocks {state.fromBlock} to {state.latest}. Campaign events cover the
-        latest {AUDIT_CAMPAIGN_LIMIT} auctions.
+        {visible.length} of {state.events.length} events, blocks {state.fromBlock} to {state.latest}. Payment and refund events cover
+        up to {AUDIT_CAMPAIGN_LIMIT} recent auctions ({state.campaignCount ?? 0} found).
       </Typography>
       {visible.slice(0, 200).map((event) => (
         <Box key={event.id} sx={{ display: "flex", gap: 1, alignItems: "center", py: 0.5, borderTop: "1px solid #e3e7f5" }}>

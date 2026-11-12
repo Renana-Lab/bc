@@ -5,6 +5,7 @@
 // contract writes: anyone can still call the contract functions directly from their own wallet.
 import { verifyMessage } from "ethers";
 import { buildSiweMessage, utf8ToHex } from "../../real_ethereum/siwe.mjs";
+import { getTargetNetwork } from "../../real_ethereum/sapphireNetworks";
 
 export const ADMIN_GATE_NOTE =
   "UI gate only: contract writes are not enforced until the contract has an admin role.";
@@ -49,13 +50,33 @@ const readMessageField = (message, label) => {
   return match ? match[1].trim() : "";
 };
 
-// Pure check: allowlisted + signature recovers the claimed address + message is ours and unexpired.
-export const verifyAdminProof = ({ address, message, signature, allowlist = getAdminAddresses(), now = Date.now() }) => {
+// What a proof must be bound to: the configured chain and the origin the app is served from.
+export const getExpectedGateContext = () => ({
+  chainId: getTargetNetwork().chainId,
+  domain: typeof window !== "undefined" ? window.location.host : "",
+  uri: typeof window !== "undefined" ? window.location.origin : "",
+});
+
+// Pure check: allowlisted + signature recovers the claimed address + message is ours, unexpired and
+// bound to the expected chain id, domain and URI.
+export const verifyAdminProof = ({
+  address,
+  message,
+  signature,
+  allowlist = getAdminAddresses(),
+  now = Date.now(),
+  expected = getExpectedGateContext(),
+}) => {
   if (!isAdminAddress(address, allowlist)) return { ok: false, reason: "not-allowlisted" };
   const lines = String(message ?? "").split("\n");
   if (String(lines[1] ?? "").toLowerCase() !== String(address).toLowerCase() || !String(message).includes(ADMIN_GATE_STATEMENT)) {
     return { ok: false, reason: "bad-message" };
   }
+  if (lines[0] !== `${expected.domain} wants you to sign in with your Ethereum account:`) {
+    return { ok: false, reason: "wrong-domain" };
+  }
+  if (readMessageField(message, "URI") !== expected.uri) return { ok: false, reason: "wrong-uri" };
+  if (readMessageField(message, "Chain ID") !== String(expected.chainId)) return { ok: false, reason: "wrong-chain" };
   const expiresAt = Date.parse(readMessageField(message, "Expiration Time"));
   if (!Number.isFinite(expiresAt) || expiresAt <= now) return { ok: false, reason: "expired" };
   let recovered = "";
@@ -89,18 +110,32 @@ export const clearAdminProof = () => {
 };
 
 // Returns the verified admin address for `account`, re-verifying the stored signature each time.
-export const getVerifiedAdminAddress = (account, { allowlist, now } = {}) => {
+const readStoredProof = (account, { allowlist, now, expected } = {}) => {
   try {
     const stored = JSON.parse(storage()?.getItem(ADMIN_PROOF_KEY) || "null");
-    if (!stored || String(stored.address).toLowerCase() !== String(account ?? "").toLowerCase()) return "";
-    return verifyAdminProof({ ...stored, allowlist, now }).ok ? String(stored.address).toLowerCase() : "";
+    if (!stored || String(stored.address).toLowerCase() !== String(account ?? "").toLowerCase()) return null;
+    const result = verifyAdminProof({ ...stored, allowlist, now, expected });
+    return result.ok ? { address: String(stored.address).toLowerCase(), expiresAt: result.expiresAt } : null;
   } catch (_) {
-    return "";
+    return null;
   }
 };
 
+export const getVerifiedAdminAddress = (account, options = {}) => readStoredProof(account, options)?.address || "";
+
+// Epoch ms when the stored proof for this account stops being valid (0 when there is none).
+export const getAdminProofExpiry = (account, options = {}) => readStoredProof(account, options)?.expiresAt || 0;
+
 // Ask the connected wallet to sign the gate message. Refuses (without prompting) non-allowlisted accounts.
-export const requestAdminProof = async ({ provider, account, chainId, domain, uri, allowlist = getAdminAddresses() }) => {
+export const requestAdminProof = async ({
+  provider,
+  account,
+  chainId,
+  domain,
+  uri,
+  allowlist = getAdminAddresses(),
+  expected = { chainId, domain, uri },
+}) => {
   if (!isAdminAddress(account, allowlist)) {
     throw new Error("This wallet address is not on the admin list.");
   }
@@ -109,7 +144,7 @@ export const requestAdminProof = async ({ provider, account, chainId, domain, ur
     method: "personal_sign",
     params: [utf8ToHex(message), account],
   });
-  const result = verifyAdminProof({ address: account, message, signature, allowlist });
+  const result = verifyAdminProof({ address: account, message, signature, allowlist, expected });
   if (!result.ok) throw new Error(`Admin signature rejected (${result.reason}).`);
   const proof = { address: account, message, signature };
   saveAdminProof(proof);

@@ -5,6 +5,7 @@ import { webcrypto } from "crypto";
 import {
   ADMIN_GATE_NOTE,
   buildAdminGateMessage,
+  getExpectedGateContext,
   clearAdminProof,
   getVerifiedAdminAddress,
   isAdminAddress,
@@ -22,7 +23,7 @@ if (!globalThis.crypto?.getRandomValues) {
 const admin = new Wallet(id("admin-gate-test-admin"));
 const outsider = new Wallet(id("admin-gate-test-outsider"));
 const allowlist = parseAdminAddresses(admin.address);
-const base = { chainId: 23295, domain: "localhost:3000", uri: "http://localhost:3000" };
+const base = getExpectedGateContext();
 const upperHex = (address) => address.toUpperCase().replace("0X", "0x");
 
 const proofFor = async (wallet, now = new Date()) => {
@@ -70,6 +71,15 @@ describe("signature proof", () => {
   test("refuses expired proofs", async () => {
     const proof = await proofFor(admin, new Date(Date.now() - 2 * 60 * 60 * 1000));
     expect(verifyAdminProof({ ...proof, allowlist }).reason).toBe("expired");
+  });
+  test("refuses proofs bound to another chain, domain or URI", async () => {
+    const sign = async (context) => {
+      const message = buildAdminGateMessage({ address: admin.address, ...context });
+      return { address: admin.address, message, signature: await admin.signMessage(message) };
+    };
+    expect(verifyAdminProof({ ...(await sign({ ...base, chainId: 1 })), allowlist }).reason).toBe("wrong-chain");
+    expect(verifyAdminProof({ ...(await sign({ ...base, domain: "evil.example" })), allowlist }).reason).toBe("wrong-domain");
+    expect(verifyAdminProof({ ...(await sign({ ...base, uri: "https://evil.example" })), allowlist }).reason).toBe("wrong-uri");
   });
   test("refuses a message that is not the admin gate statement", async () => {
     const message = buildAdminGateMessage({ address: admin.address, ...base }).replace(

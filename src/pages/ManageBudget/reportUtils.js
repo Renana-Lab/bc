@@ -1,11 +1,24 @@
 /* eslint-env es2020 */
 import { readOnlyCall, readOnlyExecute } from "../../real_ethereum/readOnly";
+import Campaign from "../../real_ethereum/build/Campaign.json";
+import { getTargetNetwork } from "../../real_ethereum/sapphireNetworks";
+import { describeRangeHealth, readLogsChunked } from "../../real_ethereum/chunkedLogs";
 
 export const REPORT_CONCURRENCY = 3;
 const BIDDER_STATUS_CONCURRENCY = 4;
 const READ_OPTIONS = { preferInjected: false, allowInjectedFallback: false };
-const SEPOLIA_ADDRESS_URL = "https://sepolia.etherscan.io/address/";
-const SEPOLIA_TRANSACTION_URL = "https://sepolia.etherscan.io/tx/";
+// Links point at the active network's explorer; networks without one (localnet) get empty cells.
+const explorerBase = () =>
+  String(getTargetNetwork().blockExplorerUrls?.[0] || "").replace(/\/+$/, "");
+export const explorerAddressUrl = (address) =>
+  explorerBase() && address ? `${explorerBase()}/address/${address}` : "";
+export const explorerTransactionUrl = (hash) =>
+  explorerBase() && hash ? `${explorerBase()}/tx/${hash}` : "";
+export const DEFAULT_CSV_LOOKBACK_BLOCKS = 5000;
+export const getCsvLookbackBlocks = (raw = process.env.REACT_APP_ADMIN_CSV_LOOKBACK_BLOCKS) => {
+  const value = Math.floor(Number(raw));
+  return Number.isFinite(value) && value > 0 ? Math.min(value, 100000) : DEFAULT_CSV_LOOKBACK_BLOCKS;
+};
 const BUDGET_AT_BID_UNAVAILABLE =
   "Unavailable in current contract";
 const BUDGET_AT_BID_EXPLANATION =
@@ -348,9 +361,7 @@ const normalizeTransactions = (rawTransactions, highestBid, highestBidder) => {
     previousHighestBidder: tx.previousHighestBidder,
     previousHighestBidWei: tx.previousHighestBidWei,
     transactionHash: tx.transactionHash,
-    transactionEtherscanUrl: tx.transactionHash
-      ? `${SEPOLIA_TRANSACTION_URL}${tx.transactionHash}`
-      : "",
+    transactionEtherscanUrl: explorerTransactionUrl(tx.transactionHash),
     timeSeconds: tx.time.toString(),
     time: toDateTime(tx.time),
     isoTime: toIsoDateTime(tx.time),
@@ -381,44 +392,85 @@ export const readAuctionOption = async (address, index) => {
   };
 };
 
-const readAuctionTransactions = async (address) => {
-  const [ledgerResult, rawEventResult] = await Promise.all([readOnlyCall(
-    ({ campaign }) => campaign(address).methods.getBidLedger(),
-    undefined,
-    READ_OPTIONS
-  )
-    .then((rows) => ({ supported: true, rows }))
-    .catch(() => ({ supported: false, rows: [] })),
-  readOnlyExecute(
-    ({ campaign }) => campaign(address).getPastEvents("BidRecorded", {
-      fromBlock: 0,
-      toBlock: "latest",
-    }),
-    undefined,
-    READ_OPTIONS
-  ).catch(() => []),
-  ]);
-  const eventResult = [...rawEventResult].sort((left, right) =>
-    Number(left.blockNumber || 0) - Number(right.blockNumber || 0) ||
-    Number(left.logIndex || 0) - Number(right.logIndex || 0)
-  );
-
-  if (ledgerResult.supported) {
-    return (ledgerResult.rows || []).map((row, index) => ({
-      ...row,
-      transactionHash: eventResult[index]?.transactionHash || "",
-    }));
+// Attach transaction hashes (from BidRecorded logs) to ledger rows without guessing: when the log window
+// is complete the hashes line up with the newest rows; otherwise leave them blank and say why.
+export const alignBidHashes = (rows, logs, { complete }) => {
+  const hashes = new Array(rows.length).fill("");
+  if (!logs.length) return { hashes, note: complete ? "No BidRecorded logs found." : "" };
+  if (logs.length > rows.length) {
+    return { hashes, note: "More BidRecorded logs than ledger rows; hashes left blank." };
   }
+  if (logs.length < rows.length && !complete) {
+    return { hashes, note: "Log window incomplete; hashes left blank." };
+  }
+  const offset = rows.length - logs.length;
+  logs.forEach((log, index) => {
+    hashes[offset + index] = log.transactionHash || "";
+  });
+  return {
+    hashes,
+    note: offset > 0 ? `Hashes only for the latest ${logs.length} of ${rows.length} bids (older bids are outside the log window).` : "",
+  };
+};
 
-  const legacyRows = await readOnlyCall(
-    ({ campaign }) => campaign(address).methods.getTransactions(),
-    undefined,
-    READ_OPTIONS
-  ).catch(() => []);
-  return legacyRows.map((row, index) => ({
-    ...row,
-    transactionHash: eventResult[index]?.transactionHash || "",
-  }));
+// Reads BidRecorded logs in <=90-block chunks over a bounded recent window (the public Sapphire RPC
+// rejects wider eth_getLogs ranges). Never throws: failures become a note on the export.
+const readBidLogs = async (address) => {
+  const topic = Campaign.abi.find((item) => item.type === "event" && item.name === "BidRecorded");
+  try {
+    const latest = Number(await readOnlyExecute(({ web3 }) => web3.eth.getBlockNumber(), undefined, READ_OPTIONS));
+    const read = await readLogsChunked({
+      fromBlock: Math.max(0, latest - getCsvLookbackBlocks() + 1),
+      toBlock: latest,
+      fetchRange: (from, to) =>
+        readOnlyExecute(
+          ({ web3 }) =>
+            web3.eth.getPastLogs({
+              address,
+              topics: [web3.eth.abi.encodeEventSignature(topic)],
+              fromBlock: from,
+              toBlock: to,
+            }),
+          undefined,
+          READ_OPTIONS
+        ),
+    });
+    const logs = [...read.logs].sort(
+      (left, right) =>
+        Number(left.blockNumber || 0) - Number(right.blockNumber || 0) ||
+        Number(left.logIndex || 0) - Number(right.logIndex || 0)
+    );
+    const health = describeRangeHealth(read);
+    return { logs, complete: !read.failedRanges.length && !read.truncated, health };
+  } catch (error) {
+    return { logs: [], complete: false, health: `transaction hash read failed (${error?.message || "RPC error"})` };
+  }
+};
+
+const readAuctionTransactions = async (address) => {
+  const [ledgerResult, bidLogs] = await Promise.all([
+    readOnlyCall(
+      ({ campaign }) => campaign(address).methods.getBidLedger(),
+      undefined,
+      READ_OPTIONS
+    )
+      .then((rows) => ({ supported: true, rows }))
+      .catch(() => ({ supported: false, rows: [] })),
+    readBidLogs(address),
+  ]);
+
+  const rows = ledgerResult.supported
+    ? ledgerResult.rows || []
+    : await readOnlyCall(
+        ({ campaign }) => campaign(address).methods.getTransactions(),
+        undefined,
+        READ_OPTIONS
+      ).catch(() => []);
+  const { hashes, note } = alignBidHashes(rows, bidLogs.logs, { complete: bidLogs.complete });
+  return {
+    rows: rows.map((row, index) => ({ ...row, transactionHash: hashes[index] })),
+    note: [bidLogs.health, note].filter(Boolean).join("; "),
+  };
 };
 
 export const readAuctionReport = async (
@@ -430,7 +482,7 @@ export const readAuctionReport = async (
 ) => {
   onProgress?.(`Reading auction ${progressIndex + 1} of ${total}`);
 
-  const [summary, rawTransactions, closedResult] = await Promise.all([
+  const [summary, transactionRead, closedResult] = await Promise.all([
     readOnlyCall(
       ({ campaign }) => campaign(address).methods.getSummary(),
       undefined,
@@ -465,6 +517,7 @@ export const readAuctionReport = async (
         ? closedResult.readError
         : "",
   };
+  const rawTransactions = transactionRead.rows;
   const ended = Number(auction.endTime) * 1000 <= Date.now();
   const transactions = normalizeTransactions(
     rawTransactions,
@@ -513,7 +566,7 @@ export const readAuctionReport = async (
   );
 
   await wait(80);
-  return { auction, ended, transactions, bidderStatuses };
+  return { auction, ended, transactions, bidderStatuses, transactionNote: transactionRead.note };
 };
 
 const getSellerPaymentState = (auction, ended) => {
@@ -1433,9 +1486,7 @@ const buildCoreReportTables = (reports, errors, generatedAt, options = {}) => {
     const transactionHash = tx.transactionHash || event?.transactionHash || "";
     return {
       transactionHash,
-      etherscanUrl: transactionHash
-        ? `${SEPOLIA_TRANSACTION_URL}${transactionHash}`
-        : "",
+      etherscanUrl: explorerTransactionUrl(transactionHash),
     };
   };
   const actorFields = (address) => {
@@ -1459,7 +1510,7 @@ const buildCoreReportTables = (reports, errors, generatedAt, options = {}) => {
     ...auctionExperimentFields(auction.address),
     "Auction #": auction.index,
     "Auction Address": auction.address,
-    "Etherscan URL": `${SEPOLIA_ADDRESS_URL}${auction.address}`,
+    "Etherscan URL": explorerAddressUrl(auction.address),
     Description: auction.dataDescription,
     "Data For Sale": "[confidential]",
     "Seller Address": auction.seller,
@@ -1482,16 +1533,16 @@ const buildCoreReportTables = (reports, errors, generatedAt, options = {}) => {
     const auctionFields = {
       "Auction #": auction.index,
       "Auction Address": auction.address,
-      "Auction Etherscan URL": `${SEPOLIA_ADDRESS_URL}${auction.address}`,
+      "Auction Etherscan URL": explorerAddressUrl(auction.address),
       Description: auction.dataDescription,
       "Data For Sale": "[confidential]",
       "Seller Address": auction.seller,
-      "Seller Etherscan URL": `${SEPOLIA_ADDRESS_URL}${auction.seller}`,
+      "Seller Etherscan URL": explorerAddressUrl(auction.seller),
       "Minimum Bid (wei)": auction.minimumContribution,
       "Auction Highest Bid (wei)": auction.highestBid,
       "Auction Highest Bidder": auction.highestBidder,
       "Highest Bidder Etherscan URL": auction.highestBidder
-        ? `${SEPOLIA_ADDRESS_URL}${auction.highestBidder}`
+        ? explorerAddressUrl(auction.highestBidder)
         : "",
       "Auction End Time": toDateTime(auction.endTime),
       "Auction End Time ISO": toIsoDateTime(auction.endTime),
@@ -1530,7 +1581,7 @@ const buildCoreReportTables = (reports, errors, generatedAt, options = {}) => {
       "Row Type": "Bid",
       "Bid #": txIndex + 1,
       "Bidder Address": tx.bidder,
-      "Bidder Etherscan URL": `${SEPOLIA_ADDRESS_URL}${tx.bidder}`,
+      "Bidder Etherscan URL": explorerAddressUrl(tx.bidder),
       "Transaction Hash": transactionEvidence(auction.address, tx).transactionHash,
       "Transaction Etherscan URL": transactionEvidence(auction.address, tx).etherscanUrl,
       "Transaction Amount (wei)": tx.transactionAmountWei,
@@ -1555,7 +1606,7 @@ const buildCoreReportTables = (reports, errors, generatedAt, options = {}) => {
       "Event Type": "Auction End Time",
       "Auction #": auction.index,
       "Auction Address": auction.address,
-      "Auction Etherscan URL": `${SEPOLIA_ADDRESS_URL}${auction.address}`,
+      "Auction Etherscan URL": explorerAddressUrl(auction.address),
       Description: auction.dataDescription,
       Actor: "",
       "Actor Etherscan URL": "",
@@ -1574,10 +1625,10 @@ const buildCoreReportTables = (reports, errors, generatedAt, options = {}) => {
         "Event Type": "Bid",
         "Auction #": auction.index,
         "Auction Address": auction.address,
-        "Auction Etherscan URL": `${SEPOLIA_ADDRESS_URL}${auction.address}`,
+        "Auction Etherscan URL": explorerAddressUrl(auction.address),
         Description: auction.dataDescription,
         Actor: tx.bidder,
-        "Actor Etherscan URL": `${SEPOLIA_ADDRESS_URL}${tx.bidder}`,
+        "Actor Etherscan URL": explorerAddressUrl(tx.bidder),
         "Transaction Hash": transactionEvidence(auction.address, tx).transactionHash,
         "Transaction Etherscan URL": transactionEvidence(auction.address, tx).etherscanUrl,
         "Amount (wei)": tx.transactionAmountWei,
@@ -1596,7 +1647,7 @@ const buildCoreReportTables = (reports, errors, generatedAt, options = {}) => {
         "Event Type": "No Bid Activity",
         "Auction #": auction.index,
         "Auction Address": auction.address,
-        "Auction Etherscan URL": `${SEPOLIA_ADDRESS_URL}${auction.address}`,
+        "Auction Etherscan URL": explorerAddressUrl(auction.address),
         Description: auction.dataDescription,
         Actor: "No bidder",
         "Actor Etherscan URL": "",
@@ -2000,5 +2051,5 @@ export const exportAuctionTransactionsCsv = async (address) => {
     buildAuctionTransactionRows(report),
     `transactions-${String(address).slice(0, 10)}`
   );
-  return report.transactions.length;
+  return { count: report.transactions.length, note: report.transactionNote || "" };
 };
