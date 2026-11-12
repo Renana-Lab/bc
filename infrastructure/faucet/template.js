@@ -5,7 +5,8 @@ const TEST_PREFIX = "test-";
 
 const buildTemplate = ({
   origins, alertEmail = "", secretArn = "", faucetAddress = "", rpcUrl, chainId, amountWei, lowBalance,
-  rateLimit = "20", reservedConcurrency = 1, faucetCodeDir, monitorCodeDir,
+  rateLimit = "20", reservedConcurrency = 1,
+  pidMode = "allowlist", maxPayouts = "", requiredStudyId = "", adminSecretArn = "", faucetCodeDir, monitorCodeDir,
 }) => {
 const policy = (statement) => ({ PolicyName: "inline", PolicyDocument: { Version: "2012-10-17", Statement: statement } });
   const assume = { Version: "2012-10-17", Statement: [{ Effect: "Allow", Principal: { Service: "lambda.amazonaws.com" }, Action: "sts:AssumeRole" }] };
@@ -13,7 +14,11 @@ const policy = (statement) => ({ PolicyName: "inline", PolicyDocument: { Version
   return {
   AWSTemplateFormatVersion: "2010-09-09",
   Description: "Protected one-time faucet for anonymous participants (Sapphire testnet)",
-  Parameters: { AllowedOrigins: { Type: "CommaDelimitedList", Default: origins } },
+  Parameters: {
+    AllowedOrigins: { Type: "CommaDelimitedList", Default: origins },
+    // Static shared string for the experiment link check. NoEcho hides it in the console; empty = check disabled.
+    ExperimentCode: { Type: "String", Default: "", NoEcho: true },
+  },
   Conditions: { HasAlertEmail: { "Fn::Not": [{ "Fn::Equals": [alertEmail, ""] }] } },
   Resources: {
     FaucetTable: {
@@ -47,6 +52,8 @@ const policy = (statement) => ({ PolicyName: "inline", PolicyDocument: { Version
           { Effect: "Allow", Action: ["dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:PutItem"], Resource: { "Fn::GetAtt": ["FaucetTable", "Arn"] } },
           { Effect: "Allow", Action: "dynamodb:UpdateItem", Resource: { "Fn::GetAtt": ["RateTable", "Arn"] } },
           { Effect: "Allow", Action: "secretsmanager:GetSecretValue", Resource: secretArn || "arn:aws:secretsmanager:*:*:secret:unset" },
+          // The admin password hash (scrypt) lives in its own secret.
+          { Effect: "Allow", Action: "secretsmanager:GetSecretValue", Resource: adminSecretArn || "arn:aws:secretsmanager:*:*:secret:unset-admin" },
         ])],
       },
     },
@@ -63,6 +70,9 @@ const policy = (statement) => ({ PolicyName: "inline", PolicyDocument: { Version
             FAUCET_TABLE: { Ref: "FaucetTable" }, RATE_TABLE: { Ref: "RateTable" }, RATE_TTL_GRACE_SECONDS: "60", FAUCET_SECRET_ID: secretArn || "unset",
             RPC_URL: rpcUrl, CHAIN_ID: String(chainId), FAUCET_AMOUNT_WEI: amountWei,
             RATE_LIMIT_PER_WINDOW: rateLimit, GLOBAL_RATE_LIMIT_PER_WINDOW: "600", RATE_WINDOW_SECONDS: "600",
+            FAUCET_PID_MODE: pidMode, FAUCET_MAX_PAYOUTS: String(maxPayouts), FAUCET_REQUIRED_STUDY_ID: requiredStudyId,
+            FAUCET_EXPERIMENT_CODE: { Ref: "ExperimentCode" }, FAUCET_ADMIN_SECRET_ID: adminSecretArn || "unset",
+            ADMIN_RATE_LIMIT_PER_WINDOW: "5", ADMIN_GLOBAL_RATE_LIMIT_PER_WINDOW: "30",
           },
         },
         Code: faucetCodeDir,
@@ -76,7 +86,7 @@ const policy = (statement) => ({ PolicyName: "inline", PolicyDocument: { Version
       Type: "AWS::Lambda::Url",
       Properties: {
         TargetFunctionArn: { "Fn::GetAtt": ["FaucetFunction", "Arn"] }, AuthType: "NONE", InvokeMode: "BUFFERED",
-        Cors: { AllowOrigins: { Ref: "AllowedOrigins" }, AllowMethods: ["POST"], AllowHeaders: ["content-type"], MaxAge: 86400 },
+        Cors: { AllowOrigins: { Ref: "AllowedOrigins" }, AllowMethods: ["GET", "POST"], AllowHeaders: ["content-type"], MaxAge: 86400 },
       },
     },
     FaucetUrlPermission: {
@@ -129,7 +139,7 @@ const policy = (statement) => ({ PolicyName: "inline", PolicyDocument: { Version
     },
   },
   Outputs: {
-    FaucetApiUrl: { Description: "Set as REACT_APP_FAUCET_URL in AWS Amplify (the app POSTs to <url>/claim)", Value: { "Fn::GetAtt": ["FaucetUrl", "FunctionUrl"] } },
+    FaucetApiUrl: { Description: "Set as REACT_APP_FAUCET_URL in AWS Amplify (the app POSTs to <url>/claim, reads <url>/status and the admin page POSTs <url>/admin/state)", Value: { "Fn::GetAtt": ["FaucetUrl", "FunctionUrl"] } },
     FaucetTableName: { Description: "Pass to scripts/faucet/generatePids.js --table", Value: { Ref: "FaucetTable" } },
   },
 };

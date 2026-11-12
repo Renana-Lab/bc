@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { getWalletMode } from "./walletMode.mjs";
-import { getParticipantId } from "./participantId.mjs";
+import { getParticipantContext, stripParticipantParams } from "./participantId.mjs";
+import { claimFunds, fetchFaucetStatus, FAUCET_MESSAGES } from "./faucetClient.mjs";
 import { setModeProvider } from "./modeProvider";
 import { createIndexedDbStorage, createLocalProvider, createLocalWallet } from "./localWallet.mjs";
 import { getTargetNetwork } from "../sapphireNetworks";
@@ -21,47 +22,31 @@ const LocalWalletPanel = () => {
   const [state, setState] = useState({ exists: null, address: "" });
   const [passphrase, setPassphrase] = useState("");
   const [message, setMessage] = useState("");
-  const pid = useMemo(() => {
+  // A Prolific id (?PROLIFIC_PID= / ?pid=) or lab code, plus the optional study and experiment values.
+  const { pid, studyId, experimentCode } = useMemo(() => {
     let storage;
     try { storage = window.sessionStorage; } catch { storage = undefined; }
-    const code = getParticipantId({ search: window.location.search, storage });
-    // The code is a faucet capability: keep it out of the address bar, history and Referer headers.
-    try {
-      const url = new URL(window.location.href);
-      if (url.searchParams.has("pid")) {
-        url.searchParams.delete("pid");
-        window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
-      }
-    } catch {
-      // not fatal
-    }
-    return code;
+    const context = getParticipantContext({ search: window.location.search, storage });
+    stripParticipantParams(window); // keep the id (a faucet capability) out of the address bar, history and Referer headers
+    return context;
   }, []);
   const faucetUrl = process.env.REACT_APP_FAUCET_URL;
+  const [faucetOpen, setFaucetOpen] = useState(null); // null = unknown
+  useEffect(() => {
+    if (!faucetUrl || !state.address) return undefined;
+    let cancelled = false;
+    fetchFaucetStatus({ faucetUrl }).then((status) => { if (!cancelled) setFaucetOpen(status.open); });
+    return () => { cancelled = true; };
+  }, [faucetUrl, state.address]);
   const requestFunds = () => run(async () => {
-    const friendly = {
-      not_eligible: "This participant code cannot receive funds (unknown or already used).",
-      faucet_empty: "The faucet is empty. Tell the experimenter.",
-      transfer_failed: "The transfer failed. Use a normal wallet address.",
-      rate_limited: "Too many requests. Wait a few minutes.",
-    };
-    // 429 (Lambda throttling), 202 (payment still confirming), 409 (in progress) and 5xx are retried.
-    for (let attempt = 0; attempt < 6; attempt += 1) {
-      const response = await fetch(`${faucetUrl}/claim`, {
-        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pid, address: wallet.address }),
-      });
-      const body = await response.json().catch(() => ({}));
-      if (response.status === 200 && (body.status === "paid" || body.status === "already_paid")) {
-        setMessage("Test funds sent. They are in your wallet.");
-        return;
-      }
-      if ([400, 403, 422, 503].includes(response.status) || body.error === "rate_limited") {
-        throw new Error(friendly[body.error] || "Faucet request refused.");
-      }
-      setMessage("Faucet is busy, retrying...");
-      await new Promise((resolve) => setTimeout(resolve, 2000 * (attempt + 1)));
+    try {
+      await claimFunds({ faucetUrl, pid, address: wallet.address, studyId, experimentCode, onBusy: () => setMessage("Faucet is busy, retrying...") });
+    } catch (error) {
+      if (error.code === "faucet_closed") setFaucetOpen(false);
+      throw error; // already a friendly message
     }
-    throw new Error("The faucet is busy. Try again in a minute.");
+    setFaucetOpen(true);
+    setMessage("Test funds sent. They are in your wallet.");
   });
 
   const refresh = async () => setState({ exists: await wallet.exists(), address: wallet.address });
@@ -100,6 +85,8 @@ const LocalWalletPanel = () => {
           <button onClick={() => { wallet.lock(); clearConfidentialSessions(); }}>Lock</button>{" "}
           <button onClick={downloadBackup}>Download encrypted backup</button>{" "}
           {pid && faucetUrl ? <button onClick={requestFunds}>Request test funds</button> : null}{" "}
+          {faucetUrl && !pid ? <div>To receive test funds, open the link from your study (it contains your participant id).</div> : null}
+          {pid && faucetUrl && faucetOpen === false ? <div data-testid="faucet-closed-notice">{FAUCET_MESSAGES.faucet_closed}</div> : null}
           <button onClick={() => window.confirm("Forget this wallet? Without a backup the key is lost forever.") && run(() => wallet.forget())}>Forget</button>
         </>
       ) : (

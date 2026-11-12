@@ -22,6 +22,7 @@ const MetamaskTutorialPage = lazy(() =>
 const MetamaskGuidePage = lazy(() => import("./pages/MetamaskGuide/MetamaskGuidePage.js"));
 const ManageBudgetPage = lazy(() => import("./pages/ManageBudget/ManageBudgetPage.js"));
 const ShowAuctionPage = lazy(() => import("./pages/ShowAuction/ShowAuctionPage.js"));
+const FaucetAdminPage = lazy(() => import("./pages/FaucetAdmin/FaucetAdminPage.js")); // hidden route, not linked anywhere
 const AppLoadingFallback = ({
   copy = "Preparing the workspace",
   status = "Loading app modules",
@@ -359,6 +360,7 @@ function App() {
                     </RequireWallet>
                   }
                 />
+                <Route path="/admin/faucet" element={<FaucetAdminPage />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>
             </div>

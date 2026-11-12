@@ -4,10 +4,15 @@
 //   RATE table (throttling)  rl#<scope>#<window> counters only. Never contains or references a pid.
 // They are separate so that caller records and participant codes can never be joined.
 //   pid#<sha256(pid)>   { status: unclaimed | pending | paid, address?, rawTx?, txHash?, leaseUntil?, paidAt?, amountWei? }
+//   config#faucet       { open, updatedAt }          (open/closed switch)
+//   counter#payouts     { count }                    (payout slots in use, prolific cap)
 //   rl#<scope>#<window> { count, expiresAt }                     (RATE table; expires by TTL, ~11 minutes)
 // Every state change is a conditional write, so parallel requests cannot both win.
 // The same contract is implemented in memory by memoryStore.js for tests.
 const stateKey = (pidHash) => ({ pk: { S: `pid#${pidHash}` } });
+// Shared items in the codes table (no pid, no caller inside): the open/closed switch and the payout-slot counter.
+const CONFIG_KEY = { pk: { S: "config#faucet" } };   // { open: BOOL, updatedAt: N }
+const BUDGET_KEY = { pk: { S: "counter#payouts" } }; // { count: N }
 
 const fromItem = (item) => {
   if (!item) return null;
@@ -15,6 +20,7 @@ const fromItem = (item) => {
   return {
     status: read("status"), address: read("address"), rawTx: read("rawTx"), txHash: read("txHash"),
     leaseUntil: read("leaseUntil"), paidAt: read("paidAt"), amountWei: read("amountWei"),
+    slot: item.slot?.BOOL === true, // holds one slot of the payout cap (prolific mode)
   };
 };
 
@@ -93,12 +99,65 @@ const createDynamoStore = ({ table, rateTable, client } = {}) => {
       }));
     },
     async release(pidHash) {
-      await send(new sdk.UpdateItemCommand({
+      const result = await send(new sdk.UpdateItemCommand({
         TableName: table, Key: stateKey(pidHash),
         ConditionExpression: "#s = :pending",
-        UpdateExpression: "SET #s = :unclaimed REMOVE rawTx, txHash, leaseUntil, address",
+        UpdateExpression: "SET #s = :unclaimed REMOVE rawTx, txHash, leaseUntil, address, slot",
         ExpressionAttributeNames: { "#s": "status" },
         ExpressionAttributeValues: { ":pending": { S: "pending" }, ":unclaimed": { S: "unclaimed" } },
+        ReturnValues: "ALL_OLD",
+      }));
+      // A released reservation must not consume a payout slot: give it back (only if it held one).
+      if (result?.Attributes?.slot?.BOOL === true) {
+        await send(new sdk.UpdateItemCommand({
+          TableName: table, Key: BUDGET_KEY,
+          UpdateExpression: "ADD #c :minus", ExpressionAttributeNames: { "#c": "count" }, ExpressionAttributeValues: { ":minus": { N: "-1" } },
+        }));
+      }
+    },
+    // Atomically takes one payout slot for a pending pid. Returns false when the cap is reached.
+    // Step 1 is a conditional atomic increment (never above max); step 2 marks the pid as holding the slot.
+    // A crash between the steps can only leak a slot (the cap then trips early), never exceed it.
+    async takeSlot(pidHash, max) {
+      try {
+        await send(new sdk.UpdateItemCommand({
+          TableName: table, Key: BUDGET_KEY,
+          ConditionExpression: "attribute_not_exists(#c) OR #c < :max",
+          UpdateExpression: "ADD #c :one", ExpressionAttributeNames: { "#c": "count" },
+          ExpressionAttributeValues: { ":one": { N: "1" }, ":max": { N: String(max) } },
+        }));
+      } catch (error) {
+        if (isConditionFailure(error)) return false;
+        throw error;
+      }
+      try {
+        await send(new sdk.UpdateItemCommand({
+          TableName: table, Key: stateKey(pidHash),
+          ConditionExpression: "#s = :pending AND attribute_not_exists(slot)",
+          UpdateExpression: "SET slot = :yes",
+          ExpressionAttributeNames: { "#s": "status" },
+          ExpressionAttributeValues: { ":pending": { S: "pending" }, ":yes": { BOOL: true } },
+        }));
+      } catch (error) {
+        await send(new sdk.UpdateItemCommand({
+          TableName: table, Key: BUDGET_KEY,
+          UpdateExpression: "ADD #c :minus", ExpressionAttributeNames: { "#c": "count" }, ExpressionAttributeValues: { ":minus": { N: "-1" } },
+        }));
+        throw error;
+      }
+      return true;
+    },
+    // Open/closed switch. Missing item = never opened = closed.
+    async getState() {
+      const item = (await send(new sdk.GetItemCommand({ TableName: table, Key: CONFIG_KEY, ConsistentRead: true }))).Item;
+      if (!item) return null;
+      return { open: item.open?.BOOL === true, updatedAt: item.updatedAt?.N !== undefined ? Number(item.updatedAt.N) : null };
+    },
+    async setState(open, updatedAt) {
+      await send(new sdk.UpdateItemCommand({
+        TableName: table, Key: CONFIG_KEY,
+        UpdateExpression: "SET #o = :open, updatedAt = :at", ExpressionAttributeNames: { "#o": "open" },
+        ExpressionAttributeValues: { ":open": { BOOL: Boolean(open) }, ":at": { N: String(updatedAt) } },
       }));
     },
     // Atomic counter per (scope, window); the item expires by TTL.

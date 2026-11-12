@@ -46,6 +46,7 @@ test("5 parallel participants: pid, wallet, faucet, bid, winner reads", { skip, 
   const faucetWallet = Wallet.createRandom();
   await (await dev(4).sendTransaction({ to: faucetWallet.address, value: 20n * 10n ** 18n })).wait();
   const store = createMemoryStore();
+  await store.setState(true, 1); // the faucet is closed by default
   const logs = [];
   let secretReads = 0;
   const handler = createFaucetHandler({

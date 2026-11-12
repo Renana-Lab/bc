@@ -11,11 +11,17 @@
 //    to an IP without the salt, cannot be linked across windows, live in a SEPARATE table with a short TTL,
 //    and never contain or reference a participant code (the code table never contains an IP).
 //  * The faucet key is read from AWS Secrets Manager only, held in memory, never logged.
+//  * Two pid modes. allowlist (default): only pre-inserted hashes can claim. prolific: any 24-hex id can claim once;
+//    the first claim inserts its hash, and FAUCET_MAX_PAYOUTS caps the number of payments with an atomic counter.
+//  * An admin-controlled open/closed switch (DynamoDB item, closed by default) gates /claim. The admin password is
+//    only ever compared against a scrypt hash from Secrets Manager and is never logged.
 //  * Logs contain only event names, an 8-char pid digest prefix and scrubbed error text.
 const crypto = require("crypto");
+const { verifyPassword, safeEqual } = require("./adminAuth");
 const { Wallet, Transaction, getAddress, isAddress } = require("ethers");
 
 const PID_PATTERN = /^(?=.*[A-Za-z])[A-Za-z0-9]{8,24}$/; // same rule as src/real_ethereum/wallets/participantId.mjs
+const PROLIFIC_PID_PATTERN = /^[a-fA-F0-9]{24}$/; // Prolific participant id
 const SAPPHIRE_CHAIN_IDS = new Set([23293, 23295]); // localnet, testnet. Mainnet (23294) is deliberately refused.
 const MAX_BODY_BYTES = 2000;
 // Sapphire needs a little more than the 21000 of a plain transfer (measured: 22132 used, 21000 reverts).
@@ -41,9 +47,23 @@ const loadConfig = (env = process.env) => {
   if (!SAPPHIRE_CHAIN_IDS.has(chainId)) throw new Error("CHAIN_ID must be a Sapphire testnet or localnet id");
   const amountWei = BigInt(env.FAUCET_AMOUNT_WEI || "0");
   if (amountWei <= 0n) throw new Error("FAUCET_AMOUNT_WEI must be set to a positive amount");
+  const pidMode = String(env.FAUCET_PID_MODE || "allowlist").toLowerCase();
+  if (pidMode !== "allowlist" && pidMode !== "prolific") throw new Error("FAUCET_PID_MODE must be allowlist or prolific");
+  let maxPayouts = null;
+  if (pidMode === "prolific") {
+    // Fail closed: without an explicit cap the faucet must not start in prolific mode.
+    if (!/^[1-9][0-9]{0,9}$/.test(String(env.FAUCET_MAX_PAYOUTS ?? ""))) throw new Error("FAUCET_MAX_PAYOUTS must be a positive integer in prolific mode");
+    maxPayouts = Number(env.FAUCET_MAX_PAYOUTS);
+  }
   return {
     chainId,
     amountWei,
+    pidMode,
+    maxPayouts,
+    requiredStudyId: env.FAUCET_REQUIRED_STUDY_ID || "",
+    experimentCode: env.FAUCET_EXPERIMENT_CODE || "",
+    adminRateLimit: Number(env.ADMIN_RATE_LIMIT_PER_WINDOW || 5),
+    adminGlobalRateLimit: Number(env.ADMIN_GLOBAL_RATE_LIMIT_PER_WINDOW || 30),
     rateLimit: Number(env.RATE_LIMIT_PER_WINDOW || 20),
     globalRateLimit: Number(env.GLOBAL_RATE_LIMIT_PER_WINDOW || 600),
     rateWindowSeconds: Number(env.RATE_WINDOW_SECONDS || 600),
@@ -55,8 +75,12 @@ const loadConfig = (env = process.env) => {
   };
 };
 
-const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, chain, config, now = () => Date.now(), log = console.log }) => {
+const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, getAdminSecret, chain, config, now = () => Date.now(), log = console.log }) => {
   if (!SAPPHIRE_CHAIN_IDS.has(config.chainId)) throw new Error("Unsupported chain id");
+  const prolific = config.pidMode === "prolific";
+  if (prolific && !(Number.isInteger(config.maxPayouts) && config.maxPayouts > 0)) throw new Error("FAUCET_MAX_PAYOUTS must be a positive integer in prolific mode");
+  const adminRateLimit = config.adminRateLimit ?? 5;
+  const adminGlobalRateLimit = config.adminGlobalRateLimit ?? 30;
   // One signer per process: signing/nonce selection must not interleave (the stack also sets
   // reserved concurrency 1 so there is a single container).
   let queue = Promise.resolve();
@@ -147,6 +171,10 @@ const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, chain, config,
         // fell through: released, re-reserve below
         const again = await store.reserve(pidHash, address, Math.floor(now() / 1000), Math.floor(now() / 1000) + config.leaseSeconds);
         if (again.outcome !== "reserved") throw Object.assign(new Error("lost reservation"), { code: "PENDING" });
+        if (prolific && !(await store.takeSlot(pidHash, config.maxPayouts))) {
+          await store.release(pidHash);
+          throw Object.assign(new Error("payout cap reached"), { code: "BUDGET" });
+        }
       }
 
       const wallet = await getWallet();
@@ -176,42 +204,117 @@ const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, chain, config,
       return { txHash };
     });
 
-  return async (request) => {
+  // Open/closed switch. Missing or unreadable state is closed.
+  const readState = async () => {
+    try {
+      const state = await store.getState();
+      if (state?.open === true) return { open: true, updatedAt: state.updatedAt ?? null };
+      return { open: false, updatedAt: state?.updatedAt ?? null };
+    } catch {
+      return { open: false, updatedAt: null };
+    }
+  };
+  const publicState = (state) => ({ open: state.open, updatedAt: state.updatedAt ? new Date(state.updatedAt * 1000).toISOString() : null });
+
+  // Counts this request against a per-caller and a global counter. Returns true when over the limit.
+  const overLimit = async (request, callerScope, globalScope, callerMax, globalMax) => {
+    const nowSeconds = Math.floor(now() / 1000);
+    const windowId = Math.floor(nowSeconds / config.rateWindowSeconds);
+    // The record is only needed until the end of its window (plus a short grace): short TTL.
+    const expiresAt = (windowId + 1) * config.rateWindowSeconds + (config.rateTtlGraceSeconds ?? 60);
+    const caller = await callerKey(request.requestContext?.http?.sourceIp, windowId);
+    const [callerCount, globalCount] = await Promise.all([
+      store.hit(`${callerScope}${caller}`, windowId, expiresAt),
+      store.hit(globalScope, windowId, expiresAt),
+    ]);
+    return callerCount > callerMax || globalCount > globalMax;
+  };
+  const rateLimited = () => json(429, { error: "rate_limited" }, { "retry-after": String(config.rateWindowSeconds) });
+
+  // Admin password hash from Secrets Manager, cached briefly so a changed password takes effect soon.
+  let adminCache = { record: null, at: 0 };
+  const adminRecord = async () => {
+    if (adminCache.record && now() - adminCache.at < 300_000) return adminCache.record;
+    const record = (await getAdminSecret?.()) || null;
+    adminCache = { record, at: now() };
+    return record;
+  };
+
+  const readBody = (request) => {
+    let raw = request.body || "";
+    if (request.isBase64Encoded) raw = Buffer.from(raw, "base64").toString("utf8");
+    return raw;
+  };
+
+  // GET /status: public, exposes only { open, updatedAt }.
+  const status = async (request) => {
+    if (await overLimit(request, "st:", "st-global", config.rateLimit, config.globalRateLimit)) return rateLimited();
+    return json(200, publicState(await readState()));
+  };
+
+  // POST /admin/state { open, password }. Never logs the password or the body; 401 without detail on failure.
+  const adminState = async (request) => {
+    try {
+      const raw = readBody(request);
+      if (Buffer.byteLength(raw) > MAX_BODY_BYTES) return json(413, { error: "too_large" });
+      if (await overLimit(request, "adm:", "adm-global", adminRateLimit, adminGlobalRateLimit)) { event("admin_rate_limited"); return rateLimited(); }
+      let body;
+      try { body = JSON.parse(raw || "{}"); } catch { body = {}; }
+      let record = null;
+      try { record = await adminRecord(); } catch { record = null; }
+      const ok = await verifyPassword(body?.password, record);
+      if (!ok) { event("admin_denied"); return json(401, { error: "unauthorized" }); }
+      if (typeof body.open !== "boolean") return json(400, { error: "bad_request" });
+      const updatedAt = Math.floor(now() / 1000);
+      await store.setState(body.open, updatedAt);
+      event("admin_state_changed", { open: body.open });
+      return json(200, publicState({ open: body.open, updatedAt }));
+    } catch {
+      event("error", { code: "admin" });
+      return json(500, { error: "internal" });
+    }
+  };
+
+  const claimFunds = async (request) => {
     const started = now();
     let pidHash = "";
     try {
-      if ((request.requestContext?.http?.method || "POST") !== "POST") return json(405, { error: "method_not_allowed" });
-      let raw = request.body || "";
-      if (request.isBase64Encoded) raw = Buffer.from(raw, "base64").toString("utf8");
+      const raw = readBody(request);
       if (Buffer.byteLength(raw) > MAX_BODY_BYTES) return json(413, { error: "too_large" });
 
       // 1. Rate limit first (also throttles pid guessing).
       const nowSeconds = Math.floor(now() / 1000);
-      const windowId = Math.floor(nowSeconds / config.rateWindowSeconds);
-      // The record is only needed until the end of its window (plus a short grace): short TTL.
-      const expiresAt = (windowId + 1) * config.rateWindowSeconds + (config.rateTtlGraceSeconds ?? 60);
-      const caller = await callerKey(request.requestContext?.http?.sourceIp, windowId);
-      const [callerCount, globalCount] = await Promise.all([
-        store.hit(`ip:${caller}`, windowId, expiresAt),
-        store.hit("global", windowId, expiresAt),
-      ]);
-      if (callerCount > config.rateLimit || globalCount > config.globalRateLimit) {
+      if (await overLimit(request, "ip:", "global", config.rateLimit, config.globalRateLimit)) {
         event("rate_limited");
-        return json(429, { error: "rate_limited" }, { "retry-after": String(config.rateWindowSeconds) });
+        return rateLimited();
       }
 
-      // 2. Validate input.
+      // 2. The admin switch: closed (or unreadable) means no claim is processed at all.
+      if (!(await readState()).open) { event("claim_rejected", { reason: "closed" }); return json(403, { error: "faucet_closed" }); }
+
+      // 3. Validate input.
       let body;
       try { body = JSON.parse(raw || "{}"); } catch { return json(400, { error: "bad_request" }); }
-      const { pid, address } = body || {};
-      if (typeof pid !== "string" || !PID_PATTERN.test(pid) || typeof address !== "string" || !isAddress(address)) {
-        return json(400, { error: "bad_request" });
-      }
+      const { pid, address, studyId, experimentCode } = body || {};
+      const pidOk = typeof pid === "string" && (prolific ? PROLIFIC_PID_PATTERN.test(pid) : PID_PATTERN.test(pid));
+      if (!pidOk || typeof address !== "string" || !isAddress(address)) return json(400, { error: "bad_request" });
+      if ((studyId !== undefined && typeof studyId !== "string") || (experimentCode !== undefined && typeof experimentCode !== "string")) return json(400, { error: "bad_request" });
       const to = getAddress(address);
-      pidHash = sha256(pid);
+      // Prolific ids are hex: fold the case so "ABC.." and "abc.." cannot be paid as two participants.
+      pidHash = sha256(prolific ? pid.toLowerCase() : pid);
 
-      // 3. Reserve (exactly-once gate).
-      const reservation = await store.reserve(pidHash, to, nowSeconds, nowSeconds + config.leaseSeconds);
+      // 4. Optional study / experiment checks (prolific mode), fail closed, before anything is reserved.
+      if (prolific) {
+        if (config.requiredStudyId && !safeEqual(studyId ?? "", config.requiredStudyId)) { event("claim_rejected", { pid: pidHash.slice(0, 8), reason: "study" }); return json(403, { error: "not_eligible" }); }
+        if (config.experimentCode && !safeEqual(experimentCode ?? "", config.experimentCode)) { event("claim_rejected", { pid: pidHash.slice(0, 8), reason: "experiment" }); return json(403, { error: "not_eligible" }); }
+      }
+
+      // 5. Reserve (exactly-once gate). In prolific mode the first claim of a new id inserts it.
+      let reservation = await store.reserve(pidHash, to, nowSeconds, nowSeconds + config.leaseSeconds);
+      if (reservation.outcome === "unknown" && prolific) {
+        await store.putPid(pidHash, nowSeconds); // a parallel first claim may win this insert: that is fine
+        reservation = await store.reserve(pidHash, to, nowSeconds, nowSeconds + config.leaseSeconds);
+      }
       if (reservation.outcome === "unknown") { event("claim_rejected", { pid: pidHash.slice(0, 8), reason: "unknown" }); return json(403, { error: "not_eligible" }); }
       if (reservation.outcome === "paid") {
         if (reservation.record.address === to.toLowerCase()) return json(200, { status: "already_paid", txHash: reservation.record.txHash });
@@ -224,16 +327,43 @@ const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, chain, config,
         return json(403, { error: "not_eligible" });
       }
 
-      // 4. Pay.
+      // 6. Payout cap (prolific): take one slot atomically before paying; a released reservation gives it back.
+      if (prolific && !reservation.previous?.slot) {
+        let granted = false;
+        try { granted = await store.takeSlot(pidHash, config.maxPayouts); } catch (error) { await store.release(pidHash).catch(() => {}); throw error; }
+        if (!granted) {
+          await store.release(pidHash);
+          event("claim_rejected", { pid: pidHash.slice(0, 8), reason: "budget" });
+          return json(403, { error: "budget_exhausted" });
+        }
+      }
+
+      // 7. Pay.
       const { txHash } = await pay(pidHash, to, reservation.previous);
       event("claim_paid", { pid: pidHash.slice(0, 8), ms: now() - started });
       return json(200, { status: "paid", txHash, amountWei: config.amountWei.toString() });
     } catch (error) {
-      const code = error?.code === "FAUCET_EMPTY" ? "faucet_empty" : error?.code === "PENDING" ? "pending" : error?.code === "REVERTED" ? "reverted" : "internal";
+      const code = error?.code === "FAUCET_EMPTY" ? "faucet_empty" : error?.code === "PENDING" ? "pending" : error?.code === "REVERTED" ? "reverted" : error?.code === "BUDGET" ? "budget" : "internal";
       event("error", { pid: pidHash ? pidHash.slice(0, 8) : undefined, code: scrub(error?.code), message: scrub(error?.message) });
       if (code === "faucet_empty") return json(503, { error: "faucet_empty" });
+      if (code === "budget") return json(403, { error: "budget_exhausted" });
       if (code === "reverted") return json(422, { error: "transfer_failed" });
       if (code === "pending") return json(202, { status: "pending" }, { "retry-after": "5" });
+      return json(500, { error: "internal" });
+    }
+  };
+
+  return async (request) => {
+    try {
+      const method = request.requestContext?.http?.method || "POST";
+      const path = String(request.rawPath || request.requestContext?.http?.path || "/claim").replace(/\/+$/, "") || "/claim";
+      if (path === "/status") return method === "GET" ? await status(request) : json(405, { error: "method_not_allowed" });
+      if (path === "/admin/state") return method === "POST" ? await adminState(request) : json(405, { error: "method_not_allowed" });
+      if (path !== "/claim") return json(404, { error: "not_found" });
+      if (method !== "POST") return json(405, { error: "method_not_allowed" });
+      return await claimFunds(request);
+    } catch {
+      event("error", { code: "route" });
       return json(500, { error: "internal" });
     }
   };
@@ -272,11 +402,21 @@ const handler = async (request) => {
     };
     const getPrivateKey = async () => (await readSecret()).privateKey;
     const getRateSalt = async () => (await readSecret()).rateLimitSalt;
+    // Admin password hash (scrypt + salt) lives in its own secret; the password itself is never stored.
+    let adminPromise = null;
+    const getAdminSecret = () => {
+      if (!process.env.FAUCET_ADMIN_SECRET_ID) return null;
+      if (!adminPromise) {
+        adminPromise = secrets.send(new GetSecretValueCommand({ SecretId: process.env.FAUCET_ADMIN_SECRET_ID })).then((result) => JSON.parse(result.SecretString || "{}"));
+        adminPromise.catch(() => { adminPromise = null; });
+      }
+      return adminPromise;
+    };
     cachedHandler = createFaucetHandler({
-      store: createDynamoStore({ table: process.env.FAUCET_TABLE, rateTable: process.env.RATE_TABLE }), getPrivateKey, getRateSalt, chain, config,
+      store: createDynamoStore({ table: process.env.FAUCET_TABLE, rateTable: process.env.RATE_TABLE }), getPrivateKey, getRateSalt, getAdminSecret, chain, config,
     });
   }
   return cachedHandler(request);
 };
 
-module.exports = { createFaucetHandler, createEthersChain, handler, loadConfig, scrub, sha256, PID_PATTERN };
+module.exports = { createFaucetHandler, createEthersChain, handler, loadConfig, scrub, sha256, PID_PATTERN, PROLIFIC_PID_PATTERN };

@@ -67,7 +67,7 @@
     "sapphire:test": "node --test src/real_ethereum/siwe.test.mjs scripts/sapphire/sapphireConfidential.test.mjs",
     "sapphire:test:wallets": "node --test scripts/sapphire/walletModes.test.mjs",
     "sapphire:test:gasless": "node --test scripts/sapphire/gasless/gaslessFeasibility.test.mjs",
-    "faucet:test": "node --test scripts/faucet/faucetHandler.test.mjs scripts/faucet/dynamoStore.test.mjs scripts/faucet/template.test.mjs",
+    "faucet:test": "node --test scripts/faucet/faucetHandler.test.mjs scripts/faucet/dynamoStore.test.mjs scripts/faucet/template.test.mjs scripts/faucet/adminAuth.test.mjs",
     "faucet:test:flow": "node --test scripts/faucet/faucetFlow.test.mjs"
   },
   "eslintConfig": {

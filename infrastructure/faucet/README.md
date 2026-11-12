@@ -22,7 +22,7 @@ monitor Lambda (every 5 min) -> CloudWatch metric BcFaucet/FaucetBalance -> alar
 |---|---|
 | Only allowlisted pids | The table holds `pid#<sha256(pid)>` items created by `scripts/faucet/generatePids.js`. Unknown codes get a generic 403. Raw codes are never stored or logged. |
 | One payment per pid, also in parallel | A conditional `UpdateItem` (`status = unclaimed`, or an expired lease) lets exactly one request win. The signed transaction is stored before it is broadcast, so a crash/retry re-broadcasts the same transaction instead of signing a second one. The Lambda also has reserved concurrency 1 (single signer, sequential nonces). Same pid + same address retried after success returns the original `txHash`; another address gets 403. |
-| Fixed, configurable amount | `FAUCET_AMOUNT_WEI` (deploy flag `--amount-wei`, default 0.1 TEST). |
+| Fixed, configurable amount | `FAUCET_AMOUNT_WEI` (deploy flag `--amount-wei`, default 1.5 TEST). |
 | Key only in Secrets Manager | `scripts/faucet/createFaucetSecret.js` generates the key and stores it directly; it is never printed, written to disk, or put in `.env`. The Lambda role may read only that one secret. The monitor Lambda gets the public address only. |
 | Rate limit | Per caller and global counters per time window (DynamoDB atomic counters) in a **separate rate table**. The caller key is `HMAC(secret salt, IP + window)`, so it is not reversible to an IP, not linkable across windows, and never joined with participant codes (the code table holds no IP; the rate table holds no code). TTL = window end + 60 s, no backups. 429 + `Retry-After`. Evaluated before the pid lookup so code guessing is throttled. See `docs/TEST_ENVIRONMENT.md`. |
 | Logs never expose the key | Only event names, an 8-char digest prefix and scrubbed error text (hex strings removed) are logged. The key-read error is replaced by a fixed message. Unit test asserts no key, raw tx, pid, address or IP appears in logs. |
@@ -35,8 +35,61 @@ means simultaneous requests are NOT queued: Lambda throttles them (429, non-JSON
 The rate limiter counts every request, so a few abusive IPs can exhaust the global limit for everyone (raise `GLOBAL_RATE_LIMIT_PER_WINDOW` or add WAF). A claim for a code that is mid-payment answers 409/202/200, so code validity can be inferred only by someone who already holds that code and address.
 A reverted transfer (for example a contract address that rejects plain transfers) releases the code so it can be used again with a normal address; each failed attempt costs the faucet gas, bounded by the rate limits.
 
+## Prolific mode, payout cap and the open/closed switch
+
+By default (`FAUCET_PID_MODE=allowlist`) nothing above changes. Set `--pid-mode prolific` to use one shared link for the whole
+study: the Prolific participant id (24 hex characters) is the pid, no per-person links are generated, and wallet keys are still
+created only in the participant's browser. In both modes the faucet is **closed by default** until an admin opens it.
+
+### Environment variables (all set by `template.js` / `deployFaucet.js`)
+
+| Variable | Deploy flag | Meaning |
+|---|---|---|
+| `FAUCET_PID_MODE` | `--pid-mode allowlist\|prolific` | Default `allowlist`. In `prolific` mode only `/^[a-fA-F0-9]{24}$/` is accepted (case-folded before hashing); the first claim of a new id inserts its sha256 and then proceeds. Same exactly-once, lease/retry and `already_paid` rules as before. |
+| `FAUCET_MAX_PAYOUTS` | `--max-payouts N` | **Required** in prolific mode (positive integer; startup fails otherwise). An atomic counter in the codes table; a new successful payment takes a slot, a released reservation (reverted transfer, empty faucet) gives it back. At the cap, `/claim` answers `403 budget_exhausted`; ids that were already paid still get `already_paid`. Independent of the 10-minute rate limit. |
+| `FAUCET_REQUIRED_STUDY_ID` | `--required-study-id` | Optional. If set, `body.studyId` must match (timing-safe), else `403 not_eligible` before anything is reserved. |
+| `FAUCET_EXPERIMENT_CODE` | env var `FAUCET_EXPERIMENT_CODE` when running `deployFaucet.js` | Optional static shared string; `body.experimentCode` must match (timing-safe). Stored as a CloudFormation `NoEcho` parameter, read from the environment (not argv), never logged. Re-set it on every deploy, otherwise it is cleared. |
+| `FAUCET_ADMIN_SECRET_ID` | `--admin-secret-arn` | Secrets Manager secret holding the admin password **hash** (scrypt + salt). Required to deploy; the Lambda role may read it. |
+| `FAUCET_AMOUNT_WEI` | `--amount-wei` | Default is now `1500000000000000000` (1.5 TEST). |
+
+Endpoints (Function URL): `POST /claim`, `GET /status` (public, returns only `{ open, updatedAt }`), `POST /admin/state`.
+The open/closed state is a DynamoDB item (`config#faucet`); a missing or unreadable item means **closed**. `/claim` answers
+`403 faucet_closed` before looking at the pid.
+
+### Prolific + QuestionPro setup (no real values shown)
+
+1. Prolific study URL (the study link, pointing at QuestionPro):
+   `https://<questionpro-survey-url>?custom1={{%PROLIFIC_PID%}}&custom2={{%STUDY_ID%}}`
+2. In QuestionPro, redirect at the end of the survey (or at the point where participants should get the marketplace) to:
+   `https://<app>/?pid=${custom1}&study=${custom2}`
+   (add `&exp=<experiment-code>` if you use `FAUCET_EXPERIMENT_CODE`). The app also understands `PROLIFIC_PID` and `STUDY_ID`.
+3. The app keeps the values in `sessionStorage` for the tab and removes `pid`, `PROLIFIC_PID`, `study`, `STUDY_ID` and `exp`
+   from the address bar. It sends `{ pid, address, studyId?, experimentCode? }` to `/claim`.
+4. Deploy with `--pid-mode prolific --max-payouts <participants> --required-study-id <the Prolific study id>`.
+
+### Setting the admin password
+
+The password is never stored, only a salted scrypt hash.
+
+1. `node scripts/faucet/setAdminPassword.js` prompts twice (hidden input, interactive terminal only) and prints one line of JSON
+   (hash + salt, not the password). Nothing is written to a file and no AWS call is made.
+2. Store that JSON yourself, for example:
+   `aws secretsmanager create-secret --name test-bc-faucet/admin --secret-string '<printed JSON>'`
+   (change it later with `put-secret-value`; the Lambda caches it for up to 5 minutes). Do not commit the output.
+3. Pass the secret ARN to `deployFaucet.js --admin-secret-arn`.
+
+### Opening and closing the faucet (admins, no AWS access needed)
+
+Open `https://<app>/admin/faucet` (not linked from any page; `REACT_APP_FAUCET_URL` must be set in that build). It shows the
+current state from `/status`; type the admin password and press **Open faucet** before the experiment and **Close faucet**
+afterwards. The password is kept only in component state for that request (never in localStorage/sessionStorage or the URL).
+Server side: `POST /admin/state { open, password }` compares in constant time, allows 5 attempts per caller per 10 minutes
+(then 429) plus a global limit of 30, answers `401` with no detail on a wrong password, and never logs the password or body.
+Participants see "Test funds are not available right now." while the faucet is closed.
+
 ## Files
 
+* `adminAuth.js` - scrypt hashing / constant-time checks for the admin password; `../../scripts/faucet/setAdminPassword.js` creates the hash
 * `handler.js` - Lambda logic (`createFaucetHandler` is dependency-injected; `handler` is the AWS entry point)
 * `store.js` - DynamoDB store (conditional writes). `memoryStore.js` - test double with the same semantics
 * `monitor.js` - balance metric publisher. `template.js` - the CloudFormation template (checked by `scripts/faucet/template.test.mjs`)
@@ -49,12 +102,12 @@ conditional-expression semantics are standard DynamoDB. `scripts/faucet/dynamoSt
 ## Deploy (do it yourself; nothing here is run automatically)
 
 1. Pick an S3 bucket in the target region for Lambda packages (for example `test-bc-artifacts-<account-id>`).
-2. Create the faucet key in Secrets Manager (prints the secret ARN and the public address only):
+2. Set the admin password hash first (see "Setting the admin password" below) and create the faucet key in Secrets Manager (prints the secret ARN and the public address only):
    `node scripts/faucet/createFaucetSecret.js --name test-bc-faucet/key --region us-east-1`
 3. Fund the printed faucet address with Sapphire Testnet TEST tokens (see `docs/SAPPHIRE_TESTNET_RUNBOOK.md`).
 4. Check the template offline: `node scripts/faucet/deployFaucet.js --env test --dry-run`
 5. Deploy:
-   `node scripts/faucet/deployFaucet.js --env test --region us-east-1 --artifact-bucket test-bc-artifacts-<account-id> --secret-arn <ARN> --faucet-address <0x...> --alert-email you@example.org --origins https://<test-amplify-domain>`
+   `node scripts/faucet/deployFaucet.js --env test --region us-east-1 --artifact-bucket test-bc-artifacts-<account-id> --secret-arn <ARN> --admin-secret-arn <ADMIN_ARN> --faucet-address <0x...> --alert-email you@example.org --origins https://<test-amplify-domain>`
    It prints `REACT_APP_FAUCET_URL` and the table name.
 6. Confirm the SNS subscription email.
 7. Generate participant codes (CSV with links stays local and git-ignored):

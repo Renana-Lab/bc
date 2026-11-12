@@ -3,6 +3,7 @@
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
@@ -54,8 +55,7 @@ test("network, alarm and exposure settings", () => {
   assert.equal(template.Resources.FaucetFunction.Properties.ReservedConcurrentExecutions, 1);
   assert.equal(template.Resources.LowBalanceAlarm.Properties.TreatMissingData, "breaching");
   assert.equal(template.Resources.LowBalanceAlarm.Properties.Threshold, 5);
-  assert.equal(template.Resources.FaucetUrl.Properties.Cors.AllowMethods.length, 1);
-  assert.deepEqual(template.Resources.FaucetUrl.Properties.Cors.AllowMethods, ["POST"]);
+  assert.deepEqual(template.Resources.FaucetUrl.Properties.Cors.AllowMethods, ["GET", "POST"]); // GET /status, POST /claim and /admin/state
   const json = JSON.stringify(template);
   assert.equal(/datamarketplaces\.net/.test(json), false, "no production domain");
   assert.equal(/0x[0-9a-fA-F]{64}\b/.test(json), false, "no key-like values");
@@ -79,4 +79,42 @@ test("deploy and secret scripts are test-environment only and refuse prod-lookin
   assert.equal(secret.status, 0);
   assert.match(secret.stdout, /key discarded, nothing stored/);
   assert.equal(/0x[0-9a-fA-F]{64}\b/.test(secret.stdout + secret.stderr), false, "the key is never printed");
+});
+
+test("prolific, cap, study and admin-secret settings are wired through; no secret value is in the template", () => {
+  const ADMIN_ARN = "arn:aws:secretsmanager:us-east-1:123456789012:secret:test-bc-faucet/admin-XyZ123";
+  const t = buildTemplate({
+    origins: "x", rpcUrl: "u", chainId: 23295, amountWei: "1500000000000000000", lowBalance: 1, faucetCodeDir: "a", monitorCodeDir: "b",
+    secretArn: ARN, adminSecretArn: ADMIN_ARN, pidMode: "prolific", maxPayouts: "40", requiredStudyId: "study1",
+  });
+  const env = t.Resources.FaucetFunction.Properties.Environment.Variables;
+  assert.equal(env.FAUCET_PID_MODE, "prolific");
+  assert.equal(env.FAUCET_MAX_PAYOUTS, "40");
+  assert.equal(env.FAUCET_REQUIRED_STUDY_ID, "study1");
+  assert.equal(env.FAUCET_ADMIN_SECRET_ID, ADMIN_ARN);
+  assert.deepEqual(env.FAUCET_EXPERIMENT_CODE, { Ref: "ExperimentCode" }, "experiment code comes from a NoEcho parameter, never a literal");
+  assert.equal(t.Parameters.ExperimentCode.NoEcho, true);
+  assert.equal(t.Parameters.ExperimentCode.Default, "");
+  const secrets = t.Resources.FaucetRole.Properties.Policies[0].PolicyDocument.Statement.filter((x) => x.Action === "secretsmanager:GetSecretValue").map((x) => x.Resource);
+  assert.deepEqual(secrets.sort(), [ADMIN_ARN, ARN].sort(), "read access to exactly the key secret and the admin hash secret");
+  // Defaults: allowlist mode, no cap.
+  const defaults = template.Resources.FaucetFunction.Properties.Environment.Variables;
+  assert.equal(defaults.FAUCET_PID_MODE, "allowlist");
+  assert.equal(defaults.FAUCET_MAX_PAYOUTS, "");
+});
+
+test("deploy script: default amount is 1.5 TEST and the prolific flags are validated", () => {
+  assert.match(run("deployFaucet.js", ["--env", "test", "--pid-mode", "prolific", "--dry-run"]).stderr, /--max-payouts/);
+  assert.match(run("deployFaucet.js", ["--env", "test", "--pid-mode", "weird", "--dry-run"]).stderr, /--pid-mode/);
+  assert.match(run("deployFaucet.js", ["--env", "test", "--max-payouts", "5", "--dry-run"]).stderr, /only apply with --pid-mode prolific/);
+  assert.equal(run("deployFaucet.js", ["--env", "test", "--pid-mode", "prolific", "--max-payouts", "40", "--dry-run"]).status, 0);
+  assert.match(run("deployFaucet.js", ["--env", "test", "--artifact-bucket", "b", "--secret-arn", ARN, "--faucet-address", "0x0000000000000000000000000000000000000001"]).stderr, /--admin-secret-arn is required/);
+  assert.match(readFileSync(path.join(here, "deployFaucet.js"), "utf8"), /"--amount-wei", "1500000000000000000"/);
+});
+
+test("setAdminPassword refuses non-interactive input and never echoes anything password-like", () => {
+  const result = spawnSync(process.execPath, [path.join(here, "setAdminPassword.js")], { input: "hunter2-hunter2\nhunter2-hunter2\n", encoding: "utf8" });
+  assert.notEqual(result.status, 0);
+  assert.equal((result.stdout + result.stderr).includes("hunter2"), false);
+  assert.equal(result.stdout, "", "no hash is printed without a terminal");
 });

@@ -55,14 +55,16 @@ const setup = async (overrides = {}) => {
   const clock = { ms: 1_700_000_000_000 };
   const handler = createFaucetHandler({
     store, chain, config: { ...CONFIG, ...overrides.config },
+    getAdminSecret: overrides.getAdminSecret,
     getPrivateKey: overrides.getPrivateKey || (async () => faucetKey),
     getRateSalt: overrides.getRateSalt || (async () => "test-salt-one"),
     now: () => clock.ms, log: (line) => logs.push(line),
   });
   const pids = generatePids(6);
   await uploadPids(store, pids);
-  const claim = (pid, address, ip = "203.0.113.7") => handler({
-    body: JSON.stringify({ pid, address }), requestContext: { http: { method: "POST", sourceIp: ip } },
+  if (!overrides.closed) await store.setState(true, 1_700_000_000); // the faucet is closed by default
+  const claim = (pid, address, ip = "203.0.113.7", extra = {}) => handler({
+    body: JSON.stringify({ pid, address, ...extra }), requestContext: { http: { method: "POST", sourceIp: ip } },
   });
   return { store, chain, logs, clock, handler, pids, claim };
 };
@@ -282,4 +284,212 @@ test("generated codes are unique, valid, and only digests are uploaded", async (
     assert.equal(store.pids.has(pid), false, "raw code must not be a key");
     assert.equal(store.pids.has(sha256(pid)), true);
   }
+});
+
+// ---------------------------------------------------------------------------------------------
+// Prolific pid mode, payout cap, open/closed switch and admin password
+// ---------------------------------------------------------------------------------------------
+const { hashPassword } = require("../../infrastructure/faucet/adminAuth.js");
+const PROLIFIC = { pidMode: "prolific", maxPayouts: 3 };
+const hex24 = () => Wallet.createRandom().privateKey.slice(2, 26); // random 24-hex id
+const call = (handler, path, method, payload, ip = "203.0.113.50") => handler({
+  rawPath: path, body: payload === undefined ? undefined : JSON.stringify(payload), requestContext: { http: { method, sourceIp: ip } },
+});
+
+test("allowlist mode (default): unknown pid is still 403 not_eligible and 24-hex ids get no special treatment", async () => {
+  const { claim, store, chain } = await setup();
+  const res = await claim(hex24(), addr());
+  assert.equal(res.statusCode, 403);
+  assert.equal(parse(res).error, "not_eligible");
+  assert.equal(store.pids.size, 6, "nothing was inserted");
+  assert.equal(chain.sent.length, 0);
+  assert.equal(loadConfig({ CHAIN_ID: "23295", FAUCET_AMOUNT_WEI: "5" }).pidMode, "allowlist");
+});
+
+test("prolific: a fresh 24-hex id is paid once; same-address retries are already_paid; another address is 403", async () => {
+  const { claim, chain, store } = await setup({ config: PROLIFIC });
+  const pid = hex24();
+  const to = addr();
+  const first = await claim(pid, to);
+  assert.equal(first.statusCode, 200);
+  assert.equal(parse(first).status, "paid");
+  const again = await claim(pid, to);
+  assert.equal(parse(again).status, "already_paid");
+  assert.equal(parse(again).txHash, parse(first).txHash);
+  assert.equal((await claim(pid, addr())).statusCode, 403);
+  assert.equal((await claim(pid.toUpperCase(), addr())).statusCode, 403, "case variants are the same participant");
+  assert.equal(parse(await claim(pid.toUpperCase(), to)).status, "already_paid");
+  assert.equal(chain.sent.length, 1);
+  assert.equal(store.pids.has(sha256(pid)), true, "stored under the sha256 key");
+  assert.equal(store.pids.has(pid), false);
+});
+
+test("prolific: invalid formats are 400 (lab codes and short/long/non-hex ids are not accepted)", async () => {
+  const { claim, pids, chain } = await setup({ config: PROLIFIC });
+  for (const bad of [pids[0], "a".repeat(23), "a".repeat(25), `${"a".repeat(23)}g`, "", "a@b.com", `${"a".repeat(23)} `]) {
+    assert.equal((await claim(bad, addr())).statusCode, 400, bad);
+  }
+  assert.equal((await claim(hex24(), "0x12")).statusCode, 400);
+  assert.equal(chain.sent.length, 0);
+});
+
+test("prolific: FAUCET_MAX_PAYOUTS is required (fails closed)", async () => {
+  for (const value of [undefined, "", "0", "-1", "1.5", "abc"]) {
+    assert.throws(() => loadConfig({ CHAIN_ID: "23295", FAUCET_AMOUNT_WEI: "5", FAUCET_PID_MODE: "prolific", FAUCET_MAX_PAYOUTS: value }), /FAUCET_MAX_PAYOUTS/, String(value));
+  }
+  assert.equal(loadConfig({ CHAIN_ID: "23295", FAUCET_AMOUNT_WEI: "5", FAUCET_PID_MODE: "prolific", FAUCET_MAX_PAYOUTS: "40" }).maxPayouts, 40);
+  assert.throws(() => loadConfig({ CHAIN_ID: "23295", FAUCET_AMOUNT_WEI: "5", FAUCET_PID_MODE: "bogus" }), /FAUCET_PID_MODE/);
+  assert.throws(() => createFaucetHandler({ store: createMemoryStore(), chain: fakeChain(), config: { ...CONFIG, pidMode: "prolific" } }), /FAUCET_MAX_PAYOUTS/);
+});
+
+test("prolific: the payout cap is enforced with a distinct 403; paid ids are still served; a release gives the slot back", async () => {
+  const { claim, chain, store } = await setup({ config: { ...PROLIFIC, maxPayouts: 2 } });
+  const first = { pid: hex24(), to: addr() };
+  assert.equal((await claim(first.pid, first.to)).statusCode, 200);
+  assert.equal((await claim(hex24(), addr())).statusCode, 200);
+  const over = await claim(hex24(), addr());
+  assert.equal(over.statusCode, 403);
+  assert.equal(parse(over).error, "budget_exhausted");
+  assert.equal(chain.sent.length, 2);
+  assert.equal(parse(await claim(first.pid, first.to)).status, "already_paid", "retry after the cap still works");
+  assert.equal(store.shared.budget, 2);
+  // A reverted transfer releases its reservation and must not consume a slot.
+  const t = await setup({ config: { ...PROLIFIC, maxPayouts: 1 } });
+  t.chain.state.revertNext = true;
+  const reverted = hex24();
+  assert.equal((await t.claim(reverted, addr())).statusCode, 422);
+  assert.equal(t.store.shared.budget, 0, "released reservation holds no slot");
+  assert.equal((await t.claim(reverted, addr())).statusCode, 200, "the slot was free for the retry");
+  assert.equal(t.store.shared.budget, 1);
+  // An empty faucet also releases the slot.
+  const e = await setup({ chain: fakeChain({ balance: 1n }), config: { ...PROLIFIC, maxPayouts: 1 } });
+  assert.equal((await e.claim(hex24(), addr())).statusCode, 503);
+  assert.equal(e.store.shared.budget, 0);
+});
+
+test("prolific: parallel claims never exceed the cap", async () => {
+  const { claim, chain, store } = await setup({ config: { ...PROLIFIC, maxPayouts: 3 } });
+  const results = await Promise.all(Array.from({ length: 10 }, () => claim(hex24(), addr())));
+  assert.equal(results.filter((r) => r.statusCode === 200).length, 3);
+  assert.equal(results.filter((r) => r.statusCode === 403 && parse(r).error === "budget_exhausted").length, 7);
+  assert.equal(chain.sent.length, 3);
+  assert.equal(store.shared.budget, 3);
+});
+
+test("prolific: studyId and experimentCode must match when configured (checked before anything is reserved)", async () => {
+  const cfg = { ...PROLIFIC, requiredStudyId: "study-ABC123", experimentCode: "shared-code-xyz" };
+  const { claim, chain, store, logs } = await setup({ config: cfg });
+  const to = addr();
+  const pid = hex24();
+  for (const extra of [{}, { studyId: "study-ABC123" }, { experimentCode: "shared-code-xyz" }, { studyId: "wrong", experimentCode: "shared-code-xyz" }, { studyId: "study-ABC123", experimentCode: "nope" }]) {
+    const res = await claim(pid, to, "203.0.113.7", extra);
+    assert.equal(res.statusCode, 403, JSON.stringify(extra));
+    assert.equal(parse(res).error, "not_eligible");
+  }
+  assert.equal((await claim(pid, to, "203.0.113.7", { studyId: 5, experimentCode: "shared-code-xyz" })).statusCode, 400);
+  assert.equal(store.pids.has(sha256(pid)), false, "nothing was reserved or inserted");
+  assert.equal(chain.sent.length, 0);
+  assert.equal((await claim(pid, to, "203.0.113.7", { studyId: "study-ABC123", experimentCode: "shared-code-xyz" })).statusCode, 200);
+  const everything = logs.join("\n");
+  assert.equal(everything.includes("shared-code-xyz") || everything.includes("nope") || everything.includes("study-ABC123"), false, "codes are never logged");
+  // Only the configured checks apply.
+  const onlyStudy = await setup({ config: { ...PROLIFIC, requiredStudyId: "S1" } });
+  assert.equal((await onlyStudy.claim(hex24(), addr(), "203.0.113.7", { studyId: "S1" })).statusCode, 200);
+});
+
+test("prolific: two parallel first claims for the same new id pay only once", async () => {
+  const { claim, chain, store } = await setup({ config: PROLIFIC });
+  const pid = hex24();
+  const to = addr();
+  const results = await Promise.all([claim(pid, to), claim(pid, to), claim(pid, to)]);
+  assert.equal(results.filter((r) => r.statusCode === 200 && parse(r).status === "paid").length, 1);
+  for (const r of results) assert.ok([200, 409].includes(r.statusCode), `unexpected ${r.statusCode}`);
+  assert.equal(chain.sent.length, 1);
+  assert.equal(store.shared.budget, 1, "one slot for one payment");
+});
+
+test("switch: closed by default (missing or unreadable state), claims refused before reserve, in both modes", async () => {
+  for (const config of [undefined, PROLIFIC]) {
+    const { claim, pids, chain, store } = await setup({ closed: true, config });
+    const pid = config ? hex24() : pids[0];
+    const res = await claim(pid, addr());
+    assert.equal(res.statusCode, 403);
+    assert.equal(parse(res).error, "faucet_closed");
+    assert.equal(store.pids.has(sha256(pid)) ? store.pids.get(sha256(pid)).status : "unclaimed", "unclaimed", "no reservation was made");
+    assert.equal(chain.sent.length, 0);
+    const getState = store.getState;
+    store.getState = async () => { throw new Error("dynamodb unavailable"); };
+    assert.equal(parse(await claim(pid, addr())).error, "faucet_closed", "unreadable state is closed");
+    store.getState = getState;
+    await store.setState(false, 5);
+    assert.equal(parse(await claim(pid, addr())).error, "faucet_closed");
+  }
+});
+
+test("switch: /status is public and returns only open and updatedAt", async () => {
+  const { handler, store } = await setup({ closed: true });
+  const closed = await call(handler, "/status", "GET");
+  assert.equal(closed.statusCode, 200);
+  assert.deepEqual(parse(closed), { open: false, updatedAt: null });
+  await store.setState(true, 1_700_000_000);
+  const open = parse(await call(handler, "/status", "GET"));
+  assert.deepEqual(Object.keys(open).sort(), ["open", "updatedAt"]);
+  assert.equal(open.open, true);
+  assert.equal(open.updatedAt, new Date(1_700_000_000_000).toISOString());
+  assert.equal((await call(handler, "/status", "POST", {})).statusCode, 405);
+  assert.equal((await call(handler, "/nope", "GET")).statusCode, 404);
+});
+
+const adminSetup = async (overrides = {}) => {
+  const password = "correct horse battery staple";
+  const record = await hashPassword(password);
+  const t = await setup({ closed: true, getAdminSecret: async () => record, ...overrides });
+  const admin = (open, pw = password, ip = "198.51.100.9") => call(t.handler, "/admin/state", "POST", { open, password: pw }, ip);
+  return { ...t, admin, password };
+};
+
+test("switch: admin opens and closes with the right password; wrong password is 401 without detail; claims follow the state", async () => {
+  const { admin, claim, pids, store } = await adminSetup();
+  const wrong = await admin(true, "not the password");
+  assert.equal(wrong.statusCode, 401);
+  assert.deepEqual(parse(wrong), { error: "unauthorized" });
+  assert.equal(await store.getState(), null, "a wrong password changes nothing");
+  assert.equal((await claim(pids[0], addr())).statusCode, 403);
+  const opened = await admin(true);
+  assert.equal(opened.statusCode, 200);
+  assert.equal(parse(opened).open, true);
+  assert.equal((await claim(pids[0], addr())).statusCode, 200);
+  const closed = await admin(false);
+  assert.equal(parse(closed).open, false);
+  assert.equal(parse(await claim(pids[1], addr())).error, "faucet_closed");
+  assert.equal((await admin(undefined)).statusCode, 400, "right password but no boolean");
+});
+
+test("switch: without a configured admin secret nobody can change the state (401)", async () => {
+  const { admin } = await adminSetup({ getAdminSecret: async () => null });
+  assert.equal((await admin(true)).statusCode, 401);
+  const failing = await adminSetup({ getAdminSecret: async () => { throw new Error("secrets unavailable"); } });
+  assert.equal((await failing.admin(true)).statusCode, 401);
+});
+
+test("switch: admin attempts are rate limited per caller (5 per window, then 429) and globally", async () => {
+  const { admin } = await adminSetup();
+  const codes = [];
+  for (let i = 0; i < 7; i += 1) codes.push((await admin(true, "wrong password", "198.51.100.1")).statusCode);
+  assert.deepEqual(codes, [401, 401, 401, 401, 401, 429, 429]);
+  assert.equal((await admin(true, "correct horse battery staple", "198.51.100.1")).statusCode, 429, "even the right password is refused once limited");
+  assert.equal((await admin(true, "wrong password", "198.51.100.2")).statusCode, 401, "another caller is unaffected");
+  const g = await adminSetup({ config: { adminGlobalRateLimit: 3 } });
+  const statuses = [];
+  for (let i = 0; i < 5; i += 1) statuses.push((await g.admin(true, "wrong password", `192.0.2.${i}`)).statusCode);
+  assert.deepEqual(statuses, [401, 401, 401, 429, 429]);
+});
+
+test("switch: the admin password never appears in logs, responses or stored records", async () => {
+  const { admin, logs, store, password } = await adminSetup();
+  const guess = "super secret guess 123";
+  const responses = [await admin(true, guess), await admin(true), await admin(false)];
+  const everything = [...logs, ...responses.map((r) => r.body), JSON.stringify([...store.counters]), JSON.stringify(store.shared)].join("\n");
+  for (const secret of [guess, password]) assert.equal(everything.includes(secret), false, "password leaked");
+  assert.ok(logs.length > 0);
 });
