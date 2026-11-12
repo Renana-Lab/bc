@@ -1,17 +1,19 @@
-import React, { useEffect, useMemo, useState } from "react";
+/* global BigInt */
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { getWalletMode } from "./walletMode.mjs";
 import { getParticipantId } from "./participantId.mjs";
 import { setModeProvider } from "./modeProvider";
 import { createIndexedDbStorage, createLocalProvider, createLocalWallet } from "./localWallet.mjs";
 import { getTargetNetwork } from "../sapphireNetworks";
 import { clearConfidentialSessions } from "../confidentialData";
+import styles from "./WalletModePanel.module.scss";
 
 // Embedded-wallet UI, mounted only when REACT_APP_WALLET_MODE is local.
 // MetaMask mode renders nothing and keeps the extension flow unchanged.
 
-const box = {
-  position: "fixed", right: 12, bottom: 12, zIndex: 2000, maxWidth: 340, padding: 12, borderRadius: 8,
-  background: "#fff", color: "#111", border: "1px solid #ccc", font: "13px/1.4 system-ui, sans-serif",
+const formatBalance = (wei) => {
+  const unit = 10n ** 18n;
+  return `${wei / unit}.${String((wei % unit) / 10n ** 14n).padStart(4, "0")}`;
 };
 
 const LocalWalletPanel = () => {
@@ -21,6 +23,11 @@ const LocalWalletPanel = () => {
   const [state, setState] = useState({ exists: null, address: "" });
   const [passphrase, setPassphrase] = useState("");
   const [message, setMessage] = useState("");
+  const [notice, setNotice] = useState("");
+  const [open, setOpen] = useState(true);
+  const [backedUp, setBackedUp] = useState(false);
+  const [funded, setFunded] = useState(false);
+  const [balance, setBalance] = useState(null);
   const pid = useMemo(() => {
     let storage;
     try { storage = window.sessionStorage; } catch { storage = undefined; }
@@ -38,6 +45,17 @@ const LocalWalletPanel = () => {
     return code;
   }, []);
   const faucetUrl = process.env.REACT_APP_FAUCET_URL;
+
+  // Informational only: a failed read just shows a dash.
+  const loadBalance = async () => {
+    try {
+      const hex = await provider.request({ method: "eth_getBalance", params: [wallet.address, "latest"] });
+      setBalance(formatBalance(BigInt(hex)));
+    } catch {
+      setBalance(null);
+    }
+  };
+
   const requestFunds = () => run(async () => {
     const friendly = {
       not_eligible: "This participant code cannot receive funds (unknown or already used).",
@@ -52,13 +70,15 @@ const LocalWalletPanel = () => {
       });
       const body = await response.json().catch(() => ({}));
       if (response.status === 200 && (body.status === "paid" || body.status === "already_paid")) {
-        setMessage("Test funds sent. They are in your wallet.");
+        setNotice("Test funds sent. They are in your wallet.");
+        setFunded(true);
+        void loadBalance();
         return;
       }
       if ([400, 403, 422, 503].includes(response.status) || body.error === "rate_limited") {
         throw new Error(friendly[body.error] || "Faucet request refused.");
       }
-      setMessage("Faucet is busy, retrying...");
+      setNotice("Faucet is busy, retrying...");
       await new Promise((resolve) => setTimeout(resolve, 2000 * (attempt + 1)));
     }
     throw new Error("The faucet is busy. Try again in a minute.");
@@ -71,9 +91,30 @@ const LocalWalletPanel = () => {
     return wallet.subscribe(() => void refresh().catch(() => {}));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- refresh only reads the stable wallet object
   }, [wallet, provider]);
+  useEffect(() => {
+    if (state.address) void loadBalance();
+    else setBalance(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reload only when the unlocked address changes
+  }, [state.address]);
+
+  // Backup/funding progress belongs to one wallet: clear it when that wallet is forgotten
+  // or the unlocked account changes (e.g. a restore). Locking the same wallet keeps it.
+  const lastAddress = useRef("");
+  // Layout effect: the stale check must never paint on the new screen.
+  useLayoutEffect(() => {
+    const reset = () => { setBackedUp(false); setFunded(false); setNotice(""); };
+    if (state.exists === false) {
+      lastAddress.current = "";
+      reset();
+    } else if (state.address) {
+      if (lastAddress.current && lastAddress.current !== state.address) reset();
+      lastAddress.current = state.address;
+    }
+  }, [state.exists, state.address]);
 
   const run = async (action) => {
     setMessage("");
+    setNotice("");
     try { await action(); setPassphrase(""); } catch (error) { setMessage(error.message); }
     await refresh();
   };
@@ -84,42 +125,94 @@ const LocalWalletPanel = () => {
     link.click();
     link.remove();
     setTimeout(() => URL.revokeObjectURL(link.href), 10_000);
+    setBackedUp(true);
   };
 
+  const unlocked = Boolean(state.address);
+  const symbol = network.nativeCurrency?.symbol || "ROSE";
+  const canFund = Boolean(pid && faucetUrl);
+  const stepClass = (done, active) => `${styles.step} ${done ? styles.stepDone : ""} ${active ? styles.stepActive : ""}`;
+
   return (
-    <div style={box} data-testid="local-wallet-panel">
-      <strong>Local wallet (spike)</strong>
-      {pid ? <div>Participant code: {`${pid.slice(0, 4)}…${pid.slice(-2)}`}</div> : null}
-      <div style={{ color: "#8a1c1c" }}>
-        Do not clear this site&apos;s data (cookies / storage) during the session: the wallet key lives there.
-        Download the encrypted backup first; you can restore it below.
+    <div className={styles.panel} data-testid="local-wallet-panel">
+      <div className={styles.header}>
+        <h2 className={styles.title}>Your wallet</h2>
+        <button type="button" className={`${styles.button} ${styles.secondary}`} aria-expanded={open} onClick={() => setOpen(!open)}>
+          {open ? "Hide" : "Show"}
+        </button>
       </div>
-      {state.exists === null ? null : state.address ? (
+      {open ? (
         <>
-          <div style={{ wordBreak: "break-all" }}>Unlocked: {state.address}</div>
-          <button onClick={() => { wallet.lock(); clearConfidentialSessions(); }}>Lock</button>{" "}
-          <button onClick={downloadBackup}>Download encrypted backup</button>{" "}
-          {pid && faucetUrl ? <button onClick={requestFunds}>Request test funds</button> : null}{" "}
-          <button onClick={() => window.confirm("Forget this wallet? Without a backup the key is lost forever.") && run(() => wallet.forget())}>Forget</button>
-        </>
-      ) : (
-        <>
-          <div>{state.exists ? "Enter your passphrase to unlock." : "Create a wallet. The key stays encrypted in this browser only. Clearing site data deletes it, so download the encrypted backup."}</div>
-          <input type="password" autoComplete="off" value={passphrase} onChange={(event) => setPassphrase(event.target.value)} placeholder="Passphrase (12+ chars)" />{" "}
-          <button onClick={() => run(() => (state.exists ? wallet.unlock(passphrase) : wallet.create(passphrase)))}>{state.exists ? "Unlock" : "Create"}</button>
-          {state.exists ? null : (
-            <div>
-              Restore from an encrypted backup (uses the passphrase above):{" "}
-              <input type="file" accept="application/json" data-testid="local-wallet-restore"
-                onChange={(event) => {
-                  const file = event.target.files?.[0];
-                  if (file) run(async () => wallet.importEncryptedBackup(await file.text(), passphrase));
-                }} />
-            </div>
+          {pid ? <p className={styles.badge}>Participant code: {`${pid.slice(0, 4)}…${pid.slice(-2)}`}</p> : null}
+          <p className={styles.tip}>
+            Do not clear this site&apos;s data (cookies / storage) while you take part: your wallet key lives in this browser.
+            Step 2 gives you a safety backup, just in case.
+          </p>
+          {state.exists === null ? null : (
+            <ol className={styles.steps}>
+              <li className={stepClass(unlocked, !unlocked)}>
+                <span className={styles.num} aria-hidden="true">{unlocked ? "✓" : "1"}</span>
+                <h3 className={styles.stepTitle}>{unlocked ? "Wallet unlocked" : state.exists ? "Unlock your wallet" : "Create your wallet"}</h3>
+                <div className={styles.stepBody}>
+                  {unlocked ? (
+                    <p className={styles.address}>Unlocked: {state.address}</p>
+                  ) : (
+                    <>
+                      <p className={styles.hint}>
+                        {state.exists
+                          ? "Enter your passphrase to unlock."
+                          : "Choose a passphrase (12+ characters). The key stays encrypted in this browser only."}
+                      </p>
+                      <input className={styles.input} type="password" autoComplete="off" value={passphrase}
+                        aria-label="Passphrase" onChange={(event) => setPassphrase(event.target.value)} placeholder="Passphrase (12+ chars)" />
+                      <button type="button" className={styles.button}
+                        onClick={() => run(() => (state.exists ? wallet.unlock(passphrase) : wallet.create(passphrase)))}>
+                        {state.exists ? "Unlock" : "Create"}
+                      </button>
+                      {state.exists ? null : (
+                        <label className={styles.restore}>
+                          Already have a backup? Restore it (uses the passphrase above):{" "}
+                          <input type="file" accept="application/json" data-testid="local-wallet-restore"
+                            onChange={(event) => {
+                              const file = event.target.files?.[0];
+                              if (file) run(async () => wallet.importEncryptedBackup(await file.text(), passphrase));
+                            }} />
+                        </label>
+                      )}
+                    </>
+                  )}
+                </div>
+              </li>
+              <li className={stepClass(backedUp, unlocked && !backedUp)}>
+                <span className={styles.num} aria-hidden="true">{backedUp ? "✓" : "2"}</span>
+                <h3 className={styles.stepTitle}>Save an encrypted backup</h3>
+                <div className={styles.stepBody}>
+                  {unlocked ? null : <p className={styles.hint}>A small file you can restore from if this browser forgets your wallet.</p>}
+                  {unlocked ? <button type="button" className={styles.button} onClick={downloadBackup}>Download encrypted backup</button> : null}
+                </div>
+              </li>
+              <li className={stepClass(funded, unlocked && !funded)}>
+                <span className={styles.num} aria-hidden="true">{funded ? "✓" : "3"}</span>
+                <h3 className={styles.stepTitle}>Get test funds</h3>
+                <div className={styles.stepBody}>
+                  {unlocked ? <p className={styles.balance}>Balance: {balance === null ? "—" : `${balance} ${symbol}`}</p> : null}
+                  {unlocked && canFund ? <button type="button" className={styles.button} onClick={requestFunds}>Request test funds</button> : null}
+                  {unlocked && !canFund ? <p className={styles.hint}>Test funds need a participant link from the experimenter.</p> : null}
+                </div>
+              </li>
+            </ol>
           )}
+          {unlocked ? (
+            <div className={styles.footer}>
+              <button type="button" className={`${styles.button} ${styles.secondary}`} onClick={() => { wallet.lock(); clearConfidentialSessions(); }}>Lock</button>
+              <button type="button" className={`${styles.button} ${styles.secondary}`}
+                onClick={() => window.confirm("Forget this wallet? Without a backup the key is lost forever.") && run(() => wallet.forget())}>Forget</button>
+            </div>
+          ) : null}
+          {notice ? <p className={styles.notice} role="status">{notice}</p> : null}
+          {message ? <p className={styles.error} role="alert">{message}</p> : null}
         </>
-      )}
-      {message ? <div role="alert">{message}</div> : null}
+      ) : null}
     </div>
   );
 };
