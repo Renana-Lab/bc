@@ -244,7 +244,10 @@ const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, getAdminSecret
       store.hit(`${callerScope}${caller}`, windowId, expiresAt, by),
       store.hit(globalScope, windowId, expiresAt, by),
     ]);
-    return { bump };
+    // hitCaller / hitGlobal bump one counter each, so a caller can be checked before the global counter is touched.
+    const hitCaller = (by) => store.hit(`${callerScope}${caller}`, windowId, expiresAt, by);
+    const hitGlobal = (by) => store.hit(globalScope, windowId, expiresAt, by);
+    return { bump, hitCaller, hitGlobal };
   };
   // Counts this request against a per-caller and a global counter. Returns true when over the limit.
   const overLimit = async (request, callerScope, globalScope, callerMax, globalMax) => {
@@ -282,16 +285,21 @@ const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, getAdminSecret
       // Only FAILED verifications count. Each attempt is counted up front (so parallel guesses cannot slip past the
       // limit) and refunded when the password is right: an attacker burning failures from other IPs cannot block the
       // admin's correct password, except by exhausting the modest global failure budget.
-      const { bump } = await counters(request, "admf:", "admf-global");
-      const [failures, globalFailures] = await bump(1);
-      if (failures > adminRateLimit || globalFailures > adminGlobalRateLimit) { event("admin_rate_limited"); return rateLimited(); }
+      // The caller counter goes first; the global counter is only touched by callers still within their own limit,
+      // so a single address hammering the endpoint adds nothing to the global budget beyond its own limit.
+      const { hitCaller, hitGlobal } = await counters(request, "admf:", "admf-global");
+      const failures = await hitCaller(1);
+      if (failures > adminRateLimit) { event("admin_rate_limited"); return rateLimited(); }
+      const globalFailures = await hitGlobal(1);
+      if (globalFailures > adminGlobalRateLimit) { event("admin_rate_limited"); return rateLimited(); }
+      const refund = () => Promise.all([hitCaller(-1), hitGlobal(-1)]);
       let body;
       try { body = JSON.parse(raw || "{}"); } catch { body = {}; }
       let record = null;
       try { record = await adminRecord(); } catch { record = null; }
       const ok = await verifyPassword(body?.password, record);
       if (!ok) { event("admin_denied"); return json(401, { error: "unauthorized" }); }
-      await bump(-1).catch(() => {}); // a correct password is not a failure
+      await refund().catch(() => {}); // a correct password is not a failure
       if (typeof body.open !== "boolean") return json(400, { error: "bad_request" });
       const updatedAt = Math.floor(now() / 1000);
       await store.setState(body.open, updatedAt);

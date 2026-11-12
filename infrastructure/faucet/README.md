@@ -54,7 +54,8 @@ created only in the participant's browser. In both modes the faucet is **closed 
 
 Endpoints (Function URL): `POST /claim`, `GET /status` (public, returns only `{ open, updatedAt }`), `POST /admin/state`.
 The open/closed state is a DynamoDB item (`config#faucet`); a missing or unreadable item means **closed**. `/claim` answers
-`403 faucet_closed` before looking at the pid.
+`403 faucet_closed` for **new** reservations only; a pid that is already paid (same address) still gets `already_paid`, and an
+in-flight payment whose transaction was already signed can still finish while closed. Nothing new is written and no payout slot is taken.
 
 ### Prolific + QuestionPro setup (no real values shown)
 

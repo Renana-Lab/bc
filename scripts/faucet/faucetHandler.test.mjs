@@ -590,3 +590,16 @@ test("closed: a paid pid still gets already_paid, a pending reservation with a s
     if (config) assert.equal(store.shared.budget, 2, "no extra slot was taken");
   }
 });
+
+test("admin limiter: 300 wrong passwords from ONE IP add only 5 to the global budget; the right password from a new IP still works", async () => {
+  const { admin, store } = await adminSetup();
+  const codes = new Set();
+  for (let i = 0; i < 300; i += 1) codes.add((await admin(true, `wrong ${i}`, "198.51.100.77")).statusCode);
+  assert.deepEqual([...codes].sort(), [401, 429]);
+  const global = [...store.counters].find(([key]) => key.startsWith("admf-global"));
+  assert.equal(global[1].count, 5, "only the caller's 5 allowed failures reached the global counter");
+  const ok = await admin(true, "correct horse battery staple", "203.0.113.201");
+  assert.equal(ok.statusCode, 200);
+  assert.equal(parse(ok).open, true);
+  assert.equal([...store.counters].find(([key]) => key.startsWith("admf-global"))[1].count, 5, "the correct password was refunded");
+});
