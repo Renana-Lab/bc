@@ -1,5 +1,5 @@
 /* global BigInt */
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { getWalletMode } from "./walletMode.mjs";
 import { getParticipantId } from "./participantId.mjs";
 import { setModeProvider } from "./modeProvider";
@@ -97,6 +97,21 @@ const LocalWalletPanel = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reload only when the unlocked address changes
   }, [state.address]);
 
+  // Backup/funding progress belongs to one wallet: clear it when that wallet is forgotten
+  // or the unlocked account changes (e.g. a restore). Locking the same wallet keeps it.
+  const lastAddress = useRef("");
+  // Layout effect: the stale check must never paint on the new screen.
+  useLayoutEffect(() => {
+    const reset = () => { setBackedUp(false); setFunded(false); setNotice(""); };
+    if (state.exists === false) {
+      lastAddress.current = "";
+      reset();
+    } else if (state.address) {
+      if (lastAddress.current && lastAddress.current !== state.address) reset();
+      lastAddress.current = state.address;
+    }
+  }, [state.exists, state.address]);
+
   const run = async (action) => {
     setMessage("");
     setNotice("");
@@ -137,7 +152,7 @@ const LocalWalletPanel = () => {
             <ol className={styles.steps}>
               <li className={stepClass(unlocked, !unlocked)}>
                 <span className={styles.num} aria-hidden="true">{unlocked ? "✓" : "1"}</span>
-                <h3 className={styles.stepTitle}>{state.exists ? "Unlock your wallet" : "Create your wallet"}</h3>
+                <h3 className={styles.stepTitle}>{unlocked ? "Wallet unlocked" : state.exists ? "Unlock your wallet" : "Create your wallet"}</h3>
                 <div className={styles.stepBody}>
                   {unlocked ? (
                     <p className={styles.address}>Unlocked: {state.address}</p>
@@ -172,11 +187,11 @@ const LocalWalletPanel = () => {
                 <span className={styles.num} aria-hidden="true">{backedUp ? "✓" : "2"}</span>
                 <h3 className={styles.stepTitle}>Save an encrypted backup</h3>
                 <div className={styles.stepBody}>
-                  <p className={styles.hint}>A small file you can restore from if this browser forgets your wallet.</p>
+                  {unlocked ? null : <p className={styles.hint}>A small file you can restore from if this browser forgets your wallet.</p>}
                   {unlocked ? <button type="button" className={styles.button} onClick={downloadBackup}>Download encrypted backup</button> : null}
                 </div>
               </li>
-              <li className={stepClass(funded, unlocked && backedUp && !funded)}>
+              <li className={stepClass(funded, unlocked && !funded)}>
                 <span className={styles.num} aria-hidden="true">{funded ? "✓" : "3"}</span>
                 <h3 className={styles.stepTitle}>Get test funds</h3>
                 <div className={styles.stepBody}>

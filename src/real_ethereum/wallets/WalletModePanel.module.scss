@@ -8,22 +8,23 @@ $error: #8a1c1c;
 
 .panel {
   position: fixed;
-  right: 16px;
-  bottom: 16px;
+  right: 12px;
+  bottom: 12px;
   z-index: 2000;
-  width: min(360px, calc(100vw - 32px));
+  width: min(320px, calc(100vw - 32px));
   max-height: calc(100vh - 32px);
+  overflow-x: hidden;
   overflow-y: auto;
   box-sizing: border-box;
-  padding: 16px;
+  padding: 12px;
   border-radius: 1rem;
   background: #fff;
   color: #1c2340;
   border: 1px solid $main-blue;
   box-shadow: 0 10px 30px rgba(0, 40, 132, 0.22);
   font-family: var(--app-font-family, "Manrope", "Segoe UI", sans-serif);
-  font-size: 0.9rem;
-  line-height: 1.45;
+  font-size: 0.85rem;
+  line-height: 1.35;
   text-align: start;
 }
 
@@ -49,8 +50,8 @@ $error: #8a1c1c;
 }
 
 .tip {
-  margin: 0 0 12px;
-  padding: 8px 10px;
+  margin: 0 0 8px;
+  padding: 6px 8px;
   border-radius: 0.75rem;
   background: #fff6df;
   border-inline-start: 4px solid $gold;
@@ -64,15 +65,15 @@ $error: #8a1c1c;
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 6px;
 }
 
 .step {
   display: grid;
-  grid-template-columns: 28px 1fr;
+  grid-template-columns: 28px minmax(0, 1fr);
   column-gap: 10px;
   align-items: center;
-  padding: 10px;
+  padding: 8px;
   border-radius: 0.75rem;
   background: $light-blue;
   opacity: 0.65;
@@ -114,15 +115,18 @@ $error: #8a1c1c;
 
 .stepBody {
   grid-column: 2;
+  min-width: 0;
+  max-width: 100%;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 8px;
-  margin-top: 6px;
+  gap: 6px;
+  margin-top: 4px;
 }
 
 .hint {
   margin: 0;
+  overflow-wrap: anywhere;
   color: #3d4670;
   font-size: 0.82rem;
 }
@@ -177,7 +181,7 @@ $error: #8a1c1c;
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 12px;
+  margin-top: 8px;
 }
 
 .balance {
@@ -187,6 +191,8 @@ $error: #8a1c1c;
 }
 
 .restore {
+  max-width: 100%;
+  overflow-wrap: anywhere;
   font-size: 0.8rem;
   color: #3d4670;
 }
@@ -205,4 +211,8 @@ $error: #8a1c1c;
   border-radius: 0.75rem;
   background: #fbe9e9;
   color: $error;
+}
+
+.restore input[type="file"] {
+  max-width: 100%;
 }
