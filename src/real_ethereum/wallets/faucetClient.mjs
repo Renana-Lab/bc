@@ -25,15 +25,17 @@ const baseUrl = (faucetUrl) => String(faucetUrl || "").replace(/\/+$/, "");
 const readJson = async (response) => (await response.json().catch(() => null)) ?? {};
 const friendly = (code) => FAUCET_MESSAGES[code] || "Faucet request refused.";
 
-// GET /status -> { open: true|false|null, updatedAt }. null means "unknown" (unreachable); never throws.
+// GET /status -> { open: true|false|null, updatedAt, pidMode }. null means "unknown" (unreachable); never throws.
+// pidMode ("allowlist" | "prolific" | "open" | null) tells the app whether non-hex ids may be sent.
 export const fetchFaucetStatus = async ({ faucetUrl, fetchImpl = (...args) => fetch(...args) }) => {
   try {
     const response = await fetchImpl(`${baseUrl(faucetUrl)}/status`, { method: "GET" });
     const body = await readJson(response);
-    if (!response.ok || typeof body.open !== "boolean") return { open: null, updatedAt: null };
-    return { open: body.open, updatedAt: body.updatedAt ?? null };
+    if (!response.ok || typeof body.open !== "boolean") return { open: null, updatedAt: null, pidMode: null };
+    const pidMode = ["allowlist", "prolific", "open"].includes(body.pidMode) ? body.pidMode : null;
+    return { open: body.open, updatedAt: body.updatedAt ?? null, pidMode };
   } catch {
-    return { open: null, updatedAt: null };
+    return { open: null, updatedAt: null, pidMode: null };
   }
 };
 

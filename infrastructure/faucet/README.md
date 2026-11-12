@@ -39,20 +39,30 @@ A reverted transfer (for example a contract address that rejects plain transfers
 
 By default (`FAUCET_PID_MODE=allowlist`) nothing above changes. Set `--pid-mode prolific` to use one shared link for the whole
 study: the Prolific participant id (24 hex characters) is the pid, no per-person links are generated, and wallet keys are still
-created only in the participant's browser. In both modes the faucet is **closed by default** until an admin opens it.
+created only in the participant's browser. In every mode the faucet is **closed by default** until an admin opens it.
+
+Set `--pid-mode open` when the participant id does not come from Prolific or a pre-generated list (for example a survey tool's own
+response id): any pid of 1-128 characters after trimming surrounding whitespace, printable ASCII only (`!` to `~`, no spaces or
+control characters inside), is accepted and used **case-sensitively** as the payout key (`Abc` and `abc` are two different ids).
+Each distinct pid is paid once (`already_paid` for the same wallet, `not_eligible` for another wallet).
+
+> **Open mode does not verify identity.** Anyone who can reach the faucet can invent pids, and each new pid takes a payout slot.
+> The only limits are `FAUCET_MAX_PAYOUTS` (required), the per-caller and global rate limits, and the admin open/closed switch
+> (keep the faucet closed except while participants are being onboarded, and set the cap to the number of participants plus rehearsals).
+> The optional study / experiment checks below still apply when configured, but they are shared strings, not credentials.
 
 ### Environment variables (all set by `template.js` / `deployFaucet.js`)
 
 | Variable | Deploy flag | Meaning |
 |---|---|---|
-| `FAUCET_PID_MODE` | `--pid-mode allowlist\|prolific` | Default `allowlist`. In `prolific` mode only `/^[a-fA-F0-9]{24}$/` is accepted (case-folded before hashing); the first claim of a new id inserts its sha256 and then proceeds. Same exactly-once, lease/retry and `already_paid` rules as before. |
-| `FAUCET_MAX_PAYOUTS` | `--max-payouts N` | **Required** in prolific mode (positive integer; startup fails otherwise). An atomic counter in the codes table; a new successful payment takes a slot, a released reservation (reverted transfer, empty faucet) gives it back. At the cap, `/claim` answers `403 budget_exhausted`; ids that were already paid still get `already_paid`. Independent of the 10-minute rate limit. |
-| `FAUCET_REQUIRED_STUDY_ID` | `--required-study-id` | Optional. If set, `body.studyId` must match (timing-safe), else `403 not_eligible` before anything is reserved. |
+| `FAUCET_PID_MODE` | `--pid-mode allowlist|prolific|open` | Default `allowlist`. In `prolific` mode only `/^[a-fA-F0-9]{24}$/` is accepted (case-folded before hashing); the first claim of a new id inserts its sha256 and then proceeds. In `open` mode any trimmed printable-ASCII pid of 1-128 characters (`/^[!-~]{1,128}$/`) is accepted and hashed exactly as sent (no case folding); same first-claim insert. Same exactly-once, lease/retry and `already_paid` rules in all modes. |
+| `FAUCET_MAX_PAYOUTS` | `--max-payouts N` | **Required** in prolific and open mode (positive integer; startup fails otherwise). An atomic counter in the codes table; a new successful payment takes a slot, a released reservation (reverted transfer, empty faucet) gives it back. At the cap, `/claim` answers `403 budget_exhausted`; ids that were already paid still get `already_paid`. Independent of the 10-minute rate limit. |
+| `FAUCET_REQUIRED_STUDY_ID` | `--required-study-id` | Optional (prolific and open mode). If set, `body.studyId` must match (timing-safe), else `403 not_eligible` before anything is reserved. |
 | `FAUCET_EXPERIMENT_CODE` | env var `FAUCET_EXPERIMENT_CODE` when running `deployFaucet.js` | Optional static shared string; `body.experimentCode` must match (timing-safe). It is a **shared, non-secret string** (it appears in the participants' links as `?exp=`), so it only keeps out people who know the faucet URL but not the link; it is not a credential. Allowed characters: `[A-Za-z0-9_.~-]`, 1-64. `deployFaucet.js` reads it from the environment and passes it as a CloudFormation `NoEcho` parameter, which does appear in the `aws cloudformation deploy` argument list on the machine that deploys, so do not use anything sensitive. It is never logged by the Lambda. Re-set it on every deploy, otherwise it is cleared. |
 | `FAUCET_ADMIN_SECRET_ID` | `--admin-secret-arn` | Secrets Manager secret holding the admin password **hash** (scrypt + salt). Required to deploy; the Lambda role may read it. |
 | `FAUCET_AMOUNT_WEI` | `--amount-wei` | Default is now `1500000000000000000` (1.5 TEST). |
 
-Endpoints (Function URL): `POST /claim`, `GET /status` (public, returns only `{ open, updatedAt }`), `POST /admin/state`.
+Endpoints (Function URL): `POST /claim`, `GET /status` (public, returns only `{ open, updatedAt, pidMode }`; the browser uses `pidMode` to decide whether non-hex ids may be sent), `POST /admin/state`.
 The open/closed state is a DynamoDB item (`config#faucet`); a missing or unreadable item means **closed**. `/claim` answers
 `403 faucet_closed` for **new** reservations only; a pid that is already paid (same address) still gets `already_paid`, and an
 in-flight payment whose transaction was already signed can still finish while closed. Nothing new is written and no payout slot is taken.
@@ -99,7 +109,7 @@ Participants see "Test funds are not available right now." while the faucet is c
 
 * The faucet is **closed after the deploy** (no state item exists yet). Open it at `/admin/faucet` before participants arrive.
 * `--admin-secret-arn` is now required (create the admin secret first, see above).
-* The payout counter (`FAUCET_MAX_PAYOUTS`, prolific mode) is cumulative and cannot be reset: set it to the number of participants
+* The payout counter (`FAUCET_MAX_PAYOUTS`, prolific and open mode) is cumulative and cannot be reset: set it to the number of participants
   **plus** the rehearsal/test claims you expect, because those count too.
 
 ## Files

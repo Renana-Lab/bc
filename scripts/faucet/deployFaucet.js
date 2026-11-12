@@ -45,9 +45,10 @@ const reservedConcurrency = Number(read("--reserved-concurrency", "1"));
 
 if (chainId !== 23295 && chainId !== 23293) throw new Error("--chain-id must be 23295 (Sapphire testnet) or 23293 (localnet); mainnet is refused");
 if (!/^\d+$/.test(amountWei) || BigInt(amountWei) <= 0n) throw new Error("--amount-wei must be a positive integer");
-if (pidMode !== "allowlist" && pidMode !== "prolific") throw new Error("--pid-mode must be allowlist or prolific");
-if (pidMode === "prolific" && !/^[1-9][0-9]{0,9}$/.test(maxPayouts)) throw new Error("--max-payouts (positive integer) is required with --pid-mode prolific");
-if (pidMode === "allowlist" && (maxPayouts || requiredStudyId || experimentCode)) throw new Error("--max-payouts, --required-study-id and FAUCET_EXPERIMENT_CODE only apply with --pid-mode prolific");
+if (!["allowlist", "prolific", "open"].includes(pidMode)) throw new Error("--pid-mode must be allowlist, prolific or open");
+if (pidMode !== "allowlist" && !/^[1-9][0-9]{0,9}$/.test(maxPayouts)) throw new Error(`--max-payouts (positive integer) is required with --pid-mode ${pidMode}`);
+if (pidMode === "allowlist" && (maxPayouts || requiredStudyId || experimentCode)) throw new Error("--max-payouts, --required-study-id and FAUCET_EXPERIMENT_CODE only apply with --pid-mode prolific or open");
+if (pidMode === "open") console.error("WARNING: --pid-mode open does not verify identity. Any pid of 1-128 printable ASCII characters can claim once; only --max-payouts, the rate limits and the admin open/closed switch limit the spend.");
 if (requiredStudyId && !/^[A-Za-z0-9_-]{1,64}$/.test(requiredStudyId)) throw new Error("--required-study-id has an unexpected format");
 if (experimentCode && !/^[A-Za-z0-9_.~-]{1,64}$/.test(experimentCode)) throw new Error("FAUCET_EXPERIMENT_CODE must match [A-Za-z0-9_.~-]{1,64} (the same characters the app accepts in ?exp=)");
 if (!dryRun) {

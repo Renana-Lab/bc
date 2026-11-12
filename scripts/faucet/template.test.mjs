@@ -108,6 +108,11 @@ test("deploy script: default amount is 1.5 TEST and the prolific flags are valid
   assert.match(run("deployFaucet.js", ["--env", "test", "--pid-mode", "weird", "--dry-run"]).stderr, /--pid-mode/);
   assert.match(run("deployFaucet.js", ["--env", "test", "--max-payouts", "5", "--dry-run"]).stderr, /only apply with --pid-mode prolific/);
   assert.equal(run("deployFaucet.js", ["--env", "test", "--pid-mode", "prolific", "--max-payouts", "40", "--dry-run"]).status, 0);
+  // open mode: the cap is required, a warning is printed
+  assert.match(run("deployFaucet.js", ["--env", "test", "--pid-mode", "open", "--dry-run"]).stderr, /--max-payouts.*--pid-mode open/);
+  const open = run("deployFaucet.js", ["--env", "test", "--pid-mode", "open", "--max-payouts", "40", "--dry-run"]);
+  assert.equal(open.status, 0);
+  assert.match(open.stderr, /does not verify identity/);
   assert.match(run("deployFaucet.js", ["--env", "test", "--artifact-bucket", "b", "--secret-arn", ARN, "--faucet-address", "0x0000000000000000000000000000000000000001"]).stderr, /--admin-secret-arn is required/);
   assert.match(readFileSync(path.join(here, "deployFaucet.js"), "utf8"), /"--amount-wei", "1500000000000000000"/);
 });

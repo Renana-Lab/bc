@@ -11,7 +11,10 @@
 //    to an IP without the salt, cannot be linked across windows, live in a SEPARATE table with a short TTL,
 //    and never contain or reference a participant code (the code table never contains an IP).
 //  * The faucet key is read from AWS Secrets Manager only, held in memory, never logged.
-//  * Two pid modes. allowlist (default): only pre-inserted hashes can claim. prolific: any 24-hex id can claim once;
+//  * Three pid modes. allowlist (default): only pre-inserted hashes can claim. prolific: any 24-hex id can claim once;
+//    open: ANY pid of 1-128 printable ASCII characters (no whitespace inside, trimmed, case-sensitive) can claim once.
+//    Open mode does NOT verify identity: anyone who can reach the faucet can invent pids. Its only protections are
+//    FAUCET_MAX_PAYOUTS (required), the rate limits, the admin open/closed switch and the optional study/experiment checks.
 //    the first claim inserts its hash, and FAUCET_MAX_PAYOUTS caps the number of payments with an atomic counter.
 //  * An admin-controlled open/closed switch (DynamoDB item, closed by default) gates /claim. The admin password is
 //    only ever compared against a scrypt hash from Secrets Manager and is never logged.
@@ -22,6 +25,8 @@ const { Wallet, Transaction, getAddress, isAddress } = require("ethers");
 
 const PID_PATTERN = /^(?=.*[A-Za-z])[A-Za-z0-9]{8,24}$/; // same rule as src/real_ethereum/wallets/participantId.mjs
 const PROLIFIC_PID_PATTERN = /^[a-fA-F0-9]{24}$/; // Prolific participant id
+const OPEN_PID_PATTERN = /^[!-~]{1,128}$/; // open mode: printable ASCII, no whitespace or control characters
+const PID_MODES = ["allowlist", "prolific", "open"];
 const SAPPHIRE_CHAIN_IDS = new Set([23293, 23295]); // localnet, testnet. Mainnet (23294) is deliberately refused.
 const MAX_BODY_BYTES = 2000;
 // Sapphire needs a little more than the 21000 of a plain transfer (measured: 22132 used, 21000 reverts).
@@ -63,11 +68,11 @@ const loadConfig = (env = process.env) => {
   const amountWei = BigInt(env.FAUCET_AMOUNT_WEI || "0");
   if (amountWei <= 0n) throw new Error("FAUCET_AMOUNT_WEI must be set to a positive amount");
   const pidMode = String(env.FAUCET_PID_MODE || "allowlist").toLowerCase();
-  if (pidMode !== "allowlist" && pidMode !== "prolific") throw new Error("FAUCET_PID_MODE must be allowlist or prolific");
+  if (!PID_MODES.includes(pidMode)) throw new Error("FAUCET_PID_MODE must be allowlist, prolific or open");
   let maxPayouts = null;
-  if (pidMode === "prolific") {
-    // Fail closed: without an explicit cap the faucet must not start in prolific mode.
-    if (!/^[1-9][0-9]{0,9}$/.test(String(env.FAUCET_MAX_PAYOUTS ?? ""))) throw new Error("FAUCET_MAX_PAYOUTS must be a positive integer in prolific mode");
+  if (pidMode === "prolific" || pidMode === "open") {
+    // Fail closed: without an explicit cap the faucet must not start in prolific or open mode.
+    if (!/^[1-9][0-9]{0,9}$/.test(String(env.FAUCET_MAX_PAYOUTS ?? ""))) throw new Error("FAUCET_MAX_PAYOUTS must be a positive integer in prolific and open mode");
     maxPayouts = Number(env.FAUCET_MAX_PAYOUTS);
   }
   return {
@@ -93,8 +98,11 @@ const loadConfig = (env = process.env) => {
 
 const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, getAdminSecret, chain, config, now = () => Date.now(), log = console.log }) => {
   if (!SAPPHIRE_CHAIN_IDS.has(config.chainId)) throw new Error("Unsupported chain id");
-  const prolific = config.pidMode === "prolific";
-  if (prolific && !(Number.isInteger(config.maxPayouts) && config.maxPayouts > 0)) throw new Error("FAUCET_MAX_PAYOUTS must be a positive integer in prolific mode");
+  const openMode = config.pidMode === "open";
+  // prolific and open both accept ids that are not pre-inserted: the first claim inserts the hash and takes a payout slot.
+  const prolific = config.pidMode === "prolific" || openMode;
+  if (config.pidMode !== undefined && !PID_MODES.includes(config.pidMode)) throw new Error("Unsupported pid mode");
+  if (prolific && !(Number.isInteger(config.maxPayouts) && config.maxPayouts > 0)) throw new Error("FAUCET_MAX_PAYOUTS must be a positive integer in prolific and open mode");
   const adminRateLimit = config.adminRateLimit ?? 5;
   const adminGlobalRateLimit = config.adminGlobalRateLimit ?? 300;
   const adminSecretTtlMs = config.adminSecretTtlMs ?? 60_000;
@@ -231,7 +239,7 @@ const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, getAdminSecret
       return { open: false, updatedAt: null };
     }
   };
-  const publicState = (state) => ({ open: state.open, updatedAt: state.updatedAt ? new Date(state.updatedAt * 1000).toISOString() : null });
+  const publicState = (state) => ({ open: state.open, updatedAt: state.updatedAt ? new Date(state.updatedAt * 1000).toISOString() : null, pidMode: config.pidMode || "allowlist" });
 
   // Counter scopes for one request: the current window, its TTL and the (salted, /64-normalised) caller key.
   const counters = async (request, callerScope, globalScope) => {
@@ -271,7 +279,7 @@ const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, getAdminSecret
     return raw;
   };
 
-  // GET /status: public, exposes only { open, updatedAt }.
+  // GET /status: public, exposes only { open, updatedAt, pidMode } (pidMode lets the browser decide which ids to send).
   const status = async (request) => {
     if (await overLimit(request, "st:", "st-global", config.rateLimit, config.globalRateLimit)) return rateLimited();
     return json(200, publicState(await readState()));
@@ -332,12 +340,15 @@ const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, getAdminSecret
       let body;
       try { body = JSON.parse(raw || "{}"); } catch { return json(400, { error: "bad_request" }); }
       const { pid, address, studyId, experimentCode } = body || {};
-      const pidOk = typeof pid === "string" && (prolific ? PROLIFIC_PID_PATTERN.test(pid) : PID_PATTERN.test(pid));
+      // open mode: surrounding whitespace is trimmed, everything else is used exactly as sent (case-sensitive).
+      const pidValue = typeof pid === "string" ? (openMode ? pid.trim() : pid) : "";
+      const pidOk = typeof pid === "string" && (openMode ? OPEN_PID_PATTERN.test(pidValue) : prolific ? PROLIFIC_PID_PATTERN.test(pidValue) : PID_PATTERN.test(pidValue));
       if (!pidOk || typeof address !== "string" || !isAddress(address)) return json(400, { error: "bad_request" });
       if ((studyId !== undefined && typeof studyId !== "string") || (experimentCode !== undefined && typeof experimentCode !== "string")) return json(400, { error: "bad_request" });
       const to = getAddress(address);
       // Prolific ids are hex: fold the case so "ABC.." and "abc.." cannot be paid as two participants.
-      pidHash = sha256(prolific ? pid.toLowerCase() : pid);
+      // Open pids are opaque strings: never fold them ("Abc" and "abc" are different payout keys).
+      pidHash = sha256(prolific && !openMode ? pidValue.toLowerCase() : pidValue);
 
       // 4. Optional study / experiment checks (prolific mode), fail closed, before anything is reserved.
       if (prolific) {
@@ -469,4 +480,4 @@ const handler = async (request) => {
   return cachedHandler(request);
 };
 
-module.exports = { createFaucetHandler, createEthersChain, handler, loadConfig, scrub, sha256, PID_PATTERN, PROLIFIC_PID_PATTERN, normalizeIp };
+module.exports = { createFaucetHandler, createEthersChain, handler, loadConfig, scrub, sha256, PID_PATTERN, PROLIFIC_PID_PATTERN, OPEN_PID_PATTERN, normalizeIp };

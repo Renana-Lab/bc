@@ -30,7 +30,7 @@ const LocalWalletPanel = () => {
   const [funded, setFunded] = useState(false);
   const [balance, setBalance] = useState(null);
   // A Prolific id (?PROLIFIC_PID= / ?pid=) or lab code, plus the optional study and experiment values.
-  const { pid, studyId, experimentCode } = useMemo(() => {
+  const { pid: strictPid, openPid, studyId, experimentCode } = useMemo(() => {
     let storage;
     try { storage = window.sessionStorage; } catch { storage = undefined; }
     const context = getParticipantContext({ search: window.location.search, storage });
@@ -38,6 +38,9 @@ const LocalWalletPanel = () => {
     return context;
   }, []);
   const faucetUrl = process.env.REACT_APP_FAUCET_URL;
+  const [faucetPidMode, setFaucetPidMode] = useState(null); // from GET /status; null = unknown
+  // In open mode the server accepts any printable-ASCII id and decides; otherwise only the strict formats are sent.
+  const pid = faucetPidMode === "open" ? openPid || strictPid : strictPid;
 
   // Informational only: a failed read just shows a dash.
   const loadBalance = async () => {
@@ -53,7 +56,11 @@ const LocalWalletPanel = () => {
   useEffect(() => {
     if (!faucetUrl || !state.address) return undefined;
     let cancelled = false;
-    fetchFaucetStatus({ faucetUrl }).then((status) => { if (!cancelled) setFaucetOpen(status.open); });
+    fetchFaucetStatus({ faucetUrl }).then((status) => {
+      if (cancelled) return;
+      setFaucetOpen(status.open);
+      setFaucetPidMode(status.pidMode);
+    });
     return () => { cancelled = true; };
   }, [faucetUrl, state.address]);
   const requestFunds = () => run(async () => {

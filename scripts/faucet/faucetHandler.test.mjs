@@ -408,6 +408,123 @@ test("prolific: two parallel first claims for the same new id pay only once", as
   assert.equal(store.shared.budget, 1, "one slot for one payment");
 });
 
+// ---------------------------------------------------------------------------------------------
+// Open pid mode: any trimmed printable-ASCII id of 1-128 characters, case-sensitive, paid once, capped
+// ---------------------------------------------------------------------------------------------
+const OPEN = { pidMode: "open", maxPayouts: 3 };
+
+test("open: a non-hex pid is accepted, paid once, and used case-sensitively as the payout key", async () => {
+  const { claim, chain, store } = await setup({ config: OPEN });
+  const to = addr();
+  const first = await claim("Participant_42!", to);
+  assert.equal(first.statusCode, 200);
+  assert.equal(parse(first).status, "paid");
+  const again = await claim("Participant_42!", to);
+  assert.equal(parse(again).status, "already_paid");
+  assert.equal(parse(again).txHash, parse(first).txHash);
+  assert.equal((await claim("Participant_42!", addr())).statusCode, 403, "another wallet cannot reuse the pid");
+  assert.equal(chain.sent.length, 1, "paid exactly once");
+  assert.equal(store.pids.has(sha256("Participant_42!")), true, "stored under the sha256 of the exact string");
+  assert.equal(store.pids.has("Participant_42!"), false, "the raw pid is never stored");
+  // Case-sensitive: a different case is a different participant and is paid separately (NOT lowercased).
+  assert.equal(store.pids.has(sha256("participant_42!")), false);
+  const lower = await claim("participant_42!", addr());
+  assert.equal(lower.statusCode, 200);
+  assert.equal(store.pids.has(sha256("participant_42!")), true);
+  assert.equal(chain.sent.length, 2);
+});
+
+test("open: surrounding whitespace is trimmed (same payout key), inner whitespace is rejected", async () => {
+  const { claim, chain } = await setup({ config: OPEN });
+  const to = addr();
+  assert.equal((await claim("  abc-1  ", to)).statusCode, 200);
+  assert.equal(parse(await claim("abc-1", to)).status, "already_paid");
+  assert.equal(parse(await claim("\tabc-1\n", to)).status, "already_paid");
+  assert.equal(chain.sent.length, 1);
+  for (const bad of ["a b", "a\tb", "a\nb"]) assert.equal((await claim(bad, addr())).statusCode, 400, JSON.stringify(bad));
+});
+
+test("open: empty, too long, control-character and non-ASCII pids are 400 and nothing is reserved or paid", async () => {
+  const { claim, chain, store } = await setup({ config: OPEN });
+  const before = store.pids.size;
+  const bad = ["", "   ", "x".repeat(129), `a${String.fromCharCode(0)}b`, "a\u0007b", "a\u007fb", "café", "שלום", "a​b", 12345, null, {}, ["a"]];
+  for (const pid of bad) assert.equal((await claim(pid, addr())).statusCode, 400, JSON.stringify(pid));
+  assert.equal((await claim("ok", "0x12")).statusCode, 400);
+  assert.equal(chain.sent.length, 0);
+  assert.equal(store.pids.size, before, "nothing inserted");
+  assert.equal(store.shared.budget ?? 0, 0, "no payout slot taken");
+  // Boundaries are accepted.
+  assert.equal((await claim("x", addr())).statusCode, 200);
+  assert.equal((await claim("y".repeat(128), addr())).statusCode, 200);
+  assert.equal((await claim("!~", addr())).statusCode, 200);
+});
+
+test("open: FAUCET_MAX_PAYOUTS is required (fails closed) and the cap is enforced", async () => {
+  for (const value of [undefined, "", "0", "-1", "1.5", "abc"]) {
+    assert.throws(() => loadConfig({ CHAIN_ID: "23295", FAUCET_AMOUNT_WEI: "5", FAUCET_PID_MODE: "open", FAUCET_MAX_PAYOUTS: value }), /FAUCET_MAX_PAYOUTS/, String(value));
+  }
+  const cfg = loadConfig({ CHAIN_ID: "23295", FAUCET_AMOUNT_WEI: "5", FAUCET_PID_MODE: "OPEN", FAUCET_MAX_PAYOUTS: "40" });
+  assert.deepEqual([cfg.pidMode, cfg.maxPayouts], ["open", 40]);
+  assert.throws(() => createFaucetHandler({ store: createMemoryStore(), chain: fakeChain(), config: { ...CONFIG, pidMode: "open" } }), /FAUCET_MAX_PAYOUTS/);
+
+  const { claim, chain, store } = await setup({ config: { ...OPEN, maxPayouts: 2 } });
+  const first = { pid: "alpha", to: addr() };
+  assert.equal((await claim(first.pid, first.to)).statusCode, 200);
+  assert.equal((await claim("beta", addr())).statusCode, 200);
+  const over = await claim("gamma", addr());
+  assert.equal(over.statusCode, 403);
+  assert.equal(parse(over).error, "budget_exhausted");
+  assert.equal(chain.sent.length, 2);
+  assert.equal(parse(await claim(first.pid, first.to)).status, "already_paid", "already paid pids are still served at the cap");
+  assert.equal(store.shared.budget, 2);
+});
+
+test("open: parallel claims never exceed the cap and the same pid is paid once", async () => {
+  const { claim, chain, store } = await setup({ config: { ...OPEN, maxPayouts: 3 } });
+  const results = await Promise.all(Array.from({ length: 10 }, (_, i) => claim(`pid-${i}`, addr())));
+  assert.equal(results.filter((r) => r.statusCode === 200).length, 3);
+  assert.equal(chain.sent.length, 3);
+  assert.equal(store.shared.budget, 3);
+  const same = await setup({ config: OPEN });
+  const to = addr();
+  const dup = await Promise.all([same.claim("dup!", to), same.claim("dup!", to), same.claim("dup!", to)]);
+  assert.equal(dup.filter((r) => r.statusCode === 200 && parse(r).status === "paid").length, 1);
+  assert.equal(same.chain.sent.length, 1);
+});
+
+test("open: the admin switch, study and experiment checks, and /status pidMode still apply", async () => {
+  const closed = await setup({ closed: true, config: OPEN });
+  const refused = await closed.claim("someone", addr());
+  assert.equal(parse(refused).error, "faucet_closed");
+  assert.equal(closed.chain.sent.length, 0);
+  assert.equal(closed.store.shared.budget ?? 0, 0);
+  assert.equal(parse(await call(closed.handler, "/status", "GET")).pidMode, "open");
+
+  const t = await setup({ config: { ...OPEN, requiredStudyId: "S1", experimentCode: "EXP" } });
+  assert.equal(parse(await t.claim("someone", addr())).error, "not_eligible");
+  assert.equal(parse(await t.claim("someone", addr(), "203.0.113.7", { studyId: "S2", experimentCode: "EXP" })).error, "not_eligible");
+  assert.equal(t.chain.sent.length, 0);
+  assert.equal((await t.claim("someone", addr(), "203.0.113.7", { studyId: "S1", experimentCode: "EXP" })).statusCode, 200);
+});
+
+test("open: logs never contain the raw pid", async () => {
+  const { claim, logs } = await setup({ config: OPEN });
+  await claim("secret-looking-pid", addr());
+  await claim("secret-looking-pid", addr());
+  assert.equal(logs.join("\n").includes("secret-looking-pid"), false);
+});
+
+test("prolific and allowlist modes are unchanged by open mode", async () => {
+  const { claim, store } = await setup({ config: PROLIFIC });
+  for (const pid of ["Participant_42!", "abc", "z".repeat(24)]) assert.equal((await claim(pid, addr())).statusCode, 400, pid);
+  const id = hex24();
+  assert.equal((await claim(id.toUpperCase(), addr())).statusCode, 200);
+  assert.equal(store.pids.has(sha256(id)), true, "folded to lowercase before hashing");
+  assert.equal(parse(await call((await setup({ config: PROLIFIC })).handler, "/status", "GET")).pidMode, "prolific");
+  const allow = await setup();
+  assert.equal(parse(await allow.claim("Participant_42!", addr())).error, "bad_request", "an invented pid is not valid in allowlist mode");
+});
+
 test("switch: closed by default (missing or unreadable state), claims refused before reserve, in both modes", async () => {
   for (const config of [undefined, PROLIFIC]) {
     const { claim, pids, chain, store } = await setup({ closed: true, config });
@@ -426,14 +543,14 @@ test("switch: closed by default (missing or unreadable state), claims refused be
   }
 });
 
-test("switch: /status is public and returns only open and updatedAt", async () => {
+test("switch: /status is public and returns only open, updatedAt and pidMode", async () => {
   const { handler, store } = await setup({ closed: true });
   const closed = await call(handler, "/status", "GET");
   assert.equal(closed.statusCode, 200);
-  assert.deepEqual(parse(closed), { open: false, updatedAt: null });
+  assert.deepEqual(parse(closed), { open: false, updatedAt: null, pidMode: "allowlist" });
   await store.setState(true, 1_700_000_000);
   const open = parse(await call(handler, "/status", "GET"));
-  assert.deepEqual(Object.keys(open).sort(), ["open", "updatedAt"]);
+  assert.deepEqual(Object.keys(open).sort(), ["open", "pidMode", "updatedAt"]);
   assert.equal(open.open, true);
   assert.equal(open.updatedAt, new Date(1_700_000_000_000).toISOString());
   assert.equal((await call(handler, "/status", "POST", {})).statusCode, 405);

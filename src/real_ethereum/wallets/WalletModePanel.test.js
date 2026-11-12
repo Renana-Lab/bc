@@ -70,6 +70,43 @@ test("locking the same wallet keeps backup progress", async () => {
   expect(step("Save an encrypted backup").textContent).toContain("✓");
 });
 
+describe("faucet step with a non-hex pid", () => {
+  const OPEN_PID = "Participant_42!";
+  const reply = (status, body) => ({ status, ok: status >= 200 && status < 300, json: async () => body });
+  beforeEach(() => {
+    process.env.REACT_APP_FAUCET_URL = "https://faucet.example";
+    window.history.pushState({}, "", `/?pid=${encodeURIComponent(OPEN_PID)}`);
+  });
+  afterEach(() => { delete process.env.REACT_APP_FAUCET_URL; window.sessionStorage.clear(); });
+
+  test("an open-mode faucet receives the non-hex pid exactly as typed (case preserved)", async () => {
+    const calls = [];
+    global.fetch = jest.fn(async (url, init) => {
+      calls.push({ url, init });
+      return url.endsWith("/status") ? reply(200, { open: true, updatedAt: null, pidMode: "open" }) : reply(200, { status: "paid" });
+    });
+    render(<WalletModePanel />);
+    await create();
+    fireEvent.click(await screen.findByRole("button", { name: "Request test funds" }));
+    await waitFor(() => expect(calls.some((c) => c.url.endsWith("/claim"))).toBe(true));
+    expect(JSON.parse(calls.find((c) => c.url.endsWith("/claim")).init.body).pid).toBe(OPEN_PID);
+    await screen.findByText(/Test funds sent/); // let the claim finish before the test ends
+  });
+
+  test("a prolific or allowlist faucet never receives it (the button is not offered)", async () => {
+    for (const pidMode of ["prolific", "allowlist"]) {
+      global.fetch = jest.fn(async (url) => (url.endsWith("/status") ? reply(200, { open: true, updatedAt: null, pidMode }) : reply(200, { status: "paid" })));
+      const { unmount } = render(<WalletModePanel />);
+      await create();
+      await waitFor(() => expect(global.fetch).toHaveBeenCalled());
+      expect(screen.queryByRole("button", { name: "Request test funds" })).toBeNull();
+      expect(global.fetch.mock.calls.some(([url]) => url.endsWith("/claim"))).toBe(false);
+      unmount();
+      window.history.pushState({}, "", `/?pid=${encodeURIComponent(OPEN_PID)}`);
+    }
+  });
+});
+
 describe("faucet step with a Prolific link", () => {
   const PID = "5f1a2b3c4d5e6f7a8b9c0d1e";
   const reply = (status, body) => ({ status, ok: status >= 200 && status < 300, json: async () => body });

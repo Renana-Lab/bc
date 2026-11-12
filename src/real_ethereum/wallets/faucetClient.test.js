@@ -38,7 +38,11 @@ describe("faucet client", () => {
   });
 
   test("/status is read as { open, updatedAt } and failures mean unknown, never an exception", async () => {
-    expect(await fetchFaucetStatus({ faucetUrl: "https://f.example", fetchImpl: async () => reply(200, { open: true, updatedAt: "2026-01-01T00:00:00.000Z" }) })).toEqual({ open: true, updatedAt: "2026-01-01T00:00:00.000Z" });
+    expect(await fetchFaucetStatus({ faucetUrl: "https://f.example", fetchImpl: async () => reply(200, { open: true, updatedAt: "2026-01-01T00:00:00.000Z" }) })).toEqual({ open: true, updatedAt: "2026-01-01T00:00:00.000Z", pidMode: null });
+    for (const pidMode of ["allowlist", "prolific", "open"]) {
+      expect((await fetchFaucetStatus({ faucetUrl: "https://f.example", fetchImpl: async () => reply(200, { open: true, updatedAt: null, pidMode }) })).pidMode).toBe(pidMode);
+    }
+    expect((await fetchFaucetStatus({ faucetUrl: "https://f.example", fetchImpl: async () => reply(200, { open: true, pidMode: "weird" }) })).pidMode).toBeNull();
     expect((await fetchFaucetStatus({ faucetUrl: "https://f.example", fetchImpl: async () => { throw new Error("offline"); } })).open).toBeNull();
     expect((await fetchFaucetStatus({ faucetUrl: "https://f.example", fetchImpl: async () => reply(500, {}) })).open).toBeNull();
   });
