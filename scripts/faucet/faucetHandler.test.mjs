@@ -493,3 +493,100 @@ test("switch: the admin password never appears in logs, responses or stored reco
   for (const secret of [guess, password]) assert.equal(everything.includes(secret), false, "password leaked");
   assert.ok(logs.length > 0);
 });
+
+// ---------------------------------------------------------------------------------------------
+// Review fixes: failed-only admin limiter, /64 keys, secret TTL, closed pass-through
+// ---------------------------------------------------------------------------------------------
+const { normalizeIp } = require("../../infrastructure/faucet/handler.js");
+
+test("admin limiter: 100 wrong passwords from several IPs do not block the right password from a new IP", async () => {
+  const { admin, store } = await adminSetup();
+  for (let i = 0; i < 100; i += 1) {
+    const res = await admin(true, `wrong password ${i}`, `198.51.100.${(i % 25) + 1}`);
+    assert.equal(res.statusCode, 401, `attempt ${i}`); // 4 failures per IP: under the per-caller limit
+  }
+  const ok = await admin(true, "correct horse battery staple", "203.0.113.200");
+  assert.equal(ok.statusCode, 200);
+  assert.equal(parse(ok).open, true);
+  assert.equal((await store.getState()).open, true);
+});
+
+test("admin limiter: only failures count per caller; a caller with the right password is never throttled", async () => {
+  const { admin } = await adminSetup();
+  for (let i = 0; i < 12; i += 1) assert.equal((await admin(i % 2 === 0, "correct horse battery staple", "198.51.100.5")).statusCode, 200);
+  const codes = [];
+  for (let i = 0; i < 7; i += 1) codes.push((await admin(true, "wrong", "198.51.100.6")).statusCode);
+  assert.deepEqual(codes, [401, 401, 401, 401, 401, 429, 429]);
+  assert.equal((await admin(true, "correct horse battery staple", "198.51.100.6")).statusCode, 429, "the guessing caller stays blocked");
+});
+
+test("admin limiter: the global failure budget is modest but defaults to 300, and trips for everyone beyond it", async () => {
+  assert.equal(loadConfig({ CHAIN_ID: "23295", FAUCET_AMOUNT_WEI: "5" }).adminGlobalRateLimit, 300);
+  const { admin } = await adminSetup({ config: { adminGlobalRateLimit: 10 } });
+  for (let i = 0; i < 10; i += 1) assert.equal((await admin(true, "wrong", `192.0.2.${i + 1}`)).statusCode, 401);
+  assert.equal((await admin(true, "wrong", "192.0.2.99")).statusCode, 429);
+});
+
+test("IPv6 callers are keyed on the /64 prefix; IPv4-mapped addresses count as IPv4", async () => {
+  assert.equal(normalizeIp("2001:db8:1:2:aaaa:bbbb:cccc:dddd"), normalizeIp("2001:db8:1:2::1"));
+  assert.equal(normalizeIp("2001:db8:1:2:0:0:0:1"), "2001:0db8:0001:0002::/64");
+  assert.notEqual(normalizeIp("2001:db8:1:3::1"), normalizeIp("2001:db8:1:2::1"));
+  assert.equal(normalizeIp("::ffff:203.0.113.9"), "203.0.113.9");
+  assert.equal(normalizeIp("203.0.113.9"), "203.0.113.9");
+  const { admin } = await adminSetup();
+  const codes = [];
+  for (let i = 0; i < 7; i += 1) codes.push((await admin(true, "wrong", `2001:db8:55:66:${i}:${i}:${i}:${i + 1}`)).statusCode);
+  assert.deepEqual(codes, [401, 401, 401, 401, 401, 429, 429], "rotating inside one /64 does not reset the limit");
+});
+
+test("admin secret: the cached hash expires, so a changed password takes effect after the TTL", async () => {
+  const oldRecord = await hashPassword("old password for the admin");
+  const newRecord = await hashPassword("new password for the admin");
+  let current = oldRecord;
+  let reads = 0;
+  const { admin, clock } = await adminSetup({ getAdminSecret: async () => { reads += 1; return current; } });
+  const attempt = (pw, n) => admin(true, pw, `198.51.100.${n}`);
+  assert.equal((await attempt("old password for the admin", 1)).statusCode, 200);
+  current = newRecord;
+  assert.equal((await attempt("old password for the admin", 2)).statusCode, 200, "within the TTL the cached hash is still used");
+  assert.equal(reads, 1);
+  clock.ms += 61_000;
+  assert.equal((await attempt("old password for the admin", 3)).statusCode, 401, "after the TTL the new hash is read");
+  assert.equal((await attempt("new password for the admin", 4)).statusCode, 200);
+  assert.equal(reads, 2);
+});
+
+test("closed: a paid pid still gets already_paid, a pending reservation with a signed tx may resume, new reservations are refused", async () => {
+  for (const config of [undefined, PROLIFIC]) {
+    const { claim, store, chain, clock, pids } = await setup({ config });
+    const pid = config ? hex24() : pids[0];
+    const to = addr();
+    assert.equal((await claim(pid, to)).statusCode, 200);
+    await store.setState(false, 5);
+    const again = await claim(pid, to);
+    assert.equal(again.statusCode, 200);
+    assert.equal(parse(again).status, "already_paid");
+    assert.equal(parse(await claim(pid, addr())).error, "faucet_closed", "another address learns nothing");
+    // A brand-new id is refused without any write or slot.
+    const fresh = config ? hex24() : pids[1];
+    const budgetBefore = store.shared.budget;
+    const sizeBefore = store.pids.size;
+    assert.equal(parse(await claim(fresh, addr())).error, "faucet_closed");
+    assert.equal(store.shared.budget, budgetBefore);
+    assert.equal(store.pids.size, sizeBefore);
+    if (!config) assert.equal(store.pids.get(sha256(pids[1])).status, "unclaimed");
+    // In-flight: a payment that signed but failed to broadcast completes after the faucet closes.
+    await store.setState(true, 6);
+    const flying = config ? hex24() : pids[2];
+    const flyingTo = addr();
+    chain.state.failNextSend = true;
+    assert.equal((await claim(flying, flyingTo)).statusCode, 500);
+    await store.setState(false, 7);
+    clock.ms += 120_000;
+    assert.equal((await claim(flying, addr())).statusCode, 403, "other address refused");
+    const resumed = await claim(flying, flyingTo);
+    assert.equal(resumed.statusCode, 200, "the signed transaction is finished while closed");
+    assert.equal(chain.mined.size, 2);
+    if (config) assert.equal(store.shared.budget, 2, "no extra slot was taken");
+  }
+});

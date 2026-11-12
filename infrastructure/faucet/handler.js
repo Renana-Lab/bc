@@ -27,6 +27,21 @@ const MAX_BODY_BYTES = 2000;
 // Sapphire needs a little more than the 21000 of a plain transfer (measured: 22132 used, 21000 reverts).
 const TRANSFER_GAS = 60000n;
 
+// IPv6 callers are keyed on their /64 prefix (one subscriber can rotate through the whole /64 at will);
+// IPv4-mapped IPv6 addresses count as the IPv4 address.
+const normalizeIp = (ip) => {
+  const text = String(ip || "unknown").toLowerCase().split("%")[0];
+  if (!text.includes(":")) return text;
+  const mapped = text.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  if (mapped) return mapped[1];
+  const [head, tail] = text.split("::");
+  const front = head ? head.split(":") : [];
+  const back = tail ? tail.split(":") : [];
+  const groups = text.includes("::") ? [...front, ...Array(Math.max(8 - front.length - back.length, 0)).fill("0"), ...back] : front;
+  if (groups.length !== 8 || !groups.every((group) => /^[0-9a-f]{1,4}$/.test(group))) return text;
+  return `${groups.slice(0, 4).map((group) => group.padStart(4, "0")).join(":")}::/64`;
+};
+
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
 
 const json = (statusCode, body, extraHeaders = {}) => ({
@@ -63,7 +78,8 @@ const loadConfig = (env = process.env) => {
     requiredStudyId: env.FAUCET_REQUIRED_STUDY_ID || "",
     experimentCode: env.FAUCET_EXPERIMENT_CODE || "",
     adminRateLimit: Number(env.ADMIN_RATE_LIMIT_PER_WINDOW || 5),
-    adminGlobalRateLimit: Number(env.ADMIN_GLOBAL_RATE_LIMIT_PER_WINDOW || 30),
+    adminGlobalRateLimit: Number(env.ADMIN_GLOBAL_RATE_LIMIT_PER_WINDOW || 300),
+    adminSecretTtlMs: Number(env.ADMIN_SECRET_TTL_SECONDS || 60) * 1000,
     rateLimit: Number(env.RATE_LIMIT_PER_WINDOW || 20),
     globalRateLimit: Number(env.GLOBAL_RATE_LIMIT_PER_WINDOW || 600),
     rateWindowSeconds: Number(env.RATE_WINDOW_SECONDS || 600),
@@ -80,7 +96,8 @@ const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, getAdminSecret
   const prolific = config.pidMode === "prolific";
   if (prolific && !(Number.isInteger(config.maxPayouts) && config.maxPayouts > 0)) throw new Error("FAUCET_MAX_PAYOUTS must be a positive integer in prolific mode");
   const adminRateLimit = config.adminRateLimit ?? 5;
-  const adminGlobalRateLimit = config.adminGlobalRateLimit ?? 30;
+  const adminGlobalRateLimit = config.adminGlobalRateLimit ?? 300;
+  const adminSecretTtlMs = config.adminSecretTtlMs ?? 60_000;
   // One signer per process: signing/nonce selection must not interleave (the stack also sets
   // reserved concurrency 1 so there is a single container).
   let queue = Promise.resolve();
@@ -97,7 +114,7 @@ const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, getAdminSecret
       try { salt = (await getRateSalt?.()) || null; } catch { salt = null; }
       if (!salt) salt = crypto.randomBytes(32).toString("hex");
     }
-    return crypto.createHmac("sha256", salt).update(`ip:${ip || "unknown"}:${windowId}`).digest("hex").slice(0, 32);
+    return crypto.createHmac("sha256", salt).update(`ip:${normalizeIp(ip)}:${windowId}`).digest("hex").slice(0, 32);
   };
   let cachedWallet = null;
   const getWallet = async () => {
@@ -216,17 +233,22 @@ const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, getAdminSecret
   };
   const publicState = (state) => ({ open: state.open, updatedAt: state.updatedAt ? new Date(state.updatedAt * 1000).toISOString() : null });
 
-  // Counts this request against a per-caller and a global counter. Returns true when over the limit.
-  const overLimit = async (request, callerScope, globalScope, callerMax, globalMax) => {
+  // Counter scopes for one request: the current window, its TTL and the (salted, /64-normalised) caller key.
+  const counters = async (request, callerScope, globalScope) => {
     const nowSeconds = Math.floor(now() / 1000);
     const windowId = Math.floor(nowSeconds / config.rateWindowSeconds);
     // The record is only needed until the end of its window (plus a short grace): short TTL.
     const expiresAt = (windowId + 1) * config.rateWindowSeconds + (config.rateTtlGraceSeconds ?? 60);
     const caller = await callerKey(request.requestContext?.http?.sourceIp, windowId);
-    const [callerCount, globalCount] = await Promise.all([
-      store.hit(`${callerScope}${caller}`, windowId, expiresAt),
-      store.hit(globalScope, windowId, expiresAt),
+    const bump = (by) => Promise.all([
+      store.hit(`${callerScope}${caller}`, windowId, expiresAt, by),
+      store.hit(globalScope, windowId, expiresAt, by),
     ]);
+    return { bump };
+  };
+  // Counts this request against a per-caller and a global counter. Returns true when over the limit.
+  const overLimit = async (request, callerScope, globalScope, callerMax, globalMax) => {
+    const [callerCount, globalCount] = await (await counters(request, callerScope, globalScope)).bump(1);
     return callerCount > callerMax || globalCount > globalMax;
   };
   const rateLimited = () => json(429, { error: "rate_limited" }, { "retry-after": String(config.rateWindowSeconds) });
@@ -234,7 +256,7 @@ const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, getAdminSecret
   // Admin password hash from Secrets Manager, cached briefly so a changed password takes effect soon.
   let adminCache = { record: null, at: 0 };
   const adminRecord = async () => {
-    if (adminCache.record && now() - adminCache.at < 300_000) return adminCache.record;
+    if (adminCache.record && now() - adminCache.at < adminSecretTtlMs) return adminCache.record; // expires: a changed password takes effect within the TTL
     const record = (await getAdminSecret?.()) || null;
     adminCache = { record, at: now() };
     return record;
@@ -257,13 +279,19 @@ const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, getAdminSecret
     try {
       const raw = readBody(request);
       if (Buffer.byteLength(raw) > MAX_BODY_BYTES) return json(413, { error: "too_large" });
-      if (await overLimit(request, "adm:", "adm-global", adminRateLimit, adminGlobalRateLimit)) { event("admin_rate_limited"); return rateLimited(); }
+      // Only FAILED verifications count. Each attempt is counted up front (so parallel guesses cannot slip past the
+      // limit) and refunded when the password is right: an attacker burning failures from other IPs cannot block the
+      // admin's correct password, except by exhausting the modest global failure budget.
+      const { bump } = await counters(request, "admf:", "admf-global");
+      const [failures, globalFailures] = await bump(1);
+      if (failures > adminRateLimit || globalFailures > adminGlobalRateLimit) { event("admin_rate_limited"); return rateLimited(); }
       let body;
       try { body = JSON.parse(raw || "{}"); } catch { body = {}; }
       let record = null;
       try { record = await adminRecord(); } catch { record = null; }
       const ok = await verifyPassword(body?.password, record);
       if (!ok) { event("admin_denied"); return json(401, { error: "unauthorized" }); }
+      await bump(-1).catch(() => {}); // a correct password is not a failure
       if (typeof body.open !== "boolean") return json(400, { error: "bad_request" });
       const updatedAt = Math.floor(now() / 1000);
       await store.setState(body.open, updatedAt);
@@ -289,8 +317,8 @@ const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, getAdminSecret
         return rateLimited();
       }
 
-      // 2. The admin switch: closed (or unreadable) means no claim is processed at all.
-      if (!(await readState()).open) { event("claim_rejected", { reason: "closed" }); return json(403, { error: "faucet_closed" }); }
+      // 2. The admin switch. Closed (or unreadable) means no NEW reservation: see step 4b.
+      const isOpen = (await readState()).open;
 
       // 3. Validate input.
       let body;
@@ -309,6 +337,17 @@ const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, getAdminSecret
         if (config.experimentCode && !safeEqual(experimentCode ?? "", config.experimentCode)) { event("claim_rejected", { pid: pidHash.slice(0, 8), reason: "experiment" }); return json(403, { error: "not_eligible" }); }
       }
 
+      // 4b. Closed: nothing is written and no slot is taken. Only a pid that is already paid (same address) is answered,
+      // and only a pending reservation that already signed a transaction may resume; anything new is refused.
+      if (!isOpen) {
+        const existing = await store.get(pidHash);
+        if (existing?.status === "paid" && existing.address === to.toLowerCase()) return json(200, { status: "already_paid", txHash: existing.txHash });
+        if (!(existing?.status === "pending" && existing.rawTx && existing.address === to.toLowerCase())) {
+          event("claim_rejected", { reason: "closed" });
+          return json(403, { error: "faucet_closed" });
+        }
+      }
+
       // 5. Reserve (exactly-once gate). In prolific mode the first claim of a new id inserts it.
       let reservation = await store.reserve(pidHash, to, nowSeconds, nowSeconds + config.leaseSeconds);
       if (reservation.outcome === "unknown" && prolific) {
@@ -325,6 +364,12 @@ const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, getAdminSecret
       if (reservation.outcome === "busy") return json(409, { error: "in_progress" }, { "retry-after": String(config.leaseSeconds) });
       if (reservation.previous?.address && reservation.previous.address !== to.toLowerCase()) {
         return json(403, { error: "not_eligible" });
+      }
+
+      if (!isOpen && !reservation.previous?.rawTx) { // state changed between the check and the reserve: undo, never start a new payment
+        await store.release(pidHash);
+        event("claim_rejected", { reason: "closed" });
+        return json(403, { error: "faucet_closed" });
       }
 
       // 6. Payout cap (prolific): take one slot atomically before paying; a released reservation gives it back.
@@ -403,14 +448,11 @@ const handler = async (request) => {
     const getPrivateKey = async () => (await readSecret()).privateKey;
     const getRateSalt = async () => (await readSecret()).rateLimitSalt;
     // Admin password hash (scrypt + salt) lives in its own secret; the password itself is never stored.
-    let adminPromise = null;
-    const getAdminSecret = () => {
+    // Not cached here: createFaucetHandler caches the record for adminSecretTtlMs (default 60 s), then reads it again.
+    const getAdminSecret = async () => {
       if (!process.env.FAUCET_ADMIN_SECRET_ID) return null;
-      if (!adminPromise) {
-        adminPromise = secrets.send(new GetSecretValueCommand({ SecretId: process.env.FAUCET_ADMIN_SECRET_ID })).then((result) => JSON.parse(result.SecretString || "{}"));
-        adminPromise.catch(() => { adminPromise = null; });
-      }
-      return adminPromise;
+      const result = await secrets.send(new GetSecretValueCommand({ SecretId: process.env.FAUCET_ADMIN_SECRET_ID }));
+      return JSON.parse(result.SecretString || "{}");
     };
     cachedHandler = createFaucetHandler({
       store: createDynamoStore({ table: process.env.FAUCET_TABLE, rateTable: process.env.RATE_TABLE }), getPrivateKey, getRateSalt, getAdminSecret, chain, config,
@@ -419,4 +461,4 @@ const handler = async (request) => {
   return cachedHandler(request);
 };
 
-module.exports = { createFaucetHandler, createEthersChain, handler, loadConfig, scrub, sha256, PID_PATTERN, PROLIFIC_PID_PATTERN };
+module.exports = { createFaucetHandler, createEthersChain, handler, loadConfig, scrub, sha256, PID_PATTERN, PROLIFIC_PID_PATTERN, normalizeIp };

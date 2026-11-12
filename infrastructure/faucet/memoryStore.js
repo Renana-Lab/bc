@@ -71,11 +71,11 @@ const createMemoryStore = () => {
       await tick();
       shared.state = { open: Boolean(open), updatedAt };
     },
-    async hit(scope, windowId, expiresAt) {
+    async hit(scope, windowId, expiresAt, by = 1) {
       await tick();
       const key = `${scope}#${windowId}`;
       const record = counters.get(key) || { count: 0, expiresAt };
-      record.count += 1;
+      record.count += by;
       record.expiresAt = expiresAt;
       counters.set(key, record);
       return record.count;

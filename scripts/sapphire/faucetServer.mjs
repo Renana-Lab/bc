@@ -4,12 +4,15 @@
 //   node scripts/sapphire/faucetServer.mjs            (listens on 127.0.0.1:8787; set REACT_APP_FAUCET_URL=http://127.0.0.1:8787)
 // It refuses to start unless the RPC is local, generates its own throwaway faucet key (funded from
 // the public localnet dev account) and prints a few participant links. No real keys belong here.
+// The faucet starts OPEN here (the real stack starts closed). GET /status works; POST /admin/state only works
+// if you set FAUCET_DEV_ADMIN_PASSWORD (a throwaway local value, hashed in memory; nothing is persisted).
 import http from "node:http";
 import { createRequire } from "node:module";
 import { HDNodeWallet, JsonRpcProvider, Mnemonic, Wallet } from "ethers";
 
 const require = createRequire(import.meta.url);
 const { createFaucetHandler, createEthersChain } = require("../../infrastructure/faucet/handler.js");
+const { hashPassword } = require("../../infrastructure/faucet/adminAuth.js");
 const { createMemoryStore } = require("../../infrastructure/faucet/memoryStore.js");
 const { generatePids, uploadPids } = require("../faucet/pidTools.js");
 
@@ -24,12 +27,15 @@ const faucetWallet = Wallet.createRandom();
 await (await funder.sendTransaction({ to: faucetWallet.address, value: 10n ** 19n })).wait();
 
 const store = createMemoryStore();
+await store.setState(true, Math.floor(Date.now() / 1000)); // localnet dev: open from the start
+const adminRecord = process.env.FAUCET_DEV_ADMIN_PASSWORD ? await hashPassword(process.env.FAUCET_DEV_ADMIN_PASSWORD) : null;
 const pids = generatePids(Number(process.env.FAUCET_PIDS || 5));
 await uploadPids(store, pids);
 const handle = createFaucetHandler({
   store,
   chain: createEthersChain(provider),
   getPrivateKey: async () => faucetWallet.privateKey,
+  getAdminSecret: async () => adminRecord,
   config: {
     chainId: 23293, amountWei: BigInt(process.env.FAUCET_AMOUNT_WEI || 10n ** 18n), rateLimit: 50, globalRateLimit: 500,
     rateWindowSeconds: 600, leaseSeconds: 60, confirmTimeoutMs: 30000,
@@ -40,11 +46,13 @@ http
   .createServer(async (request, response) => {
     response.setHeader("Access-Control-Allow-Origin", "http://localhost:3000");
     response.setHeader("Access-Control-Allow-Headers", "content-type");
+    response.setHeader("Access-Control-Allow-Methods", "GET, POST");
     if (request.method === "OPTIONS") return response.writeHead(204).end();
-    if (request.url !== "/claim") return response.writeHead(404).end();
+    const path = (request.url || "").split("?")[0];
+    if (!["/claim", "/status", "/admin/state"].includes(path)) return response.writeHead(404).end();
     let body = "";
     for await (const chunk of request) body += chunk;
-    const result = await handle({ body, requestContext: { http: { method: request.method, sourceIp: request.socket.remoteAddress } } });
+    const result = await handle({ rawPath: path, body, requestContext: { http: { method: request.method, sourceIp: request.socket.remoteAddress } } });
     response.writeHead(result.statusCode, result.headers).end(result.body);
   })
   .listen(8787, "127.0.0.1", () => {

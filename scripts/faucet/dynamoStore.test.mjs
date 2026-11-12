@@ -50,7 +50,7 @@ const fakeDynamo = () => {
         return {};
       }
       if (update.startsWith("ADD")) {
-        const next = (num(item?.count) || 0) + 1;
+        const next = (num(item?.count) || 0) + Number(values[":by"].N);
         items.set(key, { pk: { S: key }, count: { N: String(next) }, expiresAt: values[":exp"] });
         return { Attributes: { count: { N: String(next) } } };
       }

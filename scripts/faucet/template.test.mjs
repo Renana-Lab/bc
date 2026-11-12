@@ -118,3 +118,9 @@ test("setAdminPassword refuses non-interactive input and never echoes anything p
   assert.equal((result.stdout + result.stderr).includes("hunter2"), false);
   assert.equal(result.stdout, "", "no hash is printed without a terminal");
 });
+
+test("deploy script: the experiment code must use the same characters as the app's ?exp=", () => {
+  const withCode = (code) => spawnSync(process.execPath, [path.join(here, "deployFaucet.js"), "--env", "test", "--pid-mode", "prolific", "--max-payouts", "3", "--dry-run"], { encoding: "utf8", env: { ...process.env, AWS_PROFILE: "", FAUCET_EXPERIMENT_CODE: code } });
+  assert.equal(withCode("Exp_2026.v1~a-b").status, 0);
+  for (const bad of ["has space", "a,b", "x".repeat(65), "q=1&r", "é"]) assert.match(withCode(bad).stderr, /FAUCET_EXPERIMENT_CODE must match/, bad);
+});

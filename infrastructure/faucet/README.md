@@ -48,7 +48,7 @@ created only in the participant's browser. In both modes the faucet is **closed 
 | `FAUCET_PID_MODE` | `--pid-mode allowlist\|prolific` | Default `allowlist`. In `prolific` mode only `/^[a-fA-F0-9]{24}$/` is accepted (case-folded before hashing); the first claim of a new id inserts its sha256 and then proceeds. Same exactly-once, lease/retry and `already_paid` rules as before. |
 | `FAUCET_MAX_PAYOUTS` | `--max-payouts N` | **Required** in prolific mode (positive integer; startup fails otherwise). An atomic counter in the codes table; a new successful payment takes a slot, a released reservation (reverted transfer, empty faucet) gives it back. At the cap, `/claim` answers `403 budget_exhausted`; ids that were already paid still get `already_paid`. Independent of the 10-minute rate limit. |
 | `FAUCET_REQUIRED_STUDY_ID` | `--required-study-id` | Optional. If set, `body.studyId` must match (timing-safe), else `403 not_eligible` before anything is reserved. |
-| `FAUCET_EXPERIMENT_CODE` | env var `FAUCET_EXPERIMENT_CODE` when running `deployFaucet.js` | Optional static shared string; `body.experimentCode` must match (timing-safe). Stored as a CloudFormation `NoEcho` parameter, read from the environment (not argv), never logged. Re-set it on every deploy, otherwise it is cleared. |
+| `FAUCET_EXPERIMENT_CODE` | env var `FAUCET_EXPERIMENT_CODE` when running `deployFaucet.js` | Optional static shared string; `body.experimentCode` must match (timing-safe). It is a **shared, non-secret string** (it appears in the participants' links as `?exp=`), so it only keeps out people who know the faucet URL but not the link; it is not a credential. Allowed characters: `[A-Za-z0-9_.~-]`, 1-64. `deployFaucet.js` reads it from the environment and passes it as a CloudFormation `NoEcho` parameter, which does appear in the `aws cloudformation deploy` argument list on the machine that deploys, so do not use anything sensitive. It is never logged by the Lambda. Re-set it on every deploy, otherwise it is cleared. |
 | `FAUCET_ADMIN_SECRET_ID` | `--admin-secret-arn` | Secrets Manager secret holding the admin password **hash** (scrypt + salt). Required to deploy; the Lambda role may read it. |
 | `FAUCET_AMOUNT_WEI` | `--amount-wei` | Default is now `1500000000000000000` (1.5 TEST). |
 
@@ -73,9 +73,15 @@ The password is never stored, only a salted scrypt hash.
 
 1. `node scripts/faucet/setAdminPassword.js` prompts twice (hidden input, interactive terminal only) and prints one line of JSON
    (hash + salt, not the password). Nothing is written to a file and no AWS call is made.
-2. Store that JSON yourself, for example:
-   `aws secretsmanager create-secret --name test-bc-faucet/admin --secret-string '<printed JSON>'`
-   (change it later with `put-secret-value`; the Lambda caches it for up to 5 minutes). Do not commit the output.
+2. Store that JSON yourself. In PowerShell, inline JSON loses its quotes, so go through a temporary file (later password
+   changes use `put-secret-value` with the same `--secret-string file://...`):
+   ```powershell
+   $f = Join-Path $env:TEMP 'admin-hash.json'
+   node scripts/faucet/setAdminPassword.js | Out-File -Encoding ascii -NoNewline $f
+   aws secretsmanager create-secret --name test-bc-faucet/admin --secret-string "file://$($f -replace '\\','/')" --region us-east-1
+   Remove-Item $f
+   ```
+   The Lambda re-reads the secret at most every 60 seconds, so a changed password takes effect within a minute. Do not commit the output.
 3. Pass the secret ARN to `deployFaucet.js --admin-secret-arn`.
 
 ### Opening and closing the faucet (admins, no AWS access needed)
@@ -83,9 +89,17 @@ The password is never stored, only a salted scrypt hash.
 Open `https://<app>/admin/faucet` (not linked from any page; `REACT_APP_FAUCET_URL` must be set in that build). It shows the
 current state from `/status`; type the admin password and press **Open faucet** before the experiment and **Close faucet**
 afterwards. The password is kept only in component state for that request (never in localStorage/sessionStorage or the URL).
-Server side: `POST /admin/state { open, password }` compares in constant time, allows 5 attempts per caller per 10 minutes
-(then 429) plus a global limit of 30, answers `401` with no detail on a wrong password, and never logs the password or body.
+Server side: `POST /admin/state { open, password }` compares in constant time, counts only **failed** verifications: 5 per caller
+per 10 minutes (then 429; IPv6 callers are keyed on their /64) plus a global failure budget of 300, so guessing from many addresses
+cannot block the admin's correct password until that budget is gone (it resets with the 10-minute window). It answers `401` with no detail on a wrong password, and never logs the password or body.
 Participants see "Test funds are not available right now." while the faucet is closed.
+
+### Upgrading an existing allowlist deployment
+
+* The faucet is **closed after the deploy** (no state item exists yet). Open it at `/admin/faucet` before participants arrive.
+* `--admin-secret-arn` is now required (create the admin secret first, see above).
+* The payout counter (`FAUCET_MAX_PAYOUTS`, prolific mode) is cumulative and cannot be reset: set it to the number of participants
+  **plus** the rehearsal/test claims you expect, because those count too.
 
 ## Files
 

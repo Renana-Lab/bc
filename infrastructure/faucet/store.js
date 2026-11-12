@@ -161,14 +161,14 @@ const createDynamoStore = ({ table, rateTable, client } = {}) => {
       }));
     },
     // Atomic counter per (scope, window); the item expires by TTL.
-    async hit(scope, windowId, expiresAt) {
+    async hit(scope, windowId, expiresAt, by = 1) {
       if (!rateTable || rateTable === table) throw new Error("hit() needs a rateTable that differs from the codes table");
       const result = await send(new sdk.UpdateItemCommand({
         TableName: rateTable,
         Key: { pk: { S: `rl#${scope}#${windowId}` } },
-        UpdateExpression: "ADD #c :one SET expiresAt = :exp",
+        UpdateExpression: "ADD #c :by SET expiresAt = :exp",
         ExpressionAttributeNames: { "#c": "count" },
-        ExpressionAttributeValues: { ":one": { N: "1" }, ":exp": { N: String(expiresAt) } },
+        ExpressionAttributeValues: { ":by": { N: String(by) }, ":exp": { N: String(expiresAt) } },
         ReturnValues: "UPDATED_NEW",
       }));
       return Number(result.Attributes.count.N);

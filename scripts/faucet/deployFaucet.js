@@ -49,7 +49,7 @@ if (pidMode !== "allowlist" && pidMode !== "prolific") throw new Error("--pid-mo
 if (pidMode === "prolific" && !/^[1-9][0-9]{0,9}$/.test(maxPayouts)) throw new Error("--max-payouts (positive integer) is required with --pid-mode prolific");
 if (pidMode === "allowlist" && (maxPayouts || requiredStudyId || experimentCode)) throw new Error("--max-payouts, --required-study-id and FAUCET_EXPERIMENT_CODE only apply with --pid-mode prolific");
 if (requiredStudyId && !/^[A-Za-z0-9_-]{1,64}$/.test(requiredStudyId)) throw new Error("--required-study-id has an unexpected format");
-if (/[ ,]/.test(experimentCode)) throw new Error("FAUCET_EXPERIMENT_CODE must not contain spaces or commas");
+if (experimentCode && !/^[A-Za-z0-9_.~-]{1,64}$/.test(experimentCode)) throw new Error("FAUCET_EXPERIMENT_CODE must match [A-Za-z0-9_.~-]{1,64} (the same characters the app accepts in ?exp=)");
 if (!dryRun) {
   if (!/^arn:aws[a-z-]*:secretsmanager:/.test(adminSecretArn)) throw new Error("--admin-secret-arn is required (store the output of scripts/faucet/setAdminPassword.js in Secrets Manager first)");
   if (!artifactBucket) throw new Error("--artifact-bucket is required (S3 bucket for the Lambda packages)");

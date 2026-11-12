@@ -59,7 +59,7 @@ const FaucetAdminPage = ({ faucetUrl = process.env.REACT_APP_FAUCET_URL, fetchIm
       <form onSubmit={submit} autoComplete="off">
         <label htmlFor="faucet-admin-password">Admin password</label>
         <br />
-        <input id="faucet-admin-password" type="password" autoComplete="off" value={password} onChange={(event) => setPassword(event.target.value)} style={{ width: "100%", margin: "4px 0 12px" }} />
+        <input id="faucet-admin-password" type="password" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} style={{ width: "100%", margin: "4px 0 12px" }} />
         <button type="submit" disabled={!faucetUrl || !password || busy}>{target ? "Open faucet" : "Close faucet"}</button>
       </form>
       {message ? <p role="status">{message}</p> : null}

@@ -24,7 +24,7 @@ describe("faucet admin page", () => {
     render(<FaucetAdminPage faucetUrl="https://f.example" fetchImpl={fetchImpl} />);
     const field = screen.getByLabelText("Admin password");
     expect(field).toHaveAttribute("type", "password");
-    expect(field).toHaveAttribute("autocomplete", "off");
+    expect(field).toHaveAttribute("autocomplete", "new-password");
     await waitFor(() => expect(screen.getByTestId("faucet-status")).toHaveTextContent("Closed"));
     expect(fetchImpl.mock.calls[0][0]).toBe("https://f.example/status");
   });
