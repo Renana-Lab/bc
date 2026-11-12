@@ -1,0 +1,208 @@
+// Matches the site's palette: deep blue buttons (#103090), pale blue surfaces (#d8dcf0), gold accent (#F0B030).
+$main-blue: #002884;
+$button-blue: #103090;
+$light-blue: #d8dcf0;
+$gold: #f0b030;
+$ok: #1b7a43;
+$error: #8a1c1c;
+
+.panel {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 2000;
+  width: min(360px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  box-sizing: border-box;
+  padding: 16px;
+  border-radius: 1rem;
+  background: #fff;
+  color: #1c2340;
+  border: 1px solid $main-blue;
+  box-shadow: 0 10px 30px rgba(0, 40, 132, 0.22);
+  font-family: var(--app-font-family, "Manrope", "Segoe UI", sans-serif);
+  font-size: 0.9rem;
+  line-height: 1.45;
+  text-align: start;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.title {
+  margin: 0;
+  color: $main-blue;
+  font-size: 1.1rem;
+  font-weight: 700;
+}
+
+.badge {
+  margin: 0 0 8px;
+  color: #4a5380;
+  font-size: 0.8rem;
+}
+
+.tip {
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border-radius: 0.75rem;
+  background: #fff6df;
+  border-inline-start: 4px solid $gold;
+  color: #5a4210;
+  font-size: 0.82rem;
+}
+
+.steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.step {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  column-gap: 10px;
+  align-items: center;
+  padding: 10px;
+  border-radius: 0.75rem;
+  background: $light-blue;
+  opacity: 0.65;
+}
+
+.stepActive,
+.stepDone {
+  opacity: 1;
+}
+
+.stepActive {
+  outline: 2px solid $main-blue;
+}
+
+.num {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: $button-blue;
+  color: $light-blue;
+  font-weight: 700;
+  font-size: 0.85rem;
+}
+
+.stepDone .num {
+  background: $ok;
+  color: #fff;
+}
+
+.stepTitle {
+  margin: 0;
+  color: $main-blue;
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+.stepBody {
+  grid-column: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.hint {
+  margin: 0;
+  color: #3d4670;
+  font-size: 0.82rem;
+}
+
+.address {
+  margin: 0;
+  word-break: break-all;
+  font-size: 0.8rem;
+}
+
+.input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border-radius: 0.5rem;
+  border: 1px solid $main-blue;
+  background: #fff;
+  color: $main-blue;
+  font-size: 0.9rem;
+}
+
+.button {
+  height: 2.2rem;
+  padding: 0 1rem;
+  border: 0;
+  border-radius: 1rem;
+  background: $button-blue;
+  color: $light-blue;
+  font-weight: 600;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.button:focus-visible,
+.input:focus-visible {
+  outline: 3px solid $gold;
+  outline-offset: 2px;
+}
+
+.secondary {
+  background: transparent;
+  color: $button-blue;
+  border: 1px solid $button-blue;
+}
+
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.balance {
+  margin: 0;
+  font-weight: 700;
+  color: $main-blue;
+}
+
+.restore {
+  font-size: 0.8rem;
+  color: #3d4670;
+}
+
+.notice {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border-radius: 0.75rem;
+  background: #e5f4ea;
+  color: $ok;
+}
+
+.error {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border-radius: 0.75rem;
+  background: #fbe9e9;
+  color: $error;
+}
