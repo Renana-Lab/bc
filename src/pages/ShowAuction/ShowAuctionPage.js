@@ -50,6 +50,8 @@ import {
 import { getActiveFactoryAddress } from "../../real_ethereum/marketConfig";
 import { notifyBudgetChanged } from "../../real_ethereum/budget";
 import { markAuctionClosed } from "../../real_ethereum/activeAuctionRegistry";
+import { getWalletAccess, subscribeWalletAccess } from "../../real_ethereum/walletAccess";
+import { getVerifiedAdminAddress } from "../ManageBudget/adminGate";
 import {
   getEthereumAccounts,
   waitForEthereumProvider,
@@ -223,6 +225,19 @@ const reducer = (state, action) => {
 };
 
 function ShowAuctionPage() {
+  // Admin = wallet on the public allowlist that signed the Admin Zone gate this session (UI only).
+  const [isAdminViewer, setIsAdminViewer] = useState(false);
+  const [exportingCsv, setExportingCsv] = useState(false);
+  useEffect(() => {
+    const sync = () => {
+      const access = getWalletAccess();
+      setIsAdminViewer(
+        access.status === "connected" && Boolean(getVerifiedAdminAddress(access.account))
+      );
+    };
+    sync();
+    return subscribeWalletAccess(sync);
+  }, []);
   const [finalizingPayment, setFinalizingPayment] = useState(false);
   const [state, dispatch] = useReducer(reducer, initialState);
   const fetchInFlightRef = useRef(false);
@@ -716,6 +731,27 @@ function ShowAuctionPage() {
             onClick={() => dispatch({ type: "TOGGLE_DIALOG" })}
           >
             Display Bidding History
+          </Button>
+        )}
+        {isAdminViewer && (
+          <Button
+            variant="outlined"
+            disabled={exportingCsv}
+            style={{ marginTop: "0.7rem", width: "24rem" }}
+            onClick={async () => {
+              setExportingCsv(true);
+              try {
+                const { exportAuctionTransactionsCsv } = await import("../ManageBudget/reportUtils");
+                const count = await exportAuctionTransactionsCsv(address);
+                toast.success(`Exported ${count} transactions`);
+              } catch (error) {
+                toast.error(error?.message || "Could not export transactions");
+              } finally {
+                setExportingCsv(false);
+              }
+            }}
+          >
+            {exportingCsv ? "Exporting..." : "Export transactions (CSV)"}
           </Button>
         )}
         <br />

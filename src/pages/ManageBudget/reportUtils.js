@@ -243,13 +243,18 @@ export const downloadJsonReport = (payload) => {
   );
 };
 
-const escapeCsvValue = (value) => {
-  const text = String(value ?? "");
+// CSV cells starting with = + - @ (or tab/CR) are run as formulas by spreadsheet apps. Prefix them
+// with an apostrophe so attacker-controlled text (auction descriptions) stays inert. Plain numbers
+// such as -5 are left alone so numeric columns stay numeric.
+const PLAIN_NUMBER = /^[-+]?\d+(\.\d+)?([eE][-+]?\d+)?$/;
+export const escapeCsvValue = (value) => {
+  let text = String(value ?? "");
+  if (/^[=+\-@\t\r]/.test(text) && !PLAIN_NUMBER.test(text)) text = `'${text}`;
   if (!/[",\r\n]/.test(text)) return text;
   return `"${text.replace(/"/g, '""')}"`;
 };
 
-const buildCsv = (rows) => {
+export const buildCsv = (rows) => {
   const safeRows = rows.length ? rows : [{ Notice: "No rows available" }];
   const headers = Array.from(
     safeRows.reduce((set, row) => {
@@ -1983,4 +1988,17 @@ export const downloadHtmlReport = (payload) => {
 </html>`;
 
   downloadBlob(html, "text/html;charset=utf-8;", "html", "printable-report");
+};
+
+// Per-auction transaction rows: the same rows as the "All Bids" report sheet.
+export const buildAuctionTransactionRows = (report) =>
+  buildCoreReportTables([report], [], new Date().toLocaleString(), {}).allBidRows;
+
+export const exportAuctionTransactionsCsv = async (address) => {
+  const report = await readAuctionReport(address, 0, 1);
+  downloadCsvReport(
+    buildAuctionTransactionRows(report),
+    `transactions-${String(address).slice(0, 10)}`
+  );
+  return report.transactions.length;
 };

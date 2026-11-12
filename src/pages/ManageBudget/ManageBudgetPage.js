@@ -12,7 +12,7 @@ import {
   IconButton,
 } from "@mui/material";
 import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
-import { lazy, Suspense, useState, useEffect, useCallback, useRef } from "react";
+import { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import Layout from "../../components/Layout";
 import toast from "react-hot-toast";
@@ -45,6 +45,16 @@ import {
   requestEthereumAccounts,
   waitForEthereumProvider,
 } from "../../real_ethereum/ethereumProvider";
+import { getWalletAccess, subscribeWalletAccess } from "../../real_ethereum/walletAccess";
+import { getTargetNetwork } from "../../real_ethereum/sapphireNetworks";
+import {
+  ADMIN_GATE_NOTE,
+  getAdminAddresses,
+  getVerifiedAdminAddress,
+  isAdminAddress,
+  requestAdminProof,
+} from "./adminGate";
+import AdminOpsCards from "./AdminOpsCards";
 import {
   BULK_DRAFT_KEY,
   BULK_MAX_AUCTIONS,
@@ -82,7 +92,6 @@ const BotnetControlPanel = lazy(() => import("./BotnetControlPanel"));
 const ExperimentEvidencePanel = lazy(() => import("./ExperimentEvidencePanel"));
 
 const LOCAL_STORAGE_KEY = "globalBudgetStore";
-const ADMIN_SECRET = "1234"; // Do not store production secrets on the frontend.
 const DEFAULT_GLOBAL_BUDGET = 2000;
 const DEFAULT_REPORT_READ_CONCURRENCY = 6;
 const MAX_REPORT_READ_CONCURRENCY = 10;
@@ -346,7 +355,8 @@ const ManageBudgetPage = () => {
   const navigate = useNavigate();
   const [budget, setBudget] = useState(DEFAULT_GLOBAL_BUDGET);
   const [isAdmin, setIsAdmin] = useState(false);
-  const [pass, setPass] = useState("");
+  const [gateAccount, setGateAccount] = useState(() => getWalletAccess().account || "");
+  const [gateBusy, setGateBusy] = useState(false);
   const [error, setError] = useState("");
   const [reportState, setReportState] = useState({
     loading: false,
@@ -481,15 +491,52 @@ const ManageBudgetPage = () => {
     return () => window.clearTimeout(switchTimerRef.current);
   }, []);
 
-  const authenticate = useCallback(() => {
-    if (pass === ADMIN_SECRET) {
-      setIsAdmin(true);
-      setError("");
-      toast.success("Admin access granted");
-    } else {
-      setError("Incorrect admin key");
+  // UI gate: the connected wallet must be on the public REACT_APP_ADMIN_ADDRESSES list and prove
+  // control of it with a signature. Contract writes are NOT enforced by this (see ADMIN_GATE_NOTE).
+  const adminAddresses = useMemo(() => getAdminAddresses(), []);
+  useEffect(() => {
+    const sync = () => {
+      const access = getWalletAccess();
+      const account = access.status === "connected" ? access.account : "";
+      setGateAccount(account);
+      // Re-verifies the stored signature; switching accounts drops admin access immediately.
+      setIsAdmin(Boolean(account) && Boolean(getVerifiedAdminAddress(account, { allowlist: adminAddresses })));
+    };
+    sync();
+    return subscribeWalletAccess(sync);
+  }, [adminAddresses]);
+
+  const authenticate = useCallback(async () => {
+    const access = getWalletAccess();
+    const account = access.status === "connected" ? access.account : "";
+    if (!account) {
+      setError("Connect your wallet first.");
+      return;
     }
-  }, [pass]);
+    if (!isAdminAddress(account, adminAddresses)) {
+      setError("This wallet address is not on the admin list.");
+      return;
+    }
+    setGateBusy(true);
+    setError("");
+    try {
+      const network = getTargetNetwork();
+      await requestAdminProof({
+        provider: access.provider,
+        account,
+        chainId: network.chainId,
+        domain: window.location.host,
+        uri: window.location.origin,
+        allowlist: adminAddresses,
+      });
+      setIsAdmin(true);
+      toast.success("Admin access granted");
+    } catch (gateError) {
+      setError(gateError?.code === 4001 ? "Signature request was rejected." : gateError?.message || "Admin sign-in failed.");
+    } finally {
+      setGateBusy(false);
+    }
+  }, [adminAddresses]);
 
   useEffect(() => {
     setPresenceAdminRole(isAdmin);
@@ -1480,17 +1527,6 @@ const ManageBudgetPage = () => {
     }
   };
 
-  useEffect(() => {
-    const handleKeyDown = (e) => {
-      if (e.key === "Enter") {
-        authenticate();
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [authenticate]);
-
   const reportProgress =
     reportState.total > 0
       ? Math.round((reportState.current / reportState.total) * 100)
@@ -1669,6 +1705,16 @@ const ManageBudgetPage = () => {
               health, batch auction creation, and exports from one operational
               control area.
             </Typography>
+            <Typography
+              variant="caption"
+              textAlign="center"
+              sx={{ maxWidth: 680, mb: 2, color: "#8a5a00" }}
+              data-testid="admin-gate-note"
+            >
+              {ADMIN_GATE_NOTE}
+            </Typography>
+
+            <AdminOpsCards />
 
             <Box
               sx={{
@@ -3814,30 +3860,33 @@ const ManageBudgetPage = () => {
             <Typography variant="h5" gutterBottom>
               Admin Access Required
             </Typography>
-            <TextField
-              label="Admin Key"
-              type="password"
-              value={pass}
-              onChange={(e) => setPass(e.target.value)}
-              fullWidth
-              sx={{ mt: 2 }}
-            />
+            <Typography variant="body2" color="text.secondary" textAlign="center" sx={{ mt: 1 }}>
+              {gateAccount
+                ? `Connected wallet: ${shortAddress(gateAccount)}`
+                : "Connect your wallet to continue."}
+            </Typography>
+            {!adminAddresses.length ? (
+              <Typography variant="body2" color="error" sx={{ mt: 2 }}>
+                No admin addresses are configured (REACT_APP_ADMIN_ADDRESSES), so nobody can unlock this page.
+              </Typography>
+            ) : null}
             <Button
               variant="contained"
               color="primary"
               fullWidth
               sx={{ mt: 3 }}
               onClick={authenticate}
+              disabled={gateBusy || !gateAccount}
             >
-              Unlock
+              {gateBusy ? "Waiting for signature..." : "Sign to unlock"}
             </Button>
             {error && (
               <Typography color="error" sx={{ mt: 2 }}>
                 {error}
               </Typography>
             )}
-            <Typography variant="caption" color="text.secondary" sx={{ mt: 2 }}>
-              Press Enter after typing your key
+            <Typography variant="caption" color="text.secondary" sx={{ mt: 2 }} textAlign="center">
+              {ADMIN_GATE_NOTE}
             </Typography>
           </>
         )}

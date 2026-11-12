@@ -18,13 +18,14 @@ export const buildSiweMessage = ({
   now = new Date(),
   minutes = SIWE_SESSION_MINUTES,
   nonce = randomNonce(),
+  statement = "Sign in to read the data you won in this marketplace.",
 }) => {
   const expires = new Date(now.getTime() + minutes * 60 * 1000);
   return [
     `${domain} wants you to sign in with your Ethereum account:`,
     address,
     "",
-    "Sign in to read the data you won in this marketplace.",
+    statement,
     "",
     `URI: ${uri}`,
     "Version: 1",
