@@ -1171,6 +1171,7 @@ function AuctionsListPage() {
   const { state: navState } = useLocation();
   const [auctionsList, setAuctionsList] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [intro, setIntro] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [networkSlow, setNetworkSlow] = useState(false);
@@ -1406,6 +1407,14 @@ function AuctionsListPage() {
       if (meta.reason === "label") return;
 
       const nextFactoryAddress = getActiveFactoryAddress();
+      // Only a real factory change resets the list; anything else keeps the
+      // table mounted and is handled by the background refresh path.
+      if (
+        normalizeFactoryAddress(nextFactoryAddress) ===
+        normalizeFactoryAddress(activeFactoryAddressRef.current)
+      ) {
+        return;
+      }
       activeFactoryAddressRef.current = nextFactoryAddress;
       requestIdRef.current += 1;
       activeFetchKeyRef.current = "";
@@ -1422,6 +1431,12 @@ function AuctionsListPage() {
       window.setTimeout(() => fetchAuctionsListRef.current?.(), 0);
     });
   }, []);
+
+  useEffect(() => {
+    if (loading || !intro) return undefined;
+    const timer = window.setTimeout(() => setIntro(false), 700);
+    return () => window.clearTimeout(timer);
+  }, [loading, intro]);
 
   useEffect(() => {
     visibleAuctionCountRef.current = visibleAuctionCount;
@@ -1786,7 +1801,7 @@ function AuctionsListPage() {
 
   return (
     <Layout>
-      <div className={styles.page}>
+      <div className={`${styles.page} ${intro ? styles.intro : ""}`}>
         <div className={styles.createAuction}>
           <div className={styles.introduction}>
             <div className={styles.introductionText}>

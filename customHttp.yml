@@ -1,0 +1,12 @@
+# Amplify custom headers (headers only; Amplify rewrites/redirects live in the console, see docs/AMPLIFY_REWRITES.md).
+# Serves the self-hosted font with the right type and long-lived caching. The filename is not content-hashed,
+# so keep the cache moderate; bump the file name if the font ever changes.
+customHeaders:
+  - pattern: '/fonts/*.woff2'
+    headers:
+      - key: Content-Type
+        value: font/woff2
+      - key: Cache-Control
+        value: 'public, max-age=604800'
+      - key: Access-Control-Allow-Origin
+        value: '*'

@@ -26,4 +26,32 @@ describe("production typography assets", () => {
     expect(craHtml).toContain(`%PUBLIC_URL%${fontUrl}`);
     expect(viteHtml).toContain(`url("${fontUrl}")`);
   });
+
+  test("the font file is a real woff2 (wOF2 signature), not an HTML fallback", () => {
+    const candidates = [path.join(projectRoot, "public", "fonts", "manrope-variable-latin.woff2")];
+    // The built artifact is git-ignored; check it whenever a build exists locally or in CI.
+    const built = path.join(projectRoot, "build", "fonts", "manrope-variable-latin.woff2");
+    if (fs.existsSync(path.join(projectRoot, "build", "index.html"))) candidates.push(built);
+
+    for (const file of candidates) {
+      expect(fs.existsSync(file)).toBe(true);
+      expect(fs.readFileSync(file).subarray(0, 4).toString("latin1")).toBe("wOF2");
+    }
+  });
+
+  test("the documented Amplify SPA rewrite lets .woff2 through to the file", () => {
+    const doc = fs.readFileSync(path.join(projectRoot, "docs", "AMPLIFY_REWRITES.md"), "utf8");
+    const match = doc.match(/\n<\/(\^.+)\/>\n/);
+    expect(match).not.toBeNull();
+    const rewrite = new RegExp(match[1]);
+    expect(rewrite.test("/fonts/manrope-variable-latin.woff2")).toBe(false); // served as a file
+    expect(rewrite.test("/auctions")).toBe(true); // SPA routes still rewrite
+    expect(rewrite.test("/static/js/main.abc.js")).toBe(false);
+  });
+
+  test("customHttp.yml serves .woff2 as a font", () => {
+    const headers = fs.readFileSync(path.join(projectRoot, "customHttp.yml"), "utf8");
+    expect(headers).toContain("/fonts/*.woff2");
+    expect(headers).toContain("font/woff2");
+  });
 });

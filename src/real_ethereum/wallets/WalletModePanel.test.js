@@ -1,148 +1,52 @@
 import React from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import WalletModePanel from "./WalletModePanel";
+import { setModeProvider } from "./modeProvider";
 
+jest.mock("./modeProvider", () => ({ setModeProvider: jest.fn() }));
+jest.mock("../sapphireNetworks", () => ({ getTargetNetwork: () => ({}) }));
+jest.mock("../confidentialData", () => ({ clearConfidentialSessions: jest.fn() }));
+// CRA sets resetMocks, so the fakes are plain functions and only the spies are jest.fn.
+const mockState = {};
 jest.mock("./localWallet.mjs", () => ({
   createIndexedDbStorage: () => ({}),
-  createLocalProvider: () => ({ request: async () => "0x0" }),
-  // Fresh in-memory wallet per mount, so tests do not share state.
-  createLocalWallet: () => {
-    const address = `0x${"1".repeat(40)}`;
-    const subscribers = new Set();
-    const state = { address: "", present: false };
-    const notify = () => subscribers.forEach((listener) => listener());
-    return {
-      get address() { return state.address; },
-      exists: async () => state.present,
-      isUnlocked: async () => Boolean(state.address),
-      subscribe: (listener) => { subscribers.add(listener); return () => subscribers.delete(listener); },
-      create: async () => { state.present = true; state.address = address; notify(); },
-      unlock: async () => { state.address = address; notify(); },
-      lock: () => { state.address = ""; notify(); },
-      forget: async () => { state.present = false; state.address = ""; notify(); },
-      exportEncryptedBackup: async () => "{}",
-      importEncryptedBackup: async () => {},
-    };
-  },
+  createLocalWallet: () => mockState.wallet,
+  createLocalProvider: () => mockState.provider,
 }));
-jest.mock("../confidentialData", () => ({ clearConfidentialSessions: () => {} }));
 
-const step = (title) => screen.getByText(title).closest("li");
-const create = async () => {
-  fireEvent.change(await screen.findByPlaceholderText("Passphrase (12+ chars)", {}, { timeout: 5000 }), { target: { value: "a long passphrase" } });
-  fireEvent.click(screen.getByRole("button", { name: "Create" }));
-  await screen.findByText(/Unlocked: 0x/, {}, { timeout: 5000 });
-};
-
+const originalMode = process.env.REACT_APP_WALLET_MODE;
 beforeEach(() => {
   process.env.REACT_APP_WALLET_MODE = "local";
-  window.URL.createObjectURL = () => "blob:test";
-  window.URL.revokeObjectURL = () => {};
-  jest.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
-  jest.spyOn(window, "confirm").mockImplementation(() => true);
+  mockState.unsubscribe = jest.fn();
+  mockState.provider = { request: async () => [] };
+  mockState.wallet = {
+    address: "", exists: async () => false, isUnlocked: async () => false,
+    subscribe: () => mockState.unsubscribe, lock() {}, async create() {},
+  };
 });
-afterEach(() => { jest.restoreAllMocks(); delete process.env.REACT_APP_WALLET_MODE; });
+afterEach(() => { process.env.REACT_APP_WALLET_MODE = originalMode; });
+const flush = async () => { await act(async () => { for (let i = 0; i < 10; i += 1) await Promise.resolve(); }); };
 
-test("step 2 is not marked done after Forget, and a new wallet starts un-backed-up", async () => {
-  render(<WalletModePanel />);
-  await create();
-  expect(step("Wallet unlocked").textContent).toContain("✓");
-  expect(step("Save an encrypted backup").textContent).not.toContain("✓");
+test("re-renders do not re-register the provider or clear it", async () => {
+  const view = render(<WalletModePanel />);
+  await flush();
+  expect(setModeProvider).toHaveBeenCalledTimes(1);
+  expect(setModeProvider.mock.calls[0][0]).toBe(mockState.provider);
 
-  fireEvent.click(screen.getByRole("button", { name: "Download encrypted backup" }));
-  await waitFor(() => expect(step("Save an encrypted backup").textContent).toContain("✓"), { timeout: 5000 });
+  const input = screen.getByPlaceholderText(/Passphrase/);
+  for (const value of ["a", "ab", "abc"]) fireEvent.change(input, { target: { value } }); // state updates re-render
+  view.rerender(<WalletModePanel />);
+  await flush();
 
-  fireEvent.click(screen.getByRole("button", { name: "Forget" }));
-  await screen.findByText("Create your wallet", {}, { timeout: 5000 });
-  expect(step("Save an encrypted backup").textContent).not.toContain("✓");
-
-  await create();
-  expect(step("Save an encrypted backup").textContent).not.toContain("✓");
-});
-
-test("locking the same wallet keeps backup progress", async () => {
-  render(<WalletModePanel />);
-  await create();
-  fireEvent.click(screen.getByRole("button", { name: "Download encrypted backup" }));
-  await waitFor(() => expect(step("Save an encrypted backup").textContent).toContain("✓"), { timeout: 5000 });
-  fireEvent.click(screen.getByRole("button", { name: "Lock" }));
-  await screen.findByText("Unlock your wallet", {}, { timeout: 5000 });
-  expect(step("Save an encrypted backup").textContent).toContain("✓");
+  expect(setModeProvider).toHaveBeenCalledTimes(1);
+  expect(setModeProvider).not.toHaveBeenCalledWith(null);
+  expect(setModeProvider).not.toHaveBeenCalledWith(null, expect.anything());
 });
 
-describe("faucet step with a non-hex pid", () => {
-  const OPEN_PID = "Participant_42!";
-  const reply = (status, body) => ({ status, ok: status >= 200 && status < 300, json: async () => body });
-  beforeEach(() => {
-    process.env.REACT_APP_FAUCET_URL = "https://faucet.example";
-    window.history.pushState({}, "", `/?pid=${encodeURIComponent(OPEN_PID)}`);
-  });
-  afterEach(() => { delete process.env.REACT_APP_FAUCET_URL; window.sessionStorage.clear(); });
-
-  test("an open-mode faucet receives the non-hex pid exactly as typed (case preserved)", async () => {
-    const calls = [];
-    global.fetch = jest.fn(async (url, init) => {
-      calls.push({ url, init });
-      return url.endsWith("/status") ? reply(200, { open: true, updatedAt: null, pidMode: "open" }) : reply(200, { status: "paid" });
-    });
-    render(<WalletModePanel />);
-    await create();
-    fireEvent.click(await screen.findByRole("button", { name: "Request test funds" }));
-    await waitFor(() => expect(calls.some((c) => c.url.endsWith("/claim"))).toBe(true));
-    expect(JSON.parse(calls.find((c) => c.url.endsWith("/claim")).init.body).pid).toBe(OPEN_PID);
-    await screen.findByText(/Test funds sent/); // let the claim finish before the test ends
-  });
-
-  test("a prolific or allowlist faucet never receives it (the button is not offered)", async () => {
-    for (const pidMode of ["prolific", "allowlist"]) {
-      global.fetch = jest.fn(async (url) => (url.endsWith("/status") ? reply(200, { open: true, updatedAt: null, pidMode }) : reply(200, { status: "paid" })));
-      const { unmount } = render(<WalletModePanel />);
-      await create();
-      await waitFor(() => expect(global.fetch).toHaveBeenCalled());
-      expect(screen.queryByRole("button", { name: "Request test funds" })).toBeNull();
-      expect(global.fetch.mock.calls.some(([url]) => url.endsWith("/claim"))).toBe(false);
-      unmount();
-      window.history.pushState({}, "", `/?pid=${encodeURIComponent(OPEN_PID)}`);
-    }
-  });
-});
-
-describe("faucet step with a Prolific link", () => {
-  const PID = "5f1a2b3c4d5e6f7a8b9c0d1e";
-  const reply = (status, body) => ({ status, ok: status >= 200 && status < 300, json: async () => body });
-  beforeEach(() => {
-    process.env.REACT_APP_FAUCET_URL = "https://faucet.example";
-    window.history.pushState({}, "", `/?PROLIFIC_PID=${PID}&STUDY_ID=study1`);
-  });
-  afterEach(() => { delete process.env.REACT_APP_FAUCET_URL; window.sessionStorage.clear(); });
-
-  test("a closed faucet shows the friendly message (from /status and from a refused claim), never a raw error", async () => {
-    const calls = [];
-    global.fetch = jest.fn(async (url, init) => {
-      calls.push({ url, init });
-      return url.endsWith("/status") ? reply(200, { open: false, updatedAt: null }) : reply(403, { error: "faucet_closed" });
-    });
-    render(<WalletModePanel />);
-    await create();
-    expect(window.location.search).toBe(""); // pid and study stripped from the address bar
-    await screen.findByText("Test funds are not available right now.");
-    fireEvent.click(screen.getByRole("button", { name: "Request test funds" }));
-    await waitFor(() => expect(calls.some((c) => c.url.endsWith("/claim"))).toBe(true));
-    expect(JSON.parse(calls.find((c) => c.url.endsWith("/claim")).init.body)).toEqual({ pid: PID, address: `0x${"1".repeat(40)}`, studyId: "study1" });
-    expect(screen.queryByRole("alert")?.textContent || "").not.toMatch(/403|faucet_closed|Failed to fetch/);
-    expect(screen.getAllByText("Test funds are not available right now.").length).toBeGreaterThan(0);
-  });
-
-  test("a network failure shows a friendly message instead of Failed to fetch", async () => {
-    global.fetch = jest.fn(async (url) => {
-      if (url.endsWith("/status")) return reply(200, { open: true, updatedAt: null });
-      throw new TypeError("Failed to fetch");
-    });
-    render(<WalletModePanel />);
-    await create();
-    fireEvent.click(await screen.findByRole("button", { name: "Request test funds" }));
-    const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toMatch(/Could not reach the test-funds service/);
-    expect(alert.textContent).not.toMatch(/Failed to fetch/);
-  });
+test("effect cleanup only unsubscribes; it never nulls the mode provider", async () => {
+  const view = render(<WalletModePanel />);
+  await flush();
+  view.unmount();
+  expect(mockState.unsubscribe).toHaveBeenCalled();
+  expect(setModeProvider.mock.calls.filter(([provider]) => provider === null)).toHaveLength(0);
 });

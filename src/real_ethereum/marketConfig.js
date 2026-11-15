@@ -198,6 +198,14 @@ export const setActiveMarket = (marketId) => {
   return market;
 };
 
+export const isMarketConfigStorageKey = (key) =>
+  key === MARKET_STORAGE_KEY ||
+  key === ACTIVE_FACTORY_STORAGE_KEY ||
+  key === ACTIVE_LABEL_STORAGE_KEY ||
+  MARKET_DEFINITIONS.some(
+    (market) => key === market.storageKey || key === market.labelStorageKey
+  );
+
 export const subscribeToMarketChanges = (callback) => {
   if (typeof window === "undefined") return () => {};
 
@@ -206,12 +214,17 @@ export const subscribeToMarketChanges = (callback) => {
     const market = detail.market || (detail.id ? detail : getActiveMarket());
     callback(market, detail);
   };
+  const storageHandler = (event) => {
+    // event.key is null when storage is cleared; treat that as a change.
+    if (event && event.key != null && !isMarketConfigStorageKey(event.key)) return;
+    handler(event);
+  };
   window.addEventListener(MARKET_CHANGED_EVENT, handler);
-  window.addEventListener("storage", handler);
+  window.addEventListener("storage", storageHandler);
 
   return () => {
     window.removeEventListener(MARKET_CHANGED_EVENT, handler);
-    window.removeEventListener("storage", handler);
+    window.removeEventListener("storage", storageHandler);
   };
 };
 
