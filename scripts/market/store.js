@@ -823,6 +823,17 @@ class MarketStore {
       sales_total: rows.find(r => r.status === 'sold')?.sales || 0
     };
   }
+  // Report-only: admin export rows with the confidential payload and winner identifier.
+  // Deliberately separate from auctions() so participant-facing lists never carry payload.
+  reportAuctions() {
+    const extra = new Map(this.all('SELECT a.id,a.payload,w.email winner_identifier FROM auctions a LEFT JOIN users w ON w.id=a.winner_id').map(r => [r.id, r]));
+    return this.auctions(true).map(a => ({
+      ...a,
+      payload: extra.get(a.id)?.payload ?? null,
+      winner_identifier: extra.get(a.id)?.winner_identifier ?? null,
+      payload_revealed: a.status === 'sold'
+    }));
+  }
   report(actor) {
     this.admin(actor);
     return this.transaction(() => {
@@ -834,7 +845,7 @@ class MarketStore {
         generatedAt: this.now(),
         settings: this.settings(),
         users: this.all('SELECT id,name,email AS identifier,role,budget,disabled FROM users'),
-        auctions: this.auctions(true),
+        auctions: this.reportAuctions(),
         summary: this.salesSummary(),
         bids: this.all('SELECT * FROM bids ORDER BY rowid'),
         ledger: this.all('SELECT * FROM ledger ORDER BY id'),

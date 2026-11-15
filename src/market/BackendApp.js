@@ -65,7 +65,7 @@ import metaIcon from '../images/icons/meta1.png';
 import { faQuestionCircle } from '@fortawesome/free-solid-svg-icons';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 
-import { buildMarketWorkbook, formatReportValue } from './reportExport';
+import { buildMarketWorkbook, formatReportValue, buildCsv, AUCTIONS_CSV_HEADERS, BIDS_CSV_HEADERS } from './reportExport';
 import { analyzeMarketReport } from './analysis';
 import { synchronizeMarketClock, useMarketNow } from './clock';
 import './backend.css';
@@ -1674,9 +1674,8 @@ function AdminView({ auctions, act, revision, notify }) {
 
     if (kind === 'json') return downloadBlob(JSON.stringify(report, null, 2), 'application/json', 'market-report.json');
     if (kind === 'csv') {
-      const headers = ['id', 'auction_id', 'user_id', 'amount', 'cumulative', 'budget_before', 'budget_after', 'created_at'];
-      const cell = v => `"${String(v ?? '').replace(/^[=+@-]/, "'$&").replace(/"/g, '""')}"`;
-      return downloadBlob([headers.map(h => h.endsWith('_at') ? `${h} (UTC)` : h), ...report.bids.map(r => headers.map(h => formatReportValue(h, r[h])))].map(row => row.map(cell).join(',')).join('\r\n'), 'text/csv', 'market-bids.csv');
+      downloadBlob(buildCsv(AUCTIONS_CSV_HEADERS, report.auctions), 'text/csv', 'market-auctions.csv');
+      return downloadBlob(buildCsv(BIDS_CSV_HEADERS, report.bids), 'text/csv', 'market-bids.csv');
     }
     const tables = ['users', 'auctions', 'bids', 'ledger', 'events', 'snapshots', 'rounds', 'activity', 'participants', 'payments', 'flags', 'summary'].map(name => ({
       name,

@@ -187,9 +187,69 @@ test('batch is atomic and rollback does not expose payload in reports', async t 
   }, admin.id);
   assert.equal(s.auction(ogCreated.id, admin.id).minimum, 100);
   const report = s.report(admin.id);
-  assert(!JSON.stringify(report).includes('TOPSECRET'));
+  const batched = report.auctions.filter(a => a.payload === 'TOPSECRET');
+  assert.equal(batched.length, 1);
+  assert.equal(batched[0].description, 'Batch');
+  assert.equal(report.auctions.find(a => a.id === ogCreated.id).payload, 'OG payload');
   assert(!JSON.stringify(report).includes(password));
+  assert(!JSON.stringify(report).includes('password_hash'));
+  // Events and snapshots still never carry the payload.
+  assert(!JSON.stringify(report.events).includes('TOPSECRET'));
+  assert(!JSON.stringify(report.snapshots).includes('TOPSECRET'));
   assert(report.snapshots.some(s => s.reason === 'report-generated'));
+});
+test('failed atomic batch leaves no payload in DB or report', async t => {
+  const { s, admin } = await fixture(t);
+  const input = { description: 'Batch', payload: 'TOPSECRET', minimum: 50, minutes: 1 };
+  assert.throws(() => s.batch([input, { ...input, minutes: 31 }], admin.id));
+  assert.equal(s.all("SELECT * FROM auctions WHERE payload LIKE '%TOPSECRET%'").length, 0);
+  assert(!JSON.stringify(s.report(admin.id)).includes('TOPSECRET'));
+});
+test('admin report includes payload, winner_identifier and payload_revealed per auction state', async t => {
+  const { s, admin, seller, a, b, auction, advance } = await fixture(t);
+  const sold = auction();
+  const unsold = auction();
+  const deleted = auction();
+  s.bid(sold, 100, a.id, randomUUID());
+  s.bid(deleted, 100, b.id, randomUUID());
+  advance(60000);
+  s.tick();
+  s.finalize(sold, a.id);
+  s.finalize(unsold, admin.id);
+  s.deleteAuction(deleted, 'bad', admin.id);
+  const active = auction(30);
+  const rows = Object.fromEntries(s.report(admin.id).auctions.map(r => [r.id, r]));
+  assert.equal(rows[sold].status, 'sold');
+  assert.equal(rows[sold].payload, 'private payload');
+  assert.equal(rows[sold].winner_identifier, 'a@example.com');
+  assert.equal(rows[sold].payload_revealed, true);
+  assert.equal(rows[sold].seller_identifier, 'seller@example.com');
+  assert.equal(rows[unsold].status, 'unsold');
+  assert.equal(rows[unsold].payload, 'private payload');
+  assert.equal(rows[unsold].winner_identifier, null);
+  assert.equal(rows[unsold].payload_revealed, false);
+  assert.equal(rows[deleted].status, 'deleted');
+  assert.equal(rows[deleted].payload, 'private payload');
+  assert.equal(rows[deleted].payload_revealed, false);
+  assert.equal(rows[active].status, 'active');
+  assert.equal(rows[active].payload, 'private payload');
+  assert.equal(rows[active].winner_identifier, null);
+  assert.equal(rows[active].payload_revealed, false);
+  assert(!JSON.stringify(s.report(admin.id)).includes(password));
+  assert.throws(() => s.report(seller.id), /Administrator access required/);
+});
+test('participant-facing auction reads never include payload', async t => {
+  const { s, admin, seller, a, b, auction, advance } = await fixture(t);
+  const id = auction();
+  s.bid(id, 100, a.id, randomUUID());
+  for (const row of [...s.auctions(), ...s.auctions(true), ...s.auctionsFor(a.id), ...s.active()]) assert.equal('payload' in row, false);
+  assert.equal(s.auction(id, b.id).payload, undefined);
+  advance(60000);
+  s.tick();
+  s.finalize(id, a.id);
+  assert.equal(s.auction(id, b.id).payload, undefined);
+  assert.equal(s.auction(id, seller.id).payload, undefined);
+  assert.equal(s.auction(id, a.id).payload, 'private payload');
 });
 test('100 bots, 1000 ended auctions, 50 active: distinct assignments and active-only planning', async t => {
   const {
