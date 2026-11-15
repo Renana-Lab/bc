@@ -20,14 +20,19 @@
   animation: softFadeIn 140ms ease both;
 
   :global(.MuiTableBody-root .MuiTableRow-root) {
-    animation: auctionRowEnter 130ms var(--motion-ease, ease) both;
     transition:
       background-color 65ms ease,
       opacity 85ms ease;
   }
 
+  // Entrance animations only play while .intro is set (first mount); data
+  // refreshes must never replay them.
+  &.intro :global(.MuiTableBody-root .MuiTableRow-root) {
+    animation: auctionRowEnter 130ms var(--motion-ease, ease) both;
+  }
+
   @for $i from 1 through 12 {
-    :global(.MuiTableBody-root .MuiTableRow-root:nth-child(#{$i})) {
+    &.intro :global(.MuiTableBody-root .MuiTableRow-root:nth-child(#{$i})) {
       animation-delay: #{($i - 1) * 8}ms;
     }
   }
@@ -297,6 +302,9 @@
 
 }
 
+.intro .tableShell {
+  animation: softScaleIn 160ms var(--motion-ease, ease) both;
+}
 .tableShell {
   position: relative;
   box-sizing: border-box !important;
@@ -321,7 +329,6 @@
     0 16px 34px rgba(16, 48, 144, 0.08),
     inset 0 1px 0 #ffffff,
     inset 0 -1px 0 rgba(16, 48, 144, 0.04) !important;
-  animation: softScaleIn 160ms var(--motion-ease, ease) both;
   transition: transform 180ms var(--motion-ease, ease);
 
   &::after {
