@@ -823,6 +823,12 @@ class MarketStore {
       sales_total: rows.find(r => r.status === 'sold')?.sales || 0
     };
   }
+  // Report-only: admin export rows with the confidential payload.
+  // Deliberately separate from auctions() so participant-facing lists never carry payload.
+  reportAuctions() {
+    const payloads = new Map(this.all('SELECT id,payload FROM auctions').map(r => [r.id, r.payload]));
+    return this.auctions(true).map(a => ({ ...a, payload: payloads.get(a.id) ?? null }));
+  }
   report(actor) {
     this.admin(actor);
     return this.transaction(() => {
@@ -834,7 +840,7 @@ class MarketStore {
         generatedAt: this.now(),
         settings: this.settings(),
         users: this.all('SELECT id,name,email AS identifier,role,budget,disabled FROM users'),
-        auctions: this.auctions(true),
+        auctions: this.reportAuctions(),
         summary: this.salesSummary(),
         bids: this.all('SELECT * FROM bids ORDER BY rowid'),
         ledger: this.all('SELECT * FROM ledger ORDER BY id'),
