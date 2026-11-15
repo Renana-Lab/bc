@@ -18,17 +18,6 @@ export function formatReportValue(key, value) {
   return reportDate(key, value) ?? value ?? '';
 }
 
-// CSV cell: neutralise leading formula characters, double quotes, always quote (newlines stay inside the cell).
-export const csvCell = v => `"${String(v ?? '').replace(/^[=+@-]/, "'$&").replace(/"/g, '""')}"`;
-
-export const BIDS_CSV_HEADERS = ['id', 'auction_id', 'user_id', 'amount', 'cumulative', 'budget_before', 'budget_after', 'created_at'];
-export const AUCTIONS_CSV_HEADERS = ['id', 'description', 'payload', 'seller_identifier', 'winner_identifier', 'payload_revealed', 'status', 'created_at', 'end_at', 'finalized_at', 'highest', 'minimum', 'original_minimum', 'adjusted_minimum', 'deleted_at'];
-
-export function buildCsv(headers, rows) {
-  return [headers.map(h => isTimeColumn(h) ? `${h} (UTC)` : h), ...rows.map(r => headers.map(h => formatReportValue(h, r[h])))]
-    .map(row => row.map(csvCell).join(',')).join('\r\n');
-}
-
 // SpreadsheetML matches the existing market's multi-sheet Excel export without
 // importing unrelated runtime dependencies into the account-based application.
 export function buildMarketWorkbook(tables) {

@@ -1,19 +1,5 @@
 import { analyzeMarketReport } from './analysis';
-import { buildMarketWorkbook, formatReportValue, buildCsv, csvCell, AUCTIONS_CSV_HEADERS } from './reportExport';
-test('auctions CSV escapes quotes, newlines and formula prefixes in payload', () => {
-  const payload = '=cmd|"x"\nline2,with comma';
-  const row = { id: 'a1', description: '+SUM(1)', payload, seller_identifier: 's@x.com', winner_identifier: null, payload_revealed: true, status: 'sold', created_at: 0, end_at: 60000, finalized_at: null, highest: 100 };
-  const csv = buildCsv(AUCTIONS_CSV_HEADERS, [row]);
-  const [header, ...rest] = csv.split('\r\n');
-  expect(header).toContain('"payload"');
-  expect(header).toContain('"created_at (UTC)"');
-  const body = rest.join('\r\n');
-  expect(body).toContain('"\'=cmd|""x""\nline2,with comma"');
-  expect(body).toContain('"\'+SUM(1)"');
-  expect(body).toContain('"1970-01-01T00:00:00.000Z"');
-  expect(body).toContain('"true"');
-  expect(csvCell(null)).toBe('""');
-});
+import { buildMarketWorkbook, formatReportValue } from './reportExport';
 test('backend report joins cohorts and flags missing payments', () => {
   const report = {
     generatedAt: 100,
