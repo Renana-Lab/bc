@@ -64,7 +64,8 @@ test("auto-return job: EventBridge every 5 minutes, own role without secrets, sa
   assert.equal(SweepJobFunction.Properties.ReservedConcurrentExecutions, 1);
   const env = template.Resources.FaucetFunction.Properties.Environment.Variables;
   assert.equal(env.SWEEP_ADDRESS, "0x0000000000000000000000000000000000000001");
-  assert.equal(env.SWEEP_RATE_LIMIT_PER_WINDOW, "60");
+  assert.equal(env.SWEEP_RATE_LIMIT_PER_WINDOW, "600", "a whole lab shares one NAT address");
+  assert.equal(env.SWEEP_GLOBAL_RATE_LIMIT_PER_WINDOW, "6000");
   const custom = buildTemplate({ origins: "x", rpcUrl: "u", chainId: 23295, amountWei: "1", lowBalance: 1, faucetCodeDir: "a", monitorCodeDir: "b", sweepAddress: "0x00000000000000000000000000000000000000aa", sweepIdleMinutes: 60 });
   assert.equal(custom.Resources.SweepJobFunction.Properties.Environment.Variables.SWEEP_ADDRESS, "0x00000000000000000000000000000000000000aa");
   assert.equal(custom.Resources.SweepJobFunction.Properties.Environment.Variables.SWEEP_IDLE_MINUTES, "60");

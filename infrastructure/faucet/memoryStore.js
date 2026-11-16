@@ -115,10 +115,11 @@ const createMemoryStore = () => {
       return [...sweeps.values()].map((record) => ({ ...record }));
     },
     // armed (or a stale "sending") -> sending, only for this exact signature.
-    async claimSweep(address, signedAt, nowSeconds, sendingBefore) {
+    async claimSweep(address, signedAt, nowSeconds, sendingBefore, idleBefore) {
       await tick();
       const record = sweeps.get(String(address).toLowerCase());
       if (!record || record.signedAt !== signedAt) return false;
+      if (!(record.lastSeen < idleBefore)) return false; // a heartbeat after the scan cancels the broadcast
       if (!(record.status === "armed" || (record.status === "sending" && (record.sendingAt || 0) < sendingBefore))) return false;
       record.status = "sending";
       record.sendingAt = nowSeconds;

@@ -100,12 +100,12 @@ Do not set any key in Amplify. (This repo's Amplify build is triggered by pushes
 Participants' leftover TEST goes back to the faucet wallet after they were inactive (details: `infrastructure/faucet/README.md`, "Auto-return").
 
 1. **Redeploy the faucet stack** with the same `deployFaucet.js` command as before (the stack is updated in place). Optional environment variables for the deploy command:
-   `SWEEP_ADDRESS=<0x...>` (default: `--faucet-address`) and `SWEEP_IDLE_MINUTES=<n>` (default 30; the admin can change it later, 5..1440).
+   `SWEEP_ADDRESS=<0x...>` (default: `--faucet-address`) and `SWEEP_IDLE_MINUTES=<n>` (default 30; the admin can change it later, 15..1440).
 2. **Scheduler**: nothing to create by hand. The template adds `SweepJobFunction` plus an EventBridge rule `rate(5 minutes)` and its invoke permission. Check in the console that rule `SweepSchedule` is ENABLED.
 3. **IAM** (created by the template, listed for review): the faucet role gains `dynamodb:Scan` on the faucet table; the new job role has `dynamodb:GetItem`, `dynamodb:UpdateItem`, `dynamodb:Scan` on the faucet table and nothing else (no secrets). The deploying principal needs permission to create these roles (already required, `CAPABILITY_IAM`).
    The job reserves concurrency 1 like the faucet function (one more unit of the account concurrency quota; `--reserved-concurrency 0` skips it).
 4. **Amplify**: no new variable is required. Optional `REACT_APP_SWEEP_ADDRESS` overrides the address the browser signs to (it must equal the server's `SWEEP_ADDRESS`, otherwise every arm is refused with `recipient`). Rebuild the app.
-5. **Verify**: open `/admin/faucet`-style admin zone > Participants gas, enter the faucet admin password, *Load auto-return*. A participant with funds shows `armed` a few seconds after loading the app. Set a short idle time (minimum 5) for a rehearsal: close the tab, wait idle time + up to 5 minutes, the status becomes `sent` and then the returned amount is filled in. Restore 30 afterwards.
+5. **Verify**: open `/admin/faucet`-style admin zone > Participants gas, enter the faucet admin password, *Load auto-return*. A participant with funds shows `armed` a few seconds after loading the app. Set a short idle time (minimum 15) for a rehearsal: close the tab, wait idle time + up to 5 minutes, the status becomes `sent` and then the returned amount is filled in. Restore 30 afterwards.
 6. **Rollback**: delete `SweepSchedule` (or set its state to DISABLED) to stop all broadcasts; stored transactions stay inert and expire by TTL.
 
 ## Invisible wallet for participants (`REACT_APP_WALLET_MODE=local`, default)

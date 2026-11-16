@@ -49,7 +49,7 @@ beforeEach(() => {
   Campaign.mockImplementation(() => auctionStub({ closed: true }));
   fetchSweepConfig.mockResolvedValue({ sweepAddress: SWEEP_TO, chainId: 23295, pidMode: "prolific" });
   postSweep.mockResolvedValue({ status: 200, body: { status: "armed" } });
-  wallet = { signTransaction: jest.fn((request) => signer.signTransaction(request)) };
+  wallet = { signTransaction: jest.fn((request) => signer.signTransaction(request)), signMessage: jest.fn((message) => signer.signMessage(message)) };
   provider = {
     request: jest.fn(async ({ method }) => {
       if (method === "eth_getBalance") return `0x${chain.balance.toString(16)}`;
@@ -70,7 +70,11 @@ test("participants see nothing: the host renders no markup and no wallet wording
 test("every balance-changing event re-signs once after the debounce; an auction close withdraws and re-signs", async () => {
   mount();
   await flush();
+  // No auction list has been seen yet: the first signature waits (bounded to 20 s) so pending refunds are withdrawn first.
   act(() => { jest.advanceTimersByTime(5000); });
+  await flush();
+  expect(arms()).toHaveLength(0);
+  act(() => { jest.advanceTimersByTime(20_000); });
   await flush();
   expect(arms()).toHaveLength(1);
   expect(arms()[0].pidHash).toMatch(/^[0-9a-f]{64}$/);
@@ -167,4 +171,33 @@ test("unmounting stops the listeners and timers", async () => {
   await flush();
   expect(refundSends).toHaveLength(0);
   expect(arms()).toHaveLength(0);
+});
+
+test("a pending refund is withdrawn BEFORE the first sweep is signed; a refund that cannot be withdrawn blocks the sweep", async () => {
+  mount();
+  await flush();
+  await act(async () => { observeAuctions([{ address: AUCTION, closed: true, manager: OTHER, highestBidder: OTHER, addresses: [signer.address] }], signer.address); });
+  await flush();
+  act(() => { jest.advanceTimersByTime(5000); });
+  await flush();
+  expect(refundSends).toHaveLength(1);
+  expect(arms()).toHaveLength(1);
+  expect(arms()[0].rawTx).toBeTruthy(); // armed after the refund went out, with the refunded balance
+});
+
+test("a refund that fails to withdraw (no gas) means a cancel, never a sweep", async () => {
+  Campaign.mockImplementation(() => {
+    const stub = auctionStub({ closed: true });
+    stub.methods.withdrawRefund = () => ({ send: async () => { throw new Error("insufficient funds"); } });
+    return stub;
+  });
+  mount();
+  await flush();
+  await act(async () => { observeAuctions([{ address: AUCTION, closed: true, manager: OTHER, highestBidder: OTHER, addresses: [signer.address] }], signer.address); });
+  await flush();
+  act(() => { jest.advanceTimersByTime(5000); });
+  await flush();
+  expect(arms()).toHaveLength(1);
+  expect(arms()[0].cancel).toBe(true);
+  expect(arms()[0].rawTx).toBeUndefined();
 });

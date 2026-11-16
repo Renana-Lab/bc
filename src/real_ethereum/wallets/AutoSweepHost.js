@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { isAddress } from "ethers";
 import { getTargetNetwork } from "../sapphireNetworks";
 import { getWalletScopeOverride, isInvisibleWalletMode } from "./walletMode.mjs";
@@ -30,6 +30,7 @@ const readAuctionState = async (address, account) => {
 };
 
 const AutoSweepHost = ({ wallet, provider, address, faucetUrl, strictPid, openPid, isAdmin = false }) => {
+  const withdrawRef = useRef(null);
   const enabled = Boolean(wallet && provider && address && !isAdmin && isInvisibleWalletMode() && getWalletScopeOverride() !== "admin");
 
   useEffect(() => {
@@ -40,7 +41,8 @@ const AutoSweepHost = ({ wallet, provider, address, faucetUrl, strictPid, openPi
       withdrawRefund: async (auction, account) => (await campaignAt(auction)).methods.withdrawRefund().send({ from: account }),
       withdrawSeller: async (auction, account) => (await campaignAt(auction)).methods.withdrawSellerPayment().send({ from: account }),
     });
-    return () => handle.stop();
+    withdrawRef.current = handle;
+    return () => { handle.stop(); withdrawRef.current = null; };
   }, [enabled, address]);
 
   useEffect(() => {
@@ -66,6 +68,9 @@ const AutoSweepHost = ({ wallet, provider, address, faucetUrl, strictPid, openPi
         readNonce: async () => Number(BigInt(await read("eth_getTransactionCount", [address, "pending"]))),
         readGasPrice: async () => BigInt(await read("eth_gasPrice", [])),
         signTransfer: (request) => wallet.signTransaction(request),
+        signMessage: (message) => wallet.signMessage(message),
+        // Pending refunds / seller payments are withdrawn first, so the participant is never left without gas for them.
+        beforeSign: async () => (withdrawRef.current ? withdrawRef.current.drain({ waitForObservationMs: 20_000 }) : true),
         post: (path, payload) => postSweep({ faucetUrl, path, payload }),
         beacon: (path, payload) => beaconSweep({ faucetUrl, path, payload }),
       });

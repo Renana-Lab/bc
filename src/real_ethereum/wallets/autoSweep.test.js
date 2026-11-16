@@ -1,6 +1,6 @@
 /** @jest-environment node */
-import { Transaction, Wallet } from "ethers";
-import { SWEEP_GAS_LIMIT, computeSweepValue, createSweepController, sweepFee } from "./autoSweep.mjs";
+import { Transaction, Wallet, verifyMessage } from "ethers";
+import { SWEEP_GAS_LIMIT, computeSweepValue, createSweepController, sweepFee, sweepMessage } from "./autoSweep.mjs";
 import { emitBalanceEvent } from "./balanceEvents.mjs";
 import { createLocalWallet, createMemoryStorage } from "./localWallet.mjs";
 
@@ -21,7 +21,7 @@ const setup = (overrides = {}) => {
   const controller = createSweepController({
     address: signer.address, sweepAddress: SWEEP_TO, chainId: 23295, pidHash: PID_HASH,
     readBalance: async () => chain.balance, readNonce: async () => chain.nonce, readGasPrice: async () => GAS_PRICE,
-    signTransfer: (request) => signer.signTransaction(request),
+    signTransfer: (request) => signer.signTransaction(request), signMessage: (message) => signer.signMessage(message),
     post: async (path, payload) => { posts.push({ path, payload }); return { status: 200, body: { status: "armed" } }; },
     isVisible: () => true, win: fakeWin, doc: fakeDoc, ...overrides,
   });
@@ -111,6 +111,8 @@ test("a remainder <= 0 sends a cancel instead of a transfer, once", async () => 
   expect(t.arms()).toHaveLength(1);
   expect(t.arms()[0].payload).toMatchObject({ pidHash: PID_HASH, address: t.signer.address, cancel: true });
   expect(t.arms()[0].payload.rawTx).toBeUndefined();
+  const { signedAt, sig } = t.arms()[0].payload;
+  expect(verifyMessage(sweepMessage("cancel", t.signer.address, PID_HASH, signedAt), sig)).toBe(t.signer.address);
   t.chain.balance = 0n;
   emitBalanceEvent("tx-mined");
   jest.advanceTimersByTime(5000);
@@ -126,7 +128,7 @@ test("a remainder <= 0 sends a cancel instead of a transfer, once", async () => 
   t.controller.dispose();
 });
 
-test("heartbeat every 5 minutes while visible, none while hidden; a stale answer triggers a fresh signature", async () => {
+test("heartbeat every 2 minutes while visible, none while hidden; a stale answer triggers a fresh signature", async () => {
   let visible = true;
   const answers = { status: "armed" };
   const posts = [];
@@ -137,18 +139,20 @@ test("heartbeat every 5 minutes while visible, none while hidden; a stale answer
   jest.advanceTimersByTime(5000);
   await flush();
   const heartbeats = () => posts.filter((p) => p.path === "/sweep/heartbeat");
-  jest.advanceTimersByTime(300_000);
+  jest.advanceTimersByTime(120_000);
   await flush();
   expect(heartbeats()).toHaveLength(1);
-  expect(heartbeats()[0].payload).toEqual({ pidHash: PID_HASH, address: t.signer.address });
+  const beat = heartbeats()[0].payload;
+  expect(beat).toMatchObject({ pidHash: PID_HASH, address: t.signer.address });
+  expect(verifyMessage(sweepMessage("heartbeat", t.signer.address, PID_HASH, beat.ts), beat.sig)).toBe(t.signer.address);
   visible = false;
-  jest.advanceTimersByTime(300_000);
+  jest.advanceTimersByTime(120_000);
   await flush();
   expect(heartbeats()).toHaveLength(1);
   visible = true;
   answers.status = "stale";
   const armsBefore = posts.filter((p) => p.path === "/sweep/arm").length;
-  jest.advanceTimersByTime(300_000);
+  jest.advanceTimersByTime(120_000);
   await flush();
   expect(posts.filter((p) => p.path === "/sweep/arm").length).toBe(armsBefore + 1);
   t.controller.dispose();
@@ -166,6 +170,52 @@ test("pagehide sends the last signature as a best-effort beacon; failures are si
   jest.advanceTimersByTime(5000);
   await expect(failing.controller.idle()).resolves.toBeUndefined();
   failing.controller.dispose();
+});
+
+test("every 10 minutes an armed transfer is signed again, so a gas price change cannot leave a stale one", async () => {
+  let gasPrice = GAS_PRICE;
+  const t = setup({ readGasPrice: async () => gasPrice, heartbeatMs: 10 ** 9, pollMs: 10 ** 9 });
+  jest.advanceTimersByTime(5000);
+  await flush();
+  expect(t.arms()).toHaveLength(1);
+  gasPrice = GAS_PRICE * 2n; // no balance change, no event
+  jest.advanceTimersByTime(600_000);
+  await flush();
+  expect(t.arms()).toHaveLength(2);
+  expect(Transaction.from(t.arms()[1].payload.rawTx).gasPrice).toBe(GAS_PRICE * 2n);
+  expect(Transaction.from(t.arms()[1].payload.rawTx).value).toBe(t.chain.balance - sweepFee(GAS_PRICE * 2n));
+  t.controller.dispose();
+});
+
+test("the periodic re-sign never creates a transfer when none is armed (remainder <= 0)", async () => {
+  const t = setup({ heartbeatMs: 10 ** 9, pollMs: 10 ** 9 });
+  t.chain.balance = 0n;
+  jest.advanceTimersByTime(5000);
+  await flush();
+  expect(t.arms()).toHaveLength(1); // the cancel
+  jest.advanceTimersByTime(1_200_000);
+  await flush();
+  expect(t.arms()).toHaveLength(1);
+  t.controller.dispose();
+});
+
+test("a pending refund is withdrawn before signing; while one is stuck a cancel is sent instead of a sweep", async () => {
+  let safe = false;
+  const order = [];
+  const t = setup({ beforeSign: async () => { order.push("beforeSign"); return safe; } });
+  jest.advanceTimersByTime(5000);
+  await flush();
+  expect(order).toEqual(["beforeSign"]);
+  expect(t.arms()).toHaveLength(1);
+  expect(t.arms()[0].payload.cancel).toBe(true);
+  safe = true;
+  t.chain.balance += 10n ** 17n;
+  emitBalanceEvent("tx-mined");
+  jest.advanceTimersByTime(5000);
+  await flush();
+  expect(t.arms()).toHaveLength(2);
+  expect(t.arms()[1].payload.rawTx).toBeTruthy();
+  t.controller.dispose();
 });
 
 test("disposing stops everything", async () => {

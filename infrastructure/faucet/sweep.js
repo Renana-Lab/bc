@@ -5,11 +5,11 @@
 // A scheduled job broadcasts the stored transaction once the participant has been idle for a while. The faucet never
 // holds participant keys: the stored raw transaction can only do the one thing it was signed for (pay the sweep
 // address), and it dies on its own as soon as the participant sends anything else (nonce used) or the balance changes.
-const { Transaction, getAddress, isAddress } = require("ethers");
+const { Transaction, getAddress, isAddress, verifyMessage } = require("ethers");
 
 const MIN_SWEEP_GAS = 21000n;
 const MAX_SWEEP_GAS = 100000n;
-const MIN_IDLE_MINUTES = 5;
+const MIN_IDLE_MINUTES = 15; // heartbeats come every 2 minutes: an active participant is never idle this long
 const MAX_IDLE_MINUTES = 1440;
 const DEFAULT_IDLE_MINUTES = 30;
 const MAX_JOB_ENTRIES = 50;
@@ -32,6 +32,14 @@ const validateSweepTx = ({ rawTx, address, sweepAddress, chainId }) => {
   if (!(tx.value > 0n)) return { ok: false, reason: "value" };
   if (!(tx.gasLimit >= MIN_SWEEP_GAS && tx.gasLimit <= MAX_SWEEP_GAS) || !(tx.gasPrice > 0n)) return { ok: false, reason: "gas" };
   return { ok: true, tx, maxCost: tx.value + tx.gasPrice * tx.gasLimit };
+};
+
+// Cancel and heartbeat are signed by the participant wallet: knowing a pid hash is not enough to touch someone's record.
+const SIGNATURE_WINDOW_MS = 5 * 60_000;
+const sweepMessage = (action, address, pidHash, ts) => `bc-sweep|${action}|${String(address).toLowerCase()}|${pidHash}|${ts}`;
+const verifySweepSignature = ({ action, address, pidHash, ts, sig, nowMs }) => {
+  if (!Number.isFinite(ts) || Math.abs(nowMs - ts) > SIGNATURE_WINDOW_MS || typeof sig !== "string" || sig.length > 200) return false;
+  try { return verifyMessage(sweepMessage(action, address, pidHash, ts), sig).toLowerCase() === String(address).toLowerCase(); } catch { return false; }
 };
 
 const parseIdleMinutes = (value) => (Number.isInteger(value) && value >= MIN_IDLE_MINUTES && value <= MAX_IDLE_MINUTES ? value : null);
@@ -100,7 +108,7 @@ const runSweepJob = async ({ store, chain, config, now = () => Date.now(), log =
       if (balance < tx.value + tx.gasPrice * tx.gasLimit) { await markStale(entry, "balance"); continue; }
 
       // Claim the entry (armed -> sending, conditional): a parallel run or a re-arm wins over us cleanly.
-      if (!(await store.claimSweep(entry.address, entry.signedAt, nowSec, nowSec - SENDING_RETRY_SECONDS))) continue;
+      if (!(await store.claimSweep(entry.address, entry.signedAt, nowSec, nowSec - SENDING_RETRY_SECONDS, idleBefore))) continue;
       try {
         await chain.sendRaw(entry.rawTx);
         await finish(entry, { status: "sent", txHash: tx.hash, sentAt: nowSec, error: null });
@@ -131,6 +139,6 @@ const runSweepJob = async ({ store, chain, config, now = () => Date.now(), log =
 };
 
 module.exports = {
-  validateSweepTx, runSweepJob, parseIdleMinutes, publicSweep,
+  validateSweepTx, runSweepJob, sweepMessage, verifySweepSignature, parseIdleMinutes, publicSweep,
   MIN_IDLE_MINUTES, MAX_IDLE_MINUTES, DEFAULT_IDLE_MINUTES, PID_HASH_PATTERN, RAW_TX_PATTERN, isAddress, getAddress,
 };

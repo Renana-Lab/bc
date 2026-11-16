@@ -10,14 +10,19 @@ export const SWEEP_GAS_LIMIT = 60000n;
 export const sweepFee = (gasPrice) => (SWEEP_GAS_LIMIT * BigInt(gasPrice) * 12n) / 10n; // 20% headroom for a price rise
 
 // Value to send: balance minus the fee reserve. <= 0 means there is nothing worth returning.
+// Must match infrastructure/faucet/sweep.js: cancel and heartbeat are signed so a pid alone cannot touch a record.
+export const sweepMessage = (action, address, pidHash, ts) => `bc-sweep|${action}|${String(address).toLowerCase()}|${pidHash}|${ts}`;
+
 export const computeSweepValue = ({ balance, gasPrice }) => BigInt(balance) - sweepFee(gasPrice);
 
 const MAX_WAIT_MS = 30_000; // a constant stream of events still produces a signature at least this often
 
 export const createSweepController = ({
   address, sweepAddress, chainId, pidHash,
-  readBalance, readNonce, readGasPrice, signTransfer, post, beacon = () => false,
-  debounceMs = 5000, heartbeatMs = 300_000, pollMs = 20_000, retryMs = 10_000,
+  readBalance, readNonce, readGasPrice, signTransfer, signMessage, post, beacon = () => false,
+  // beforeSign() resolves false while a refund/payment is still waiting to be withdrawn: nothing may be swept then.
+  beforeSign = async () => true,
+  debounceMs = 5000, heartbeatMs = 120_000, pollMs = 20_000, retryMs = 10_000, resignMs = 600_000,
   isVisible = () => !globalThis.document?.hidden, now = () => Date.now(),
   win = globalThis.window, doc = globalThis.document, subscribe = subscribeBalanceEvents,
 }) => {
@@ -37,7 +42,18 @@ export const createSweepController = ({
     return result;
   };
 
-  const resign = async ({ force = false } = {}) => {
+  const cancelPayload = async () => {
+    const ts = now();
+    return { pidHash, address, cancel: true, signedAt: ts, sig: await signMessage(sweepMessage("cancel", address, pidHash, ts)) };
+  };
+
+  // periodic: only refreshes an armed transfer (a gas price change must not leave a stale one); never creates one.
+  const resign = async ({ force = false, periodic = false } = {}) => {
+    if (disposed) return;
+    if (periodic && lastKind !== "armed") return;
+    if (periodic) force = true;
+    let safe = true;
+    try { safe = (await beforeSign()) !== false; } catch { safe = true; }
     if (disposed) return;
     let balance; let nonce; let gasPrice;
     try { [balance, nonce, gasPrice] = await Promise.all([readBalance(), readNonce(), readGasPrice()]); } catch { return; }
@@ -45,9 +61,9 @@ export const createSweepController = ({
     nonce = Number(nonce);
     const value = computeSweepValue({ balance, gasPrice });
     let payload;
-    if (value <= 0n) {
+    if (value <= 0n || !safe) {
       if (lastKind === "cancel" && !force) { lastBalance = balance; return; }
-      payload = { pidHash, address, cancel: true, signedAt: now() };
+      try { payload = await cancelPayload(); } catch { return; }
     } else {
       if (!force && lastKind === "armed" && lastBalance === balance && lastNonce === nonce) return;
       try {
@@ -96,7 +112,12 @@ export const createSweepController = ({
 
   const heartbeat = async () => {
     if (disposed || !isVisible()) return;
-    const result = await post("/sweep/heartbeat", { pidHash, address });
+    let payload;
+    try {
+      const ts = now();
+      payload = { pidHash, address, ts, sig: await signMessage(sweepMessage("heartbeat", address, pidHash, ts)) };
+    } catch { return; }
+    const result = await post("/sweep/heartbeat", payload);
     if (result.status !== 200) return;
     const status = result.body?.status;
     // The server dropped or used our transaction (the participant was active in between): sign a fresh one.
@@ -104,13 +125,14 @@ export const createSweepController = ({
   };
 
   const onPageHide = () => {
-    if (lastPayload) beacon("/sweep/arm", { ...lastPayload, signedAt: now() });
+    if (lastPayload) beacon("/sweep/arm", lastPayload.cancel ? lastPayload : { ...lastPayload, signedAt: now() });
   };
   const onVisible = () => { if (doc && !doc.hidden) { heartbeat(); checkBalance(); } };
 
   const unsubscribe = subscribe(() => poke("balance-event"));
   timers.push(setInterval(heartbeat, heartbeatMs));
   timers.push(setInterval(checkBalance, pollMs));
+  timers.push(setInterval(() => { if (isVisible()) enqueue({ periodic: true }); }, resignMs));
   win?.addEventListener?.("pagehide", onPageHide);
   doc?.addEventListener?.("visibilitychange", onVisible);
   poke("load");

@@ -7,7 +7,7 @@ const buildTemplate = ({
   origins, alertEmail = "", secretArn = "", faucetAddress = "", rpcUrl, chainId, amountWei, lowBalance,
   rateLimit = "20", globalRateLimit = "600", reservedConcurrency = 1,
   pidMode = "allowlist", maxPayouts = "", requiredStudyId = "", adminSecretArn = "", faucetCodeDir, monitorCodeDir,
-  sweepAddress = "", sweepIdleMinutes = 30,
+  sweepAddress = "", sweepIdleMinutes = 30, sweepRateLimit = "600", sweepGlobalRateLimit = "6000",
 }) => {
 const policy = (statement) => ({ PolicyName: "inline", PolicyDocument: { Version: "2012-10-17", Statement: statement } });
   const assume = { Version: "2012-10-17", Statement: [{ Effect: "Allow", Principal: { Service: "lambda.amazonaws.com" }, Action: "sts:AssumeRole" }] };
@@ -75,7 +75,8 @@ const policy = (statement) => ({ PolicyName: "inline", PolicyDocument: { Version
             FAUCET_EXPERIMENT_CODE: { Ref: "ExperimentCode" }, FAUCET_ADMIN_SECRET_ID: adminSecretArn || "unset",
             ADMIN_RATE_LIMIT_PER_WINDOW: "5", ADMIN_GLOBAL_RATE_LIMIT_PER_WINDOW: "300", ADMIN_SECRET_TTL_SECONDS: "60",
             SWEEP_ADDRESS: sweepAddress || faucetAddress || "", SWEEP_IDLE_MINUTES: String(sweepIdleMinutes),
-            SWEEP_RATE_LIMIT_PER_WINDOW: "60", SWEEP_GLOBAL_RATE_LIMIT_PER_WINDOW: "1200",
+            // A whole lab shares one NAT address: every participant heartbeats every 2 minutes and re-arms on activity.
+            SWEEP_RATE_LIMIT_PER_WINDOW: String(sweepRateLimit), SWEEP_GLOBAL_RATE_LIMIT_PER_WINDOW: String(sweepGlobalRateLimit),
           },
         },
         Code: faucetCodeDir,

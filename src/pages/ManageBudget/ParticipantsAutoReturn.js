@@ -62,7 +62,7 @@ export const AutoReturnControls = ({ state }) => {
       <Typography variant="body2" color="text.secondary">Auto-return of leftover funds to the lab address:</Typography>
       <TextField size="small" type="password" autoComplete="new-password" label="Faucet admin password" value={password} onChange={(e) => setPassword(e.target.value)} inputProps={{ "aria-label": "Auto-return admin password" }} />
       <Button size="small" variant="outlined" disabled={!password || state.busy} onClick={() => withPassword(state.load)}>Load auto-return</Button>
-      <TextField size="small" label="Idle minutes (5-1440)" value={idle} onChange={(e) => setMinutes(e.target.value)} inputProps={{ "aria-label": "Idle minutes" }} sx={{ width: 170 }} />
+      <TextField size="small" label="Idle minutes (15-1440)" value={idle} onChange={(e) => setMinutes(e.target.value)} inputProps={{ "aria-label": "Idle minutes" }} sx={{ width: 170 }} />
       <Button size="small" variant="outlined" disabled={!password || state.busy || !/^\d+$/.test(String(idle))} onClick={() => withPassword((pw) => state.save(pw, Number(idle)))}>Save idle time</Button>
       {state.message ? <Typography color="error" variant="body2">{state.message}</Typography> : null}
     </Box>

@@ -266,16 +266,17 @@ const createDynamoStore = ({ table, rateTable, client } = {}) => {
       } while (startKey && out.length < 2000);
       return out;
     },
-    async claimSweep(address, signedAt, nowSeconds, sendingBefore) {
+    // Also requires lastSeen < idleBefore: a heartbeat between the scan and this claim cancels the broadcast.
+    async claimSweep(address, signedAt, nowSeconds, sendingBefore, idleBefore) {
       try {
         await send(new sdk.UpdateItemCommand({
           TableName: table, Key: sweepKey(address),
-          ConditionExpression: "signedAt = :signed AND (#s = :armed OR (#s = :sending AND sendingAt < :before))",
+          ConditionExpression: "signedAt = :signed AND lastSeen < :idleBefore AND (#s = :armed OR (#s = :sending AND sendingAt < :before))",
           UpdateExpression: "SET #s = :sending, sendingAt = :now",
           ExpressionAttributeNames: { "#s": "status" },
           ExpressionAttributeValues: {
             ":signed": { N: String(signedAt) }, ":armed": { S: "armed" }, ":sending": { S: "sending" },
-            ":before": { N: String(sendingBefore) }, ":now": { N: String(nowSeconds) },
+            ":before": { N: String(sendingBefore) }, ":now": { N: String(nowSeconds) }, ":idleBefore": { N: String(idleBefore) },
           },
         }));
         return true;

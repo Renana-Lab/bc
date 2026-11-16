@@ -60,5 +60,5 @@ export const saveSweepIdleMinutes = async ({ faucetUrl, password, idleMinutes, f
   });
   const body = await readJson(response);
   if (response.status === 200 && Number.isInteger(body.idleMinutes)) return body.idleMinutes;
-  throw Object.assign(new Error(response.status === 401 ? "Wrong password." : "Use a whole number of minutes from 5 to 1440."), { code: response.status === 401 ? "unauthorized" : "failed" });
+  throw Object.assign(new Error(response.status === 401 ? "Wrong password." : "Use a whole number of minutes from 15 to 1440."), { code: response.status === 401 ? "unauthorized" : "failed" });
 };

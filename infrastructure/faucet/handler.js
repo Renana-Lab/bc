@@ -97,8 +97,8 @@ const loadConfig = (env = process.env) => {
     // Auto-return of leftover TEST (see sweep.js). The sweep address defaults to the faucet wallet.
     sweepAddress: env.SWEEP_ADDRESS && isAddress(env.SWEEP_ADDRESS) ? getAddress(env.SWEEP_ADDRESS) : "",
     sweepIdleMinutes: Number(env.SWEEP_IDLE_MINUTES || 30),
-    sweepRateLimit: Number(env.SWEEP_RATE_LIMIT_PER_WINDOW || 60),
-    sweepGlobalRateLimit: Number(env.SWEEP_GLOBAL_RATE_LIMIT_PER_WINDOW || 1200),
+    sweepRateLimit: Number(env.SWEEP_RATE_LIMIT_PER_WINDOW || 600),
+    sweepGlobalRateLimit: Number(env.SWEEP_GLOBAL_RATE_LIMIT_PER_WINDOW || 6000),
   };
 };
 
@@ -400,7 +400,7 @@ const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, getAdminSecret
 
   // ---- auto-return (sweep): see sweep.js ----
   const sweepAddressOf = async () => (config.sweepAddress ? getAddress(config.sweepAddress) : getAddress((await getWallet()).address));
-  const sweepLimited = (request) => overLimit(request, "sw:", "sw-global", config.sweepRateLimit ?? 60, config.sweepGlobalRateLimit ?? 1200);
+  const sweepLimited = (request) => overLimit(request, "sw:", "sw-global", config.sweepRateLimit ?? 600, config.sweepGlobalRateLimit ?? 6000);
   const sweepIdle = async () => sweep.parseIdleMinutes((await store.getSweepSettings().catch(() => null))?.idleMinutes) ?? sweep.parseIdleMinutes(config.sweepIdleMinutes) ?? sweep.DEFAULT_IDLE_MINUTES;
 
   // GET /sweep/config: public. The address the browser signs its leftover transfer to, and the pid mode (to hash the id).
@@ -437,6 +437,8 @@ const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, getAdminSecret
       const signedAt = Math.min(signedAtRaw, now() + 5 * 60_000); // a client clock far ahead cannot pin the record
       const base = { pidHash, lastSeen: nowSeconds, signedAt, returnedWei: existing?.returnedWei, txHash: existing?.txHash };
       if (cancel === true) {
+        const signedBy = sweep.verifySweepSignature({ action: "cancel", address: owner, pidHash, ts: body.signedAt, sig: body.sig, nowMs: now() });
+        if (!signedBy) { event("sweep_rejected", { reason: "signature" }); return json(403, { error: "bad_signature" }); }
         const saved = await store.putSweep(owner, { ...base, status: "none", value: "0" });
         return json(saved ? 200 : 409, saved ? { status: "none" } : { error: "older" });
       }
@@ -456,14 +458,15 @@ const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, getAdminSecret
     }
   };
 
-  // POST /sweep/heartbeat { pidHash, address }: the participant is still here. Answers the stored status.
+  // POST /sweep/heartbeat { pidHash, address, ts, sig } (sig: wallet signature of the heartbeat message): the participant is still here. Answers the stored status.
   const sweepHeartbeat = async (request) => {
     try {
       const raw = readBody(request);
       if (Buffer.byteLength(raw) > MAX_BODY_BYTES) return json(413, { error: "too_large" });
       if (await sweepLimited(request)) return rateLimited();
-      const { pidHash, address } = parseBody(raw);
+      const { pidHash, address, ts, sig } = parseBody(raw);
       if (typeof pidHash !== "string" || !sweep.PID_HASH_PATTERN.test(pidHash) || typeof address !== "string" || !isAddress(address)) return json(400, { error: "bad_request" });
+      if (!sweep.verifySweepSignature({ action: "heartbeat", address, pidHash, ts, sig, nowMs: now() })) return json(403, { error: "bad_signature" });
       const status = await store.touchSweep(getAddress(address).toLowerCase(), pidHash, Math.floor(now() / 1000));
       return json(200, { status: status || "none" });
     } catch {

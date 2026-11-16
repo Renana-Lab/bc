@@ -6,7 +6,7 @@ import { Transaction, Wallet } from "ethers";
 
 const require = createRequire(import.meta.url);
 const { createFaucetHandler, sha256 } = require("../../infrastructure/faucet/handler.js");
-const { runSweepJob } = require("../../infrastructure/faucet/sweep.js");
+const { runSweepJob, sweepMessage } = require("../../infrastructure/faucet/sweep.js");
 const { createMemoryStore } = require("../../infrastructure/faucet/memoryStore.js");
 const { hashPassword } = require("../../infrastructure/faucet/adminAuth.js");
 
@@ -64,7 +64,10 @@ const setup = async ({ config = {} } = {}) => {
       type: 0, chainId: CHAIN_ID, to: faucetWallet.address, value: (balance - GAS_PRICE * GAS_LIMIT * 12n / 10n), nonce: 0, gasPrice: GAS_PRICE, gasLimit: GAS_LIMIT, ...overrides,
     });
     const arm = async (rawTx, extra = {}) => send("/sweep/arm", "POST", { body: { pidHash, address: wallet.address, rawTx: rawTx ?? (await sign()), ...extra } });
-    return { wallet, pidHash, sign, arm, address: wallet.address };
+    const signedAs = async (action, signer = wallet, ts = clock.ms) => ({ ts, sig: await signer.signMessage(sweepMessage(action, wallet.address, pidHash, ts)) });
+    const heartbeat = async (extra = {}, signer = wallet) => send("/sweep/heartbeat", "POST", { body: { pidHash, address: wallet.address, ...(await signedAs("heartbeat", signer)), ...extra } });
+    const cancel = async (extra = {}, signer = wallet, ts = clock.ms + 1000) => send("/sweep/arm", "POST", { body: { pidHash, address: wallet.address, cancel: true, signedAt: ts, sig: (await signedAs("cancel", signer, ts)).sig, ...extra } });
+    return { wallet, pidHash, sign, arm, heartbeat, cancel, signedAs, address: wallet.address };
   };
   const job = () => runSweepJob({ store, chain, config: full, now: () => clock.ms });
   const admin = (path, method = "GET", body, password = PASSWORD) => send(path, method, {
@@ -144,7 +147,7 @@ test("cancel disarms, and the job then does nothing", async () => {
   const t = await setup();
   const p = await t.participant();
   await p.arm();
-  const cancelled = await t.send("/sweep/arm", "POST", { body: { pidHash: p.pidHash, address: p.address, cancel: true, signedAt: t.clock.ms + 1000 } });
+  const cancelled = await p.cancel();
   assert.equal(parse(cancelled).status, "none");
   t.clock.ms += 120 * MINUTE;
   assert.deepEqual(await t.job(), { sent: 0, stale: 0, confirmed: 0, retry: 0, skipped: 0 });
@@ -162,7 +165,7 @@ test("the job broadcasts only after the idle time and only once; heartbeats keep
   await t.job();
   assert.equal(t.chain.sent.length, 0, "not idle long enough");
   // `other` is still around: its heartbeat moves lastSeen forward.
-  const beat = await t.send("/sweep/heartbeat", "POST", { body: { pidHash: other.pidHash, address: other.address } });
+  const beat = await other.heartbeat();
   assert.equal(parse(beat).status, "armed");
   t.clock.ms += 2 * MINUTE;
   assert.equal((await t.job()).sent, 1);
@@ -179,13 +182,45 @@ test("the job broadcasts only after the idle time and only once; heartbeats keep
   assert.equal(sweeps.find((s) => s.address === other.address.toLowerCase()).status, "armed");
 });
 
-test("heartbeat needs the matching pid hash", async () => {
+test("cancel and heartbeat need a signature of the participant wallet: a pid hash alone is not enough", async () => {
   const t = await setup();
   const p = await t.participant();
   await p.arm();
-  const wrong = await t.send("/sweep/heartbeat", "POST", { body: { pidHash: sha256("other"), address: p.address } });
-  assert.equal(parse(wrong).status, "none");
+  const stranger = Wallet.createRandom();
+  // Unsigned, signed by someone else, signed for another action, expired and wrong-pid requests are all refused.
+  assert.equal((await t.send("/sweep/arm", "POST", { body: { pidHash: p.pidHash, address: p.address, cancel: true, signedAt: t.clock.ms } })).statusCode, 403);
+  assert.equal((await p.cancel({}, stranger)).statusCode, 403);
+  assert.equal((await p.cancel({ sig: (await p.signedAs("heartbeat", p.wallet, t.clock.ms + 1000)).sig })).statusCode, 403, "a heartbeat signature cannot cancel");
+  assert.equal((await p.cancel({}, p.wallet, t.clock.ms - 10 * MINUTE)).statusCode, 403, "outside the 5 minute window");
+  assert.equal((await t.send("/sweep/heartbeat", "POST", { body: { pidHash: p.pidHash, address: p.address } })).statusCode, 403);
+  assert.equal((await p.heartbeat({}, stranger)).statusCode, 403);
+  assert.equal((await p.heartbeat({ ts: t.clock.ms - 10 * MINUTE })).statusCode, 403);
+  assert.equal(parse(await t.admin("/admin/sweeps")).sweeps[0].status, "armed", "nothing changed");
+  // The owner's own signed requests work; a wrong pid hash gets "none", a malformed request 400.
+  assert.equal(parse(await p.heartbeat()).status, "armed");
+  assert.equal((await p.heartbeat({ pidHash: sha256("other") })).statusCode, 403, "signature is bound to the pid hash");
   assert.equal((await t.send("/sweep/heartbeat", "POST", { body: { address: p.address } })).statusCode, 400);
+  assert.equal(parse(await p.cancel()).status, "none");
+});
+
+test("a heartbeat between the scan and the claim cancels the broadcast (claim needs lastSeen < idleBefore)", async () => {
+  const t = await setup();
+  const p = await t.participant();
+  await p.arm();
+  t.clock.ms += 31 * MINUTE;
+  const record = await t.store.getSweep(p.address);
+  const nowSec = Math.floor(t.clock.ms / 1000);
+  const idleBefore = nowSec - 30 * 60;
+  assert.equal(record.lastSeen < idleBefore, true, "idle at scan time");
+  await p.heartbeat(); // the participant is back right now
+  assert.equal(await t.store.claimSweep(p.address, record.signedAt, nowSec, nowSec - 600, idleBefore), false);
+  assert.equal((await t.store.getSweep(p.address)).status, "armed", "not claimed");
+  // A scan that raced the same way inside the job: it re-reads nothing, the claim alone decides.
+  const original = t.store.listSweeps;
+  t.store.listSweeps = async () => { const list = await original(); await p.heartbeat(); return list; };
+  assert.equal((await t.job()).sent, 0);
+  assert.equal(t.chain.sent.length, 0);
+  t.store.listSweeps = original;
 });
 
 test("stale when the nonce was used or the balance changed after arming (the participant was active)", async () => {
@@ -223,15 +258,15 @@ test("a broadcast that fails because the nonce was taken meanwhile is stale; a t
   assert.equal((await t.job()).stale, 1, "third failed attempt gives up");
 });
 
-test("admin endpoints need the admin password; idle minutes are editable (5..1440) and drive the job", async () => {
+test("admin endpoints need the admin password; idle minutes are editable (15..1440) and drive the job", async () => {
   const t = await setup();
   const p = await t.participant();
   await p.arm();
   assert.equal((await t.admin("/admin/sweeps", "GET", undefined, "wrong")).statusCode, 401);
   assert.equal((await t.admin("/admin/sweeps", "GET", undefined, null)).statusCode, 401);
-  assert.equal((await t.admin("/admin/sweep-settings", "POST", { idleMinutes: 10 }, "wrong")).statusCode, 401);
-  assert.equal((await t.admin("/admin/sweep-settings", "POST", { idleMinutes: 10 }, null)).statusCode, 401);
-  for (const bad of [4, 1441, 10.5, "10", null]) assert.equal((await t.admin("/admin/sweep-settings", "POST", { idleMinutes: bad })).statusCode, 400, String(bad));
+  assert.equal((await t.admin("/admin/sweep-settings", "POST", { idleMinutes: 20 }, "wrong")).statusCode, 401);
+  assert.equal((await t.admin("/admin/sweep-settings", "POST", { idleMinutes: 20 }, null)).statusCode, 401);
+  for (const bad of [14, 5, 1441, 20.5, "20", null]) assert.equal((await t.admin("/admin/sweep-settings", "POST", { idleMinutes: bad })).statusCode, 400, String(bad));
   assert.equal((await t.admin("/admin/sweeps", "POST")).statusCode, 405);
   assert.equal(parse(await t.admin("/admin/sweeps")).idleMinutes, 30);
   assert.equal((await t.admin("/admin/sweep-settings", "POST", { idleMinutes: 60 })).statusCode, 200);
@@ -248,7 +283,8 @@ test("/sweep/* is rate limited per caller like /claim", async () => {
   const t = await setup({ config: { sweepRateLimit: 3 } });
   const p = await t.participant();
   const codes = [];
-  for (let i = 0; i < 5; i += 1) codes.push((await t.send("/sweep/heartbeat", "POST", { body: { pidHash: p.pidHash, address: p.address }, ip: "192.0.2.77" })).statusCode);
+  const beat = async (ip) => t.send("/sweep/heartbeat", "POST", { body: { pidHash: p.pidHash, address: p.address, ...(await p.signedAs("heartbeat")) }, ip });
+  for (let i = 0; i < 5; i += 1) codes.push((await beat("192.0.2.77")).statusCode);
   assert.deepEqual(codes, [200, 200, 200, 429, 429]);
-  assert.equal((await t.send("/sweep/heartbeat", "POST", { body: { pidHash: p.pidHash, address: p.address }, ip: "192.0.2.78" })).statusCode, 200, "another caller is unaffected");
+  assert.equal((await beat("192.0.2.78")).statusCode, 200, "another caller is unaffected");
 });
