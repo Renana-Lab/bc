@@ -11,6 +11,7 @@ import {
   planTopUp, runTopUps, saveManualAddresses, saveSetting, selectLowRows,
 } from "./participantsGasData";
 import { readBudgets, readNativeBalances, readParticipantSources } from "./participantsGasReaders";
+import { SendMessageDialog } from "./ParticipantsMessages";
 import { AutoReturnCells, AutoReturnControls, AutoReturnHeaders, useAutoReturn } from "./ParticipantsAutoReturn";
 import { explorerTxUrl, readAdminBalance, sendNativeFromAdmin, waitForReceipt } from "./adminTransfer";
 
@@ -46,6 +47,7 @@ export const ParticipantsGasCardBody = ({ adminAccount, deps: depsOverride, refr
   const [statuses, setStatuses] = useState({});
   const [confirm, setConfirm] = useState(null); // { targets, adminBalance, error }
   const [running, setRunning] = useState(false);
+  const [messageTarget, setMessageTarget] = useState(null); // { pidHash, label } | { all: true }
   const autoReturn = useAutoReturn({ deps: depsOverride?.autoReturn });
   const requestRef = useRef(0);
   const manualRef = useRef(manual);
@@ -152,6 +154,9 @@ export const ParticipantsGasCardBody = ({ adminAccount, deps: depsOverride, refr
       </Box>
 
       <AutoReturnControls state={autoReturn} />
+      {autoReturn.enabled ? (
+        <Box sx={{ mt: 1 }}><Button size="small" variant="outlined" onClick={() => setMessageTarget({ all: true })}>Message all participants</Button></Box>
+      ) : null}
 
       <Box sx={{ overflowX: "auto", mt: 2 }}>
         <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 13 }}>
@@ -176,13 +181,22 @@ export const ParticipantsGasCardBody = ({ adminAccount, deps: depsOverride, refr
                   {statuses[row.address]?.hash ? <> <a href={explorerTxUrl(statuses[row.address].hash)} target="_blank" rel="noopener noreferrer">tx</a></> : null}
                 </td>
                 <AutoReturnCells sweep={autoReturn.sweeps[row.address]} symbol={symbol} />
-                <td><Button size="small" variant="outlined" disabled={!amountWei || running} onClick={() => openConfirm([row.address])}>Top up</Button></td>
+                <td style={{ whiteSpace: "nowrap" }}>
+                  <Button size="small" variant="outlined" disabled={!amountWei || running} onClick={() => openConfirm([row.address])}>Top up</Button>{" "}
+                  {autoReturn.enabled ? (
+                    // The pid hash comes from the auto-return list ("Load auto-return"): it is what the faucet keys messages on.
+                    <Button size="small" variant="outlined" disabled={!autoReturn.sweeps[row.address]?.pidHash} onClick={() => setMessageTarget({ pidHash: autoReturn.sweeps[row.address].pidHash, label: row.label || row.pid || row.address })}
+                      title={autoReturn.sweeps[row.address]?.pidHash ? "" : "Load auto-return first (enter the faucet password above)"}>Send message</Button>
+                  ) : null}
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
         {!rows.length && !data.loading ? <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>No participants found yet.</Typography> : null}
       </Box>
+
+      {messageTarget ? <SendMessageDialog target={messageTarget} api={depsOverride?.messages} onClose={() => setMessageTarget(null)} /> : null}
 
       <Dialog open={Boolean(confirm)} onClose={() => setConfirm(null)}>
         <DialogTitle>Confirm top-up</DialogTitle>

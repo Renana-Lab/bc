@@ -9,6 +9,7 @@ import { setActiveLocalWallet } from "./localWalletRegistry";
 import { useIsAdminWallet } from "./useIsAdminWallet";
 import AdminWalletPanel from "./AdminWalletPanel";
 import AutoSweepHost from "./AutoSweepHost";
+import AdminMessageHost from "./AdminMessageHost";
 import { setModeProvider } from "./modeProvider";
 import { createIndexedDbStorage, createLocalProvider, createLocalWallet } from "./localWallet.mjs";
 import { getTargetNetwork } from "../sapphireNetworks";
@@ -344,6 +345,10 @@ const InvisibleWalletHost = () => {
       {preparing ? <div style={bannerStyle} role="status" data-testid="preparing-session">Preparing your session...</div> : null}
       {!adminSlot && address ? (
         <AutoSweepHost wallet={wallet} provider={provider} address={address} faucetUrl={faucetUrl}
+          strictPid={strictPid} openPid={openPid} isAdmin={isAdmin} />
+      ) : null}
+      {!adminSlot && address ? (
+        <AdminMessageHost wallet={wallet} address={address} faucetUrl={faucetUrl}
           strictPid={strictPid} openPid={openPid} isAdmin={isAdmin} />
       ) : null}
       {needsMigration ? <MigrationUnlock wallet={wallet} onDone={() => setNeedsMigration(false)} /> : null}

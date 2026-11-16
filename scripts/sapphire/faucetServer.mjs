@@ -45,14 +45,14 @@ const handle = createFaucetHandler({
 http
   .createServer(async (request, response) => {
     response.setHeader("Access-Control-Allow-Origin", "http://localhost:3000");
-    response.setHeader("Access-Control-Allow-Headers", "content-type");
+    response.setHeader("Access-Control-Allow-Headers", "content-type, x-admin-password");
     response.setHeader("Access-Control-Allow-Methods", "GET, POST");
     if (request.method === "OPTIONS") return response.writeHead(204).end();
-    const path = (request.url || "").split("?")[0];
-    if (!["/claim", "/status", "/admin/state"].includes(path)) return response.writeHead(404).end();
+    const [path, query = ""] = (request.url || "").split("?");
+    if (!["/claim", "/status", "/admin/state", "/sweep/config", "/inbox", "/inbox/ack", "/admin/messages"].includes(path)) return response.writeHead(404).end();
     let body = "";
     for await (const chunk of request) body += chunk;
-    const result = await handle({ rawPath: path, body, requestContext: { http: { method: request.method, sourceIp: request.socket.remoteAddress } } });
+    const result = await handle({ rawPath: path, rawQueryString: query, body, headers: request.headers, requestContext: { http: { method: request.method, sourceIp: request.socket.remoteAddress } } });
     response.writeHead(result.statusCode, result.headers).end(result.body);
   })
   .listen(8787, "127.0.0.1", () => {

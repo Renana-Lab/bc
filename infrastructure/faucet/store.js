@@ -7,6 +7,8 @@
 //   config#faucet       { open, updatedAt }          (open/closed switch)
 //   counter#payouts     { count }                    (payout slots in use, prolific cap)
 //   config#maxPayouts   { value, updatedAt }         (admin-managed cap; falls back to FAUCET_MAX_PAYOUTS when missing)
+//   inbox#<sha256(pid)> { messages, acked, v, expiresAt }    (admin messages to one participant; see inbox.js)
+//   config#broadcast    { messages, v, expiresAt }           (admin message to everybody; see inbox.js)
 //   rl#<scope>#<window> { count, expiresAt }                     (RATE table; expires by TTL, ~11 minutes)
 // Every state change is a conditional write, so parallel requests cannot both win.
 // The same contract is implemented in memory by memoryStore.js for tests.
@@ -45,6 +47,11 @@ const toSweepItem = (record) => {
   item.expiresAt = { N: String((record.lastSeen || Math.floor(Date.now() / 1000)) + SWEEP_TTL_SECONDS) };
   return item;
 };
+
+const inboxKey = (pidHash) => ({ pk: { S: `inbox#${pidHash}` } });
+const BROADCAST_KEY = { pk: { S: "config#broadcast" } };
+const parseList = (attribute) => { try { const list = JSON.parse(attribute?.S || "[]"); return Array.isArray(list) ? list : []; } catch { return []; } };
+const fromInboxItem = (item, pidHash) => (item ? { pidHash, messages: parseList(item.messages), acked: parseList(item.acked), v: Number(item.v?.N || 0) } : null);
 
 const isConditionFailure = (error) => error?.name === "ConditionalCheckFailedException";
 
@@ -326,6 +333,55 @@ const createDynamoStore = ({ table, rateTable, client } = {}) => {
         UpdateExpression: "SET idleMinutes = :m, updatedAt = :at",
         ExpressionAttributeValues: { ":m": { N: String(idleMinutes) }, ":at": { N: String(updatedAt) } },
       }));
+    },
+    // ---- admin messages (inbox) ----
+    async getInbox(pidHash) {
+      return fromInboxItem((await send(new sdk.GetItemCommand({ TableName: table, Key: inboxKey(pidHash), ConsistentRead: true }))).Item, pidHash);
+    },
+    // Writes { messages, acked } if the stored version is still `expectedV` (0 = no item yet). Returns false on a lost race.
+    async putInbox(pidHash, { messages, acked }, expectedV, expiresAt) {
+      try {
+        await send(new sdk.PutItemCommand({
+          TableName: table,
+          Item: { ...inboxKey(pidHash), messages: { S: JSON.stringify(messages) }, acked: { S: JSON.stringify(acked || []) }, v: { N: String(expectedV + 1) }, expiresAt: { N: String(expiresAt) } },
+          ...(expectedV ? { ConditionExpression: "v = :v", ExpressionAttributeValues: { ":v": { N: String(expectedV) } } } : { ConditionExpression: "attribute_not_exists(pk)" }),
+        }));
+        return true;
+      } catch (error) {
+        if (isConditionFailure(error)) return false;
+        throw error;
+      }
+    },
+    async getBroadcast() {
+      const item = (await send(new sdk.GetItemCommand({ TableName: table, Key: BROADCAST_KEY, ConsistentRead: true }))).Item;
+      return item ? { messages: parseList(item.messages), v: Number(item.v?.N || 0) } : null;
+    },
+    async putBroadcast({ messages }, expectedV, expiresAt) {
+      try {
+        await send(new sdk.PutItemCommand({
+          TableName: table,
+          Item: { ...BROADCAST_KEY, messages: { S: JSON.stringify(messages) }, v: { N: String(expectedV + 1) }, expiresAt: { N: String(expiresAt) } },
+          ...(expectedV ? { ConditionExpression: "v = :v", ExpressionAttributeValues: { ":v": { N: String(expectedV) } } } : { ConditionExpression: "attribute_not_exists(pk)" }),
+        }));
+        return true;
+      } catch (error) {
+        if (isConditionFailure(error)) return false;
+        throw error;
+      }
+    },
+    // Scan of the inbox items only (admin history).
+    async listInboxes() {
+      const out = [];
+      let startKey;
+      do {
+        const page = await send(new sdk.ScanCommand({
+          TableName: table, ExclusiveStartKey: startKey,
+          FilterExpression: "begins_with(pk, :prefix)", ExpressionAttributeValues: { ":prefix": { S: "inbox#" } },
+        }));
+        for (const item of page.Items || []) out.push(fromInboxItem(item, item.pk.S.slice("inbox#".length)));
+        startKey = page.LastEvaluatedKey;
+      } while (startKey && out.length < 2000);
+      return out;
     },
     // Atomic counter per (scope, window); the item expires by TTL.
     async hit(scope, windowId, expiresAt, by = 1) {

@@ -8,11 +8,15 @@ const createMemoryStore = () => {
   const counters = new Map(); // key -> { count, expiresAt }  (rate-limit records; no pid inside)
   const shared = { state: null, budget: 0, maxPayouts: null, sweepSettings: null }; // open/closed switch and the payout-slot counter
   const sweeps = new Map(); // lowercase address -> sweep record (see sweep.js)
+  const inboxes = new Map(); // pidHash -> { messages, acked, v } (see inbox.js)
+  const broadcast = { record: null };
   return {
     pids,
     counters,
     shared,
     sweeps,
+    inboxes,
+    broadcast,
     async get(pidHash) {
       await tick();
       const record = pids.get(pidHash);
@@ -143,6 +147,32 @@ const createMemoryStore = () => {
     async setSweepSettings(idleMinutes, updatedAt) {
       await tick();
       shared.sweepSettings = { idleMinutes, updatedAt };
+    },
+    // ---- admin messages (inbox) ----
+    async getInbox(pidHash) {
+      await tick();
+      const record = inboxes.get(pidHash);
+      return record ? structuredClone({ pidHash, ...record }) : null;
+    },
+    async putInbox(pidHash, { messages, acked }, expectedV) {
+      await tick();
+      if ((inboxes.get(pidHash)?.v || 0) !== expectedV) return false;
+      inboxes.set(pidHash, structuredClone({ messages, acked: acked || [], v: expectedV + 1 }));
+      return true;
+    },
+    async getBroadcast() {
+      await tick();
+      return broadcast.record ? structuredClone(broadcast.record) : null;
+    },
+    async putBroadcast({ messages }, expectedV) {
+      await tick();
+      if ((broadcast.record?.v || 0) !== expectedV) return false;
+      broadcast.record = structuredClone({ messages, v: expectedV + 1 });
+      return true;
+    },
+    async listInboxes() {
+      await tick();
+      return [...inboxes.entries()].map(([pidHash, record]) => structuredClone({ pidHash, ...record }));
     },
     async hit(scope, windowId, expiresAt, by = 1) {
       await tick();

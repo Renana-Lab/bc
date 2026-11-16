@@ -172,12 +172,33 @@ reliance on tab-close events. Nothing here gives the faucet access to a particip
 * The browser loads the participant's closed auctions itself (factory campaigns, `getListSummary`, `getUserAuctionStatus`; no dependence on the auctions list page) before every signature. A failing address is retried (3 attempts, 2 s / 4 s backoff) and then read directly; only an address that might hold funds for the participant and still cannot be read holds the sweep back, and closed auctions found to be irrelevant are not read again. If the auction list itself cannot be read, an auction cannot be read, or a refund / seller payment cannot be withdrawn, a cancel is sent (and re-sent by the timer until the server accepts it); the 10-minute timer and a return to the tab retry and arm once it works.
 * Not verified against AWS: the DynamoDB expressions (`putSweep`, `touchSweep`, `claimSweep`, `finishSweep`, Scan) are covered by the memory store contract tests and by `dynamoStore.test.mjs` (a fake client that understands exactly these expressions), not by real DynamoDB.
 
+### Messages from the admin to participants (inbox)
+
+The admin can show a blocking popup to one participant or to everybody ("Message from the experiment team", button **Got it**). It uses no new
+infrastructure: items in the existing codes table, the existing Function URL, no template or contract change (the faucet role already has Get/Put/Update/Scan).
+
+* **Storage** (codes table, TTL `expiresAt`, refreshed on every write, 14 days): `inbox#<pidHash>` holds `messages: [{ id, body (<= 1000 chars), createdAt, readAt? }]` (capped at 50, oldest dropped) and `acked` (ids of broadcasts that participant has acknowledged);
+  `config#broadcast` holds the send-to-all list (capped at 20). Writes are conditional on a version number and retried, so parallel sends and acks do not overwrite each other. Messages older than the TTL are not delivered even before DynamoDB removes the item.
+* **Admin endpoints** (password in the `x-admin-password` header, or `password` in the POST body, checked by the same guard and failure rate limit as the other admin endpoints):
+  `POST /admin/messages { pidHash, body }` or `{ all: true, body }` (body trimmed, control characters other than newline/tab removed, 1..1000 characters; the pid hash must belong to a known pid; request size limit 8000 bytes) and
+  `GET /admin/messages[?pidHash=...]` (history with read status: per participant `readAt`; broadcasts with `readCount`, or `read` when one participant is asked for). The text is never written to the logs; only `admin_message_sent { to (8-char prefix or "all"), length }`.
+* **Participant endpoints**: `GET /inbox?pidHash&address&ts&sig` returns the unread messages (unread direct messages plus broadcasts not yet acknowledged, oldest first, `{ messages: [{ id, body, createdAt }], serverTime }`) and
+  `POST /inbox/ack { pidHash, address, ts, sig, ids }` marks them read (idempotent; unknown ids are ignored). Both are signed like the heartbeat: EIP-191 signature of `bc-sweep|inbox|<address>|<pidHash>|<ts>` (action `inbox`) or `...|ack|...` (action `ack`), `ts` within 5 minutes of the server clock,
+  and the pid must have been paid to (or reserved for) that very address, so knowing a pid hash is not enough to read someone's messages. The signature travels in the query string so the poll stays a simple cross-origin GET (it is only good for 5 minutes and cannot be used for another action).
+  A broadcast is only shown to participants that were paid before it was sent. Rate limit: own counters, per 10-minute window `INBOX_RATE_LIMIT_PER_WINDOW` default **3000** per caller and `INBOX_GLOBAL_RATE_LIMIT_PER_WINDOW` default **30000** (a tab polls every 30 s and a lab shares one address).
+* **Browser**: `AdminMessageHost` (next to `AutoSweepHost`, same gating: invisible local wallet of a participant only; never MetaMask mode, the admin override, the admin key slot or an admin address) polls every 30 s while the tab is visible and immediately when the participant returns to it, signing with the server clock from `/sweep/config`.
+  It shows one message at a time in a dialog that cannot be dismissed except with **Got it** (plain text, never HTML), remembers shown ids for the page load so nothing opens twice, and retries a failed acknowledgement on the next poll. Failures are silent.
+* **Admin Zone**: in the "Participants gas" card, **Send message** per row (dialog with text, history and read status) and **Message all participants**. Both ask for the faucet admin password in the dialog (used per request, dropped when the dialog closes).
+  The per-row button needs the participant's pid hash, which comes from the auto-return list: press **Load auto-return** first (a participant appears there after their first heartbeat).
+* Not verified against AWS: `getInbox/putInbox/getBroadcast/putBroadcast/listInboxes` are covered by the memory store contract tests and by a fake DynamoDB client in `inbox.test.mjs`, not by real DynamoDB.
+
 ## Files
 
 * `adminAuth.js` - scrypt hashing / constant-time checks for the admin password; `../../scripts/faucet/setAdminPassword.js` creates the hash
 * `handler.js` - Lambda logic (`createFaucetHandler` is dependency-injected; `handler` is the AWS entry point)
 * `store.js` - DynamoDB store (conditional writes). `memoryStore.js` - test double with the same semantics
 * `sweep.js` - auto-return validation and the scheduled job (`runSweepJob`)
+* `inbox.js` - admin message limits and the "what is unread" rule (storage in `store.js` / `memoryStore.js`)
 * `monitor.js` - balance metric publisher. `template.js` - the CloudFormation template (checked by `scripts/faucet/template.test.mjs`)
 * `../../scripts/faucet/pidTools.js`, `generatePids.js`, `createFaucetSecret.js`, `deployFaucet.js`
 * Tests: `npm run faucet:test` (unit, no network) and `REQUIRE_LOCALNET=1 npm run faucet:test:flow` (5 parallel participants on localnet)
