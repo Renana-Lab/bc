@@ -42,7 +42,7 @@ test("the card has Auto-return and Returned columns, 'none' until the list is lo
       sweep(3, { status: "stale" }),
     ],
   }));
-  render(<ParticipantsGasCard deps={makeDeps({ fetchSweeps })} />);
+  render(<ParticipantsGasCard defaultOpen deps={makeDeps({ fetchSweeps })} />);
   await waitFor(() => expect(screen.getAllByTestId("participant-row")).toHaveLength(3));
   expect(screen.getByText("Auto-return")).toBeTruthy();
   expect(screen.getByText("Returned")).toBeTruthy();
@@ -65,7 +65,7 @@ test("the card has Auto-return and Returned columns, 'none' until the list is lo
 test("the idle minutes can be changed with the password; a wrong password is reported", async () => {
   const saveSweepIdleMinutes = jest.fn(async ({ idleMinutes }) => idleMinutes);
   const fetchSweeps = jest.fn(async () => ({ idleMinutes: 30, sweeps: [] }));
-  render(<ParticipantsGasCard deps={makeDeps({ fetchSweeps, saveSweepIdleMinutes })} />);
+  render(<ParticipantsGasCard defaultOpen deps={makeDeps({ fetchSweeps, saveSweepIdleMinutes })} />);
   await waitFor(() => expect(screen.getAllByTestId("participant-row")).toHaveLength(3));
   fireEvent.change(screen.getByLabelText("Auto-return admin password"), { target: { value: "pw" } });
   fireEvent.change(screen.getByLabelText("Idle minutes"), { target: { value: "90" } });
@@ -81,7 +81,7 @@ test("the idle minutes can be changed with the password; a wrong password is rep
 
 test("without a faucet URL the auto-return controls stay hidden but the card still works", async () => {
   delete process.env.REACT_APP_FAUCET_URL;
-  render(<ParticipantsGasCard deps={makeDeps({})} />);
+  render(<ParticipantsGasCard defaultOpen deps={makeDeps({})} />);
   await waitFor(() => expect(screen.getAllByTestId("participant-row")).toHaveLength(3));
   expect(screen.queryByTestId("auto-return-controls")).toBeNull();
 });

@@ -6,6 +6,7 @@ import { getTargetNetwork } from "../../real_ethereum/sapphireNetworks";
 import { ADMIN_GAS_RESERVE_WEI, formatNative, parseNative } from "../../real_ethereum/wallets/nativeBalance";
 import { fetchFaucetAdminStatus, setFaucetMaxPayouts } from "../../real_ethereum/wallets/faucetClient.mjs";
 import { useIsAdminWallet } from "../../real_ethereum/wallets/useIsAdminWallet";
+import AdminCard, { AdminRefreshButton, adminPrimaryButtonSx } from "./AdminCard";
 import { readNativeBalances } from "./participantsGasReaders";
 import { explorerAddressUrl, explorerTxUrl, readAdminBalance, sendNativeFromAdmin, waitForReceipt } from "./adminTransfer";
 
@@ -30,13 +31,12 @@ export const payoutWarnings = ({ status, balanceWei }) => {
   return warnings;
 };
 
-const cardSx = { width: "100%", mb: 3, p: { xs: 1.5, sm: 2 }, border: "1px solid #d9dff2", borderRadius: 3, background: "rgba(255,255,255,0.72)" };
 const mono = { fontFamily: "monospace", fontSize: 13, wordBreak: "break-all" };
 const defaultDeps = { readBalances: readNativeBalances, fetchStatus: fetchFaucetAdminStatus, setMax: setFaucetMaxPayouts, send: sendNativeFromAdmin, waitFor: waitForReceipt, readAdminBalance };
 
 export const FaucetFundsCardBody = ({
   faucetUrl = process.env.REACT_APP_FAUCET_URL, envAddress = process.env.REACT_APP_FAUCET_ADDRESS,
-  adminAccount = "", allowTopUp = false, deps: depsOverride, fetchImpl, refreshMs = FAUCET_REFRESH_MS,
+  adminAccount = "", allowTopUp = false, deps: depsOverride, fetchImpl, refreshMs = FAUCET_REFRESH_MS, defaultOpen = true,
 }) => {
   const deps = useMemo(() => ({ ...defaultDeps, ...depsOverride }), [depsOverride]);
   const symbol = getTargetNetwork().nativeCurrency?.symbol || "TEST";
@@ -115,8 +115,8 @@ export const FaucetFundsCardBody = ({
   };
 
   return (
-    <Box sx={cardSx} data-testid="faucet-funds-card">
-      <Typography variant="h6">Faucet funds</Typography>
+    <div data-testid="faucet-funds-card">
+    <AdminCard title="Faucet funds" defaultOpen={defaultOpen} action={<AdminRefreshButton onClick={loadBalance} />}>
       {!faucetAddress ? (
         <Typography variant="body2" color="text.secondary">Faucet address unknown: set REACT_APP_FAUCET_ADDRESS or load the status with the admin password.</Typography>
       ) : (
@@ -160,7 +160,7 @@ export const FaucetFundsCardBody = ({
           <Typography variant="subtitle2">Top up faucet</Typography>
           <Box sx={{ display: "flex", gap: 1, alignItems: "center", mt: 1 }}>
             <TextField size="small" label={`Amount (${symbol})`} value={topUpAmount} onChange={(e) => setTopUpAmount(e.target.value)} error={topUpAmount !== "" && !topUpWei} inputProps={{ "aria-label": "Top-up amount" }} />
-            <Button size="small" variant="contained" disabled={!topUpWei || topUpState?.state === "sending" || topUpState?.state === "sent"} onClick={openTopUp}>Top up faucet</Button>
+            <Button size="small" variant="contained" sx={adminPrimaryButtonSx} disabled={!topUpWei || topUpState?.state === "sending" || topUpState?.state === "sent"} onClick={openTopUp}>Top up faucet</Button>
           </Box>
           {topUpState ? (
             <Typography variant="body2" data-testid="faucet-topup-status" sx={{ mt: 1 }}>
@@ -181,7 +181,7 @@ export const FaucetFundsCardBody = ({
         </DialogContent>
         <DialogActions>
           <Button onClick={closeAdd}>Cancel</Button>
-          <Button variant="contained" onClick={addPayouts} disabled={!dialogPassword || busy}>Confirm</Button>
+          <Button variant="contained" sx={adminPrimaryButtonSx} onClick={addPayouts} disabled={!dialogPassword || busy}>Confirm</Button>
         </DialogActions>
       </Dialog>
 
@@ -197,17 +197,18 @@ export const FaucetFundsCardBody = ({
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setTopUpConfirm(null)}>Cancel</Button>
-          <Button variant="contained" onClick={sendTopUp} disabled={insufficient || topUpConfirm?.adminBalance == null || !topUpWei}>Confirm and send</Button>
+          <Button variant="contained" sx={adminPrimaryButtonSx} onClick={sendTopUp} disabled={insufficient || topUpConfirm?.adminBalance == null || !topUpWei}>Confirm and send</Button>
         </DialogActions>
       </Dialog>
-    </Box>
+    </AdminCard>
+    </div>
   );
 };
 
 // Admin Zone version: admin wallets only, with the wallet top-up.
 const FaucetFundsCard = (props) => {
   const { account, isAdmin } = useIsAdminWallet({ allowlist: props.allowlist });
-  return isAdmin ? <FaucetFundsCardBody adminAccount={account} allowTopUp {...props} /> : null;
+  return isAdmin ? <FaucetFundsCardBody adminAccount={account} allowTopUp defaultOpen={false} {...props} /> : null;
 };
 
 export default FaucetFundsCard;

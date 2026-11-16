@@ -1,6 +1,7 @@
 // Admin Zone card: who needs native funds ("gas") and a confirmed, sequential top-up. Admin only; never automatic.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, TextField, Typography } from "@mui/material";
+import { Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, Table, TableBody, TableCell, TableHead, TableRow, TextField, Typography } from "@mui/material";
+import AdminCard, { AdminRefreshButton, adminHeadCellSx, adminPrimaryButtonSx } from "./AdminCard";
 import { getTargetNetwork } from "../../real_ethereum/sapphireNetworks";
 import { formatNative, parseNative, ADMIN_GAS_RESERVE_WEI } from "../../real_ethereum/wallets/nativeBalance";
 import { useIsAdminWallet } from "../../real_ethereum/wallets/useIsAdminWallet";
@@ -15,7 +16,6 @@ import { SendMessageDialog } from "./ParticipantsMessages";
 import { AutoReturnCells, AutoReturnControls, AutoReturnHeaders, useAutoReturn } from "./ParticipantsAutoReturn";
 import { explorerTxUrl, readAdminBalance, sendNativeFromAdmin, waitForReceipt } from "./adminTransfer";
 
-const cardSx = { width: "100%", mb: 3, p: { xs: 1.5, sm: 2 }, border: "1px solid #d9dff2", borderRadius: 3, background: "rgba(255,255,255,0.72)" };
 const mono = { fontFamily: "monospace", fontSize: 12, wordBreak: "break-all" };
 
 const readLocalBots = () => {
@@ -37,7 +37,7 @@ const defaultDeps = {
   send: sendNativeFromAdmin, waitFor: waitForReceipt, readAdminBalance,
 };
 
-export const ParticipantsGasCardBody = ({ adminAccount, deps: depsOverride, refreshMs = REFRESH_MS }) => {
+export const ParticipantsGasCardBody = ({ adminAccount, deps: depsOverride, refreshMs = REFRESH_MS, defaultOpen = true }) => {
   const deps = useMemo(() => ({ ...defaultDeps, ...depsOverride }), [depsOverride]);
   const [threshold, setThreshold] = useState(() => loadSetting("threshold", DEFAULT_THRESHOLD));
   const [amount, setAmount] = useState(() => loadSetting("amount", DEFAULT_TOPUP_AMOUNT));
@@ -131,16 +131,15 @@ export const ParticipantsGasCardBody = ({ adminAccount, deps: depsOverride, refr
   const symbol = getTargetNetwork().nativeCurrency?.symbol || "TEST";
 
   return (
-    <Box sx={cardSx} data-testid="participants-gas-card">
-      <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "start", gap: 2 }}>
-        <Box>
-          <Typography variant="h6">Participants gas</Typography>
-          <Typography variant="body2" color="text.secondary">
-            {symbol} balance and budget of every known participant (factory users, bidders, sellers, bots, addresses you add). Refreshes every 60 s while this page is visible. Top-ups are manual only.
-          </Typography>
-        </Box>
-        <Button size="small" variant="outlined" onClick={() => load({ force: true })} disabled={data.loading || running}>{data.loading ? "Loading..." : "Refresh"}</Button>
-      </Box>
+    <div data-testid="participants-gas-card">
+    <AdminCard
+      title="Participants gas"
+      defaultOpen={defaultOpen}
+      action={<AdminRefreshButton onClick={() => load({ force: true })} loading={data.loading || running} />}
+    >
+      <Typography variant="caption" color="text.secondary" display="block">
+        {symbol} balance and budget of every known participant (factory users, bidders, sellers, bots, addresses you add). Refreshes every 60 s while this page is visible. Top-ups are manual only.
+      </Typography>
       {data.error ? <Typography color="error" variant="body2" sx={{ mt: 1 }}>{data.error}</Typography> : null}
 
       <Box sx={{ display: "flex", flexWrap: "wrap", gap: 2, alignItems: "center", mt: 2 }}>
@@ -148,7 +147,7 @@ export const ParticipantsGasCardBody = ({ adminAccount, deps: depsOverride, refr
         <TextField size="small" label={`Top-up amount (${symbol})`} value={amount} onChange={(e) => changeAmount(e.target.value)} error={amount !== "" && amountWei === null} inputProps={{ "aria-label": "Top-up amount" }} />
         <TextField size="small" label="Add address (e.g. a bot)" value={manualInput} onChange={(e) => setManualInput(e.target.value)} inputProps={{ "aria-label": "Add address" }} sx={{ minWidth: 300 }} />
         <Button size="small" variant="outlined" onClick={addManual} disabled={!isAddressLike(manualInput.trim())}>Add</Button>
-        <Button size="small" variant="contained" disabled={!lowRows.length || !amountWei || running} onClick={() => openConfirm(lowRows.map((row) => row.address))}>
+        <Button size="small" variant="contained" sx={adminPrimaryButtonSx} disabled={!lowRows.length || !amountWei || running} onClick={() => openConfirm(lowRows.map((row) => row.address))}>
           Top up all below threshold ({lowRows.length})
         </Button>
       </Box>
@@ -158,43 +157,46 @@ export const ParticipantsGasCardBody = ({ adminAccount, deps: depsOverride, refr
         <Box sx={{ mt: 1 }}><Button size="small" variant="outlined" onClick={() => setMessageTarget({ all: true })}>Message all participants</Button></Box>
       ) : null}
 
-      <Box sx={{ overflowX: "auto", mt: 2 }}>
-        <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 13 }}>
-          <thead>
-            <tr style={{ textAlign: "left" }}><th>Pid</th><th>Address</th><th>{symbol}</th><th>Budget</th><th>Last activity</th><th>Status</th><AutoReturnHeaders /><th /></tr>
-          </thead>
-          <tbody>
+      <div className="tableScrollWrap">
+        <Table size="small">
+          <TableHead>
+            <TableRow>
+              {["Pid", "Address", symbol, "Budget", "Last activity", "Status"].map((name) => <TableCell key={name} sx={adminHeadCellSx}>{name}</TableCell>)}
+              <AutoReturnHeaders /><TableCell />
+            </TableRow>
+          </TableHead>
+          <TableBody>
             {rows.map((row) => (
-              <tr key={row.address} data-testid="participant-row" data-low={row.low ? "true" : "false"}
-                style={{ borderTop: "1px solid #e3e7f5", background: row.low ? "#fdecea" : "transparent" }}>
-                <td style={mono}>{row.pid}</td>
-                <td>
+              <TableRow key={row.address} data-testid="participant-row" data-low={row.low ? "true" : "false"}
+                sx={{ background: row.low ? "#fdecea" : "transparent" }}>
+                <TableCell sx={mono}>{row.pid}</TableCell>
+                <TableCell>
                   <span style={mono}>{row.address}</span>{" "}
                   <Button size="small" onClick={() => navigator.clipboard?.writeText(row.address)} aria-label={`Copy ${row.address}`}>Copy</Button>
                   {row.label ? <strong> {row.label}</strong> : null}{row.isBot ? " (bot)" : ""}
-                </td>
-                <td style={mono}>{row.balanceWei === null ? "—" : formatNative(row.balanceWei)}</td>
-                <td style={mono}>{row.budget === "" ? "—" : row.budget}</td>
-                <td style={{ fontSize: 12 }}>{row.lastBlock === null ? "—" : `block ${row.lastBlock}${row.blocksAgo !== null ? ` (${row.blocksAgo} blocks ago)` : ""}`}</td>
-                <td style={{ fontSize: 12 }} data-testid="row-status">
+                </TableCell>
+                <TableCell sx={mono}>{row.balanceWei === null ? "—" : formatNative(row.balanceWei)}</TableCell>
+                <TableCell sx={mono}>{row.budget === "" ? "—" : row.budget}</TableCell>
+                <TableCell sx={{ fontSize: 12 }}>{row.lastBlock === null ? "—" : `block ${row.lastBlock}${row.blocksAgo !== null ? ` (${row.blocksAgo} blocks ago)` : ""}`}</TableCell>
+                <TableCell sx={{ fontSize: 12 }} data-testid="row-status">
                   {statusText(statuses[row.address])}
                   {statuses[row.address]?.hash ? <> <a href={explorerTxUrl(statuses[row.address].hash)} target="_blank" rel="noopener noreferrer">tx</a></> : null}
-                </td>
+                </TableCell>
                 <AutoReturnCells sweep={autoReturn.sweeps[row.address]} symbol={symbol} />
-                <td style={{ whiteSpace: "nowrap" }}>
+                <TableCell sx={{ whiteSpace: "nowrap" }}>
                   <Button size="small" variant="outlined" disabled={!amountWei || running} onClick={() => openConfirm([row.address])}>Top up</Button>{" "}
                   {autoReturn.enabled ? (
                     // The pid hash comes from the auto-return list ("Load auto-return"): it is what the faucet keys messages on.
                     <Button size="small" variant="outlined" disabled={!autoReturn.sweeps[row.address]?.pidHash} onClick={() => setMessageTarget({ pidHash: autoReturn.sweeps[row.address].pidHash, label: row.label || row.pid || row.address })}
                       title={autoReturn.sweeps[row.address]?.pidHash ? "" : "Load auto-return first (enter the faucet password above)"}>Send message</Button>
                   ) : null}
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ))}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
         {!rows.length && !data.loading ? <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>No participants found yet.</Typography> : null}
-      </Box>
+      </div>
 
       {messageTarget ? <SendMessageDialog target={messageTarget} api={depsOverride?.messages} onClose={() => setMessageTarget(null)} /> : null}
 
@@ -217,17 +219,18 @@ export const ParticipantsGasCardBody = ({ adminAccount, deps: depsOverride, refr
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setConfirm(null)}>Cancel</Button>
-          <Button variant="contained" onClick={start} disabled={!amountWei || confirm?.adminBalance === null || confirm?.adminBalance === undefined}>Confirm and send</Button>
+          <Button variant="contained" sx={adminPrimaryButtonSx} onClick={start} disabled={!amountWei || confirm?.adminBalance === null || confirm?.adminBalance === undefined}>Confirm and send</Button>
         </DialogActions>
       </Dialog>
-    </Box>
+    </AdminCard>
+    </div>
   );
 };
 
 // Admin only: draws nothing for anyone whose connected wallet is not on REACT_APP_ADMIN_ADDRESSES.
 const ParticipantsGasCard = (props) => {
   const { account, isAdmin } = useIsAdminWallet({ allowlist: props.allowlist });
-  return isAdmin ? <ParticipantsGasCardBody adminAccount={account} {...props} /> : null;
+  return isAdmin ? <ParticipantsGasCardBody adminAccount={account} defaultOpen={false} {...props} /> : null;
 };
 
 export default ParticipantsGasCard;

@@ -172,7 +172,7 @@ describe("payout limit", () => {
 });
 
 describe("Top up faucet (Admin Zone)", () => {
-  const renderAdmin = (deps) => render(<FaucetFundsCard deps={deps} />);
+  const renderAdmin = (deps) => render(<FaucetFundsCard defaultOpen deps={deps} />);
 
   test("a non-admin cannot see the card at all", () => {
     mockAccess.account = `0x${"1".repeat(40)}`;

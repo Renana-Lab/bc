@@ -2,7 +2,8 @@
 // with the faucet server, what was sent back, and how long a participant may be idle before it is broadcast.
 // The faucet admin password is typed here, used for one request and never kept.
 import { useCallback, useState } from "react";
-import { Box, Button, TextField, Typography } from "@mui/material";
+import { Box, Button, TableCell, TextField, Typography } from "@mui/material";
+import { adminHeadCellSx } from "./AdminCard";
 import { formatNative } from "../../real_ethereum/wallets/nativeBalance";
 import { fetchSweeps, saveSweepIdleMinutes } from "../../real_ethereum/wallets/sweepClient.mjs";
 
@@ -37,16 +38,16 @@ export const useAutoReturn = ({ faucetUrl = process.env.REACT_APP_FAUCET_URL, de
   return { sweeps, idleMinutes, message, busy, load, save, enabled: Boolean(faucetUrl) };
 };
 
-export const AutoReturnHeaders = () => (<><th>Auto-return</th><th>Returned</th></>);
+export const AutoReturnHeaders = () => (<><TableCell sx={adminHeadCellSx}>Auto-return</TableCell><TableCell sx={adminHeadCellSx}>Returned</TableCell></>);
 
 export const AutoReturnCells = ({ sweep, symbol }) => {
   const { armedWei, returnedWei } = autoReturnAmounts(sweep);
   return (
     <>
-      <td style={{ fontSize: 12 }} data-testid="auto-return-status">
+      <TableCell sx={{ fontSize: 12 }} data-testid="auto-return-status">
         {autoReturnLabel(sweep)}{armedWei > 0n ? ` (${formatNative(armedWei)} ${symbol})` : ""}
-      </td>
-      <td style={{ fontFamily: "monospace", fontSize: 12 }} data-testid="auto-return-returned">{returnedWei > 0n ? `${formatNative(returnedWei)} ${symbol}` : "—"}</td>
+      </TableCell>
+      <TableCell sx={{ fontFamily: "monospace", fontSize: 12 }} data-testid="auto-return-returned">{returnedWei > 0n ? `${formatNative(returnedWei)} ${symbol}` : "—"}</TableCell>
     </>
   );
 };

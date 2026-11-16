@@ -8,14 +8,17 @@ import {
   Box,
   Button,
   Chip,
-  Collapse,
   FormControlLabel,
-  IconButton,
   Checkbox,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableRow,
   TextField,
   Typography,
 } from "@mui/material";
-import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
+import SharedAdminCard, { AdminRefreshButton, adminHeadCellSx, adminPrimaryButtonSx } from "./AdminCard";
 import { readOnlyCall, readOnlyExecute } from "../../real_ethereum/readOnly";
 import { getActiveFactoryAddress, subscribeToMarketChanges } from "../../real_ethereum/marketConfig";
 import { getTargetNetwork } from "../../real_ethereum/sapphireNetworks";
@@ -62,15 +65,6 @@ const LIVE_FACTORY_EVENTS = [
 ];
 const AUCTION_ADMIN_LIMIT = 30;
 
-const cardSx = {
-  width: "100%",
-  mb: 3,
-  p: { xs: 1.5, sm: 2 },
-  border: "1px solid #d9dff2",
-  borderRadius: 3,
-  background: "rgba(255,255,255,0.72)",
-};
-
 const readLocalBots = () => {
   try {
     return mapBotConfig(JSON.parse(window.localStorage.getItem(LOCAL_BOTS_KEY) || "[]"));
@@ -116,35 +110,16 @@ export const useAdminLiveRefresh = (refresh, { debounceMs = 1500 } = {}) => {
   }, [debounceMs]);
 };
 
-const AdminCard = ({ title, description, open, onToggle, onRefresh, loading, children }) => (
-  <Box sx={cardSx}>
-    <Box sx={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 2, alignItems: "start" }}>
-      <Box sx={{ minWidth: 0 }}>
-        <Typography variant="h6">{title}</Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, maxWidth: 680 }}>
-          {description}
-        </Typography>
-      </Box>
-      <Box sx={{ display: "flex", gap: 1, alignItems: "center" }}>
-        {onRefresh ? (
-          <Button size="small" variant="outlined" onClick={onRefresh} disabled={loading}>
-            {loading ? "Loading..." : "Refresh"}
-          </Button>
-        ) : null}
-        <IconButton
-          size="small"
-          aria-label={open ? `Collapse ${title}` : `Expand ${title}`}
-          onClick={onToggle}
-          sx={{ transform: open ? "rotate(180deg)" : "none" }}
-        >
-          <KeyboardArrowDownIcon />
-        </IconButton>
-      </Box>
-    </Box>
-    <Collapse in={open} timeout="auto" unmountOnExit>
-      <Box sx={{ mt: 2 }}>{children}</Box>
-    </Collapse>
-  </Box>
+// Adapter over the shared market-style card: Refresh becomes the outlined pill action.
+const AdminCard = ({ title, open, onToggle, onRefresh, loading, children }) => (
+  <SharedAdminCard
+    title={title}
+    open={open}
+    onToggle={onToggle}
+    action={onRefresh ? <AdminRefreshButton onClick={onRefresh} loading={loading} /> : null}
+  >
+    {children}
+  </SharedAdminCard>
 );
 
 const useCardState = (initialOpen = false) => {
@@ -285,12 +260,14 @@ export const UsersBudgetsCard = ({ canWrite = false, actions: actionsOverride })
   return (
     <AdminCard
       title="Users and budgets"
-      description="Registered wallets from the factory, their available budget, funds held by leading bids and last budget change. Admins can set a user's total budget or disable them."
       open={open}
       onToggle={toggle}
       onRefresh={() => load(true)}
       loading={state.loading}
     >
+      <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
+        Registered wallets from the factory, their available budget, funds held by leading bids and last budget change. Admins can set a user's total budget or disable them.
+      </Typography>
       <WriteNotice canWrite={canWrite} />
       <Typography variant="caption" color="text.secondary" display="block">
         Disabling blocks creating and bidding for that wallet only; a new wallet bypasses it.
@@ -309,41 +286,39 @@ export const UsersBudgetsCard = ({ canWrite = false, actions: actionsOverride })
       <Typography variant="caption" color="text.secondary">
         {state.rows.length} users. Newest activity first. Budget changes are read from the last {state.audit?.lookback ?? getAuditLookbackBlocks()} blocks. Labels come from this browser's bot config.
       </Typography>
-      <Box sx={{ overflowX: "auto", mt: 1 }}>
-        <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 13 }}>
-          <thead>
-            <tr style={{ textAlign: "left" }}>
-              <th>User</th>
-              <th>Available</th>
-              <th>Held</th>
-              <th>Total</th>
-              <th>Last change</th>
-              {canWrite ? <th>Actions</th> : null}
-            </tr>
-          </thead>
-          <tbody>
+      <div className="tableScrollWrap">
+        <Table size="small">
+          <TableHead>
+            <TableRow>
+              {["User", "Available", "Held", "Total", "Last change"].map((name) => (
+                <TableCell key={name} sx={adminHeadCellSx}>{name}</TableCell>
+              ))}
+              {canWrite ? <TableCell sx={adminHeadCellSx}>Actions</TableCell> : null}
+            </TableRow>
+          </TableHead>
+          <TableBody>
             {state.rows.map((row) => (
-              <tr key={row.address} style={{ borderTop: "1px solid #e3e7f5" }}>
-                <td>
+              <TableRow key={row.address}>
+                <TableCell>
                   <span style={monoSx} title={row.address}>
                     {shortAddress(row.address)}
                   </span>{" "}
                   {row.label ? <strong>{row.label}</strong> : null}{" "}
                   {row.isBot ? <Chip size="small" label="bot" color="secondary" /> : null}{" "}
                   {row.disabled ? <Chip size="small" label="disabled" color="error" /> : null}
-                </td>
-                <td style={monoSx}>{row.budget}</td>
-                <td style={monoSx}>{row.held}</td>
-                <td style={monoSx}>{row.total}</td>
-                <td style={{ fontSize: 12 }}>
+                </TableCell>
+                <TableCell sx={monoSx}>{row.budget}</TableCell>
+                <TableCell sx={monoSx}>{row.held}</TableCell>
+                <TableCell sx={monoSx}>{row.total}</TableCell>
+                <TableCell sx={{ fontSize: 12 }}>
                   {row.lastChange
                     ? `${row.lastChange.direction} ${row.lastChange.amount} at block ${row.lastChange.blockNumber}`
                     : history === "unavailable"
                       ? "budget history unavailable"
                       : `none in last ${state.audit?.lookback ?? getAuditLookbackBlocks()} blocks`}
-                </td>
+                </TableCell>
                 {canWrite ? (
-                  <td style={{ whiteSpace: "nowrap" }}>
+                  <TableCell sx={{ whiteSpace: "nowrap" }}>
                     <Button
                       size="small"
                       disabled={Boolean(busy)}
@@ -361,13 +336,13 @@ export const UsersBudgetsCard = ({ canWrite = false, actions: actionsOverride })
                     >
                       {row.disabled ? "Enable" : "Disable"}
                     </Button>
-                  </td>
+                  </TableCell>
                 ) : null}
-              </tr>
+              </TableRow>
             ))}
-          </tbody>
-        </table>
-      </Box>
+          </TableBody>
+        </Table>
+      </div>
       {canWrite && budgetDraft.address ? (
         <Box sx={{ display: "flex", gap: 1, alignItems: "center", mt: 1.5, flexWrap: "wrap" }}>
           <Typography variant="body2">
@@ -382,6 +357,7 @@ export const UsersBudgetsCard = ({ canWrite = false, actions: actionsOverride })
           <Button
             size="small"
             variant="contained"
+            sx={adminPrimaryButtonSx}
             disabled={Boolean(busy)}
             onClick={() =>
               run("Set budget", async () => {
@@ -475,12 +451,14 @@ export const ArchitectureCard = () => {
   return (
     <AdminCard
       title="Architecture & Operations"
-      description="Health of the services the experiment depends on. Read-only; no secrets are sent or shown."
       open={open}
       onToggle={toggle}
       onRefresh={load}
       loading={state.loading}
     >
+      <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
+        Health of the services the experiment depends on. Read-only; no secrets are sent or shown.
+      </Typography>
       <ErrorLine error={state.error} />
       {state.checkedAt ? (
         <Typography variant="caption" color="text.secondary">
@@ -530,12 +508,14 @@ export const AuditEventsCard = () => {
   return (
     <AdminCard
       title="Audit events"
-      description="Factory and recent campaign events, newest first. Read-only."
       open={open}
       onToggle={toggle}
       onRefresh={() => load(true)}
       loading={state.loading}
     >
+      <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
+        Factory and recent campaign events, newest first. Read-only.
+      </Typography>
       <ErrorLine error={state.error} />
       {health ? (
         <Typography variant="body2" sx={{ color: "#8a5a00", mb: 0.5 }} data-testid="audit-range-health">
@@ -601,13 +581,15 @@ export const FaucetCard = () => {
   return (
     <AdminCard
       title="Faucet"
-      description="Test-fund faucet status. The faucet controls live on the faucet admin page."
       open={open}
       onToggle={toggle}
       onRefresh={faucetUrl ? load : undefined}
       loading={state.loading}
     >
-      <Button component={RouterLink} to="/admin/faucet" size="small" variant="contained" sx={{ mb: 1.5 }}>
+      <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
+        Test-fund faucet status. The faucet controls live on the faucet admin page.
+      </Typography>
+      <Button component={RouterLink} to="/admin/faucet" size="small" variant="contained" sx={{ ...adminPrimaryButtonSx, mb: 1.5 }}>
         Open faucet admin
       </Button>
       {!faucetUrl ? (
@@ -693,47 +675,47 @@ export const AuctionControlsCard = ({ canWrite = false, actions: actionsOverride
   return (
     <AdminCard
       title="Auction controls"
-      description="Edit the minimum bid, close early, cancel (refunds the leader, seller not paid) or hide an auction. Hidden auctions are only hidden in the UI."
       open={open}
       onToggle={toggle}
       onRefresh={load}
       loading={state.loading}
     >
+      <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
+        Edit the minimum bid, close early, cancel (refunds the leader, seller not paid) or hide an auction. Hidden auctions are only hidden in the UI.
+      </Typography>
       <WriteNotice canWrite={canWrite} />
       <ErrorLine error={state.error} />
       <Typography variant="caption" color="text.secondary">
         Newest {AUCTION_ADMIN_LIMIT} auctions. Auction payloads are never shown here.
       </Typography>
-      <Box sx={{ overflowX: "auto", mt: 1 }}>
-        <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 13 }}>
-          <thead>
-            <tr style={{ textAlign: "left" }}>
-              <th>Auction</th>
-              <th>Status</th>
-              <th>Min</th>
-              <th>Highest</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
+      <div className="tableScrollWrap">
+        <Table size="small">
+          <TableHead>
+            <TableRow>
+              {["Auction", "Status", "Min", "Highest", "Actions"].map((name) => (
+                <TableCell key={name} sx={adminHeadCellSx}>{name}</TableCell>
+              ))}
+            </TableRow>
+          </TableHead>
+          <TableBody>
             {state.rows.map((row) => {
               const can = getAdminActionAvailability(row, nowSec);
               const disabled = !canWrite || Boolean(busy);
               return (
-                <tr key={row.address} style={{ borderTop: "1px solid #e3e7f5" }} data-testid={`auction-row-${row.address}`}>
-                  <td>
+                <TableRow key={row.address} data-testid={`auction-row-${row.address}`}>
+                  <TableCell>
                     <span style={monoSx} title={row.address}>
                       {shortAddress(row.address)}
                     </span>{" "}
                     {row.description}
-                  </td>
-                  <td>
+                  </TableCell>
+                  <TableCell>
                     <Chip size="small" label={can.status} color={STATUS_COLOR[can.status]} />{" "}
                     {row.hidden ? <Chip size="small" label="hidden" variant="outlined" /> : null}
-                  </td>
-                  <td style={monoSx}>{row.minimum}</td>
-                  <td style={monoSx}>{row.highestBid}</td>
-                  <td style={{ whiteSpace: "nowrap" }}>
+                  </TableCell>
+                  <TableCell sx={monoSx}>{row.minimum}</TableCell>
+                  <TableCell sx={monoSx}>{row.highestBid}</TableCell>
+                  <TableCell sx={{ whiteSpace: "nowrap" }}>
                     <Button
                       size="small"
                       disabled={disabled || !can.editMinimum}
@@ -765,13 +747,13 @@ export const AuctionControlsCard = ({ canWrite = false, actions: actionsOverride
                     >
                       {row.hidden ? "Unhide" : "Hide"}
                     </Button>
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               );
             })}
-          </tbody>
-        </table>
-      </Box>
+          </TableBody>
+        </Table>
+      </div>
       {canWrite && pending ? (
         <Box sx={{ display: "flex", gap: 1, alignItems: "center", mt: 1.5, flexWrap: "wrap" }}>
           <Typography variant="body2">
@@ -787,6 +769,7 @@ export const AuctionControlsCard = ({ canWrite = false, actions: actionsOverride
           <Button
             size="small"
             variant="contained"
+            sx={pending.type === "cancel" ? { borderRadius: "20px" } : adminPrimaryButtonSx}
             color={pending.type === "cancel" ? "error" : "primary"}
             disabled={Boolean(busy)}
             onClick={() =>
@@ -826,10 +809,12 @@ export const AdminsCard = ({ isOwner = false, actions: actionsOverride, ownerRea
   return (
     <AdminCard
       title="Admins"
-      description="Only the factory owner can add or remove admins. The owner can never be removed; ownership transfers are 2-step."
       open={open}
       onToggle={toggle}
     >
+      <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
+        Only the factory owner can add or remove admins. The owner can never be removed; ownership transfers are 2-step.
+      </Typography>
       <Typography variant="body2" sx={monoSx}>
         Owner: {owner || "..."}
       </Typography>
@@ -844,6 +829,7 @@ export const AdminsCard = ({ isOwner = false, actions: actionsOverride, ownerRea
         <Button
           size="small"
           variant="contained"
+          sx={adminPrimaryButtonSx}
           disabled={Boolean(busy)}
           onClick={() => run("Add admin", () => actions.addAdmin(address))}
         >
@@ -891,11 +877,13 @@ export const MarketSettingsCard = ({ canWrite = false, actions: actionsOverride,
   return (
     <AdminCard
       title="Marketplace settings"
-      description="Whether sellers may edit the minimum bid of their own auction while it has no bids."
       open={open}
       onToggle={toggle}
       onRefresh={load}
     >
+      <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
+        Whether sellers may edit the minimum bid of their own auction while it has no bids.
+      </Typography>
       <WriteNotice canWrite={canWrite} />
       <ErrorLine error={error} />
       <FormControlLabel

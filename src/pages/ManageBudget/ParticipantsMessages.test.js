@@ -42,7 +42,7 @@ beforeEach(() => {
 afterEach(() => { delete process.env.REACT_APP_ADMIN_ADDRESSES; delete process.env.REACT_APP_FAUCET_URL; });
 
 test("every row has a Send message button; it needs the participant's pid hash, which the auto-return list provides", async () => {
-  render(<ParticipantsGasCard deps={makeDeps({})} />);
+  render(<ParticipantsGasCard defaultOpen deps={makeDeps({})} />);
   await waitFor(() => expect(screen.getAllByTestId("participant-row")).toHaveLength(3));
   for (const row of screen.getAllByTestId("participant-row")) expect(within(row).getByRole("button", { name: "Send message" }).disabled).toBe(true);
   fireEvent.change(screen.getByLabelText("Auto-return admin password"), { target: { value: "pw" } });
@@ -65,7 +65,7 @@ test("the dialog sends to that participant and shows the history with read statu
       }),
     sendAdminMessage: jest.fn(async () => ({ id: "m2" })),
   };
-  render(<ParticipantsGasCard deps={makeDeps(messages)} />);
+  render(<ParticipantsGasCard defaultOpen deps={makeDeps(messages)} />);
   await loadAutoReturn();
   fireEvent.click(within(rowFor(a(1))).getByRole("button", { name: "Send message" }));
   const dialog = await screen.findByTestId("send-message-dialog");
@@ -99,7 +99,7 @@ test("Message all participants sends a broadcast and shows how many read each on
     fetchAdminMessages: jest.fn(async () => ({ broadcasts: [{ id: "b1", body: "Break at noon", createdAt: "2026-01-01T10:00:00.000Z", readCount: 3 }], participants: [] })),
     sendAdminMessage: jest.fn().mockRejectedValueOnce(Object.assign(new Error("Wrong password."), { code: "unauthorized" })).mockResolvedValue({ id: "b2" }),
   };
-  render(<ParticipantsGasCard deps={makeDeps(messages)} />);
+  render(<ParticipantsGasCard defaultOpen deps={makeDeps(messages)} />);
   await waitFor(() => expect(screen.getAllByTestId("participant-row")).toHaveLength(3));
   fireEvent.click(screen.getByRole("button", { name: "Message all participants" }));
   const dialog = await screen.findByTestId("send-message-dialog");
@@ -117,7 +117,7 @@ test("Message all participants sends a broadcast and shows how many read each on
 
 test("without a faucet URL there is no messaging", async () => {
   delete process.env.REACT_APP_FAUCET_URL;
-  render(<ParticipantsGasCard deps={makeDeps({})} />);
+  render(<ParticipantsGasCard defaultOpen deps={makeDeps({})} />);
   await waitFor(() => expect(screen.getAllByTestId("participant-row")).toHaveLength(3));
   expect(screen.queryByRole("button", { name: "Message all participants" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Send message" })).toBeNull();

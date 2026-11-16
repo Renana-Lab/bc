@@ -27,6 +27,7 @@ jest.mock("../../real_ethereum/walletAccess", () => ({
 jest.mock("../../telemetry/presenceClient", () => ({ getLivePresence: jest.fn(), isPresenceConfigured: () => false }));
 
 // eslint-disable-next-line import/first
+import { MemoryRouter } from "react-router-dom";
 import { AdminOpsCards, AdminsCard, AuctionControlsCard, MarketSettingsCard } from "./AdminOpsCards";
 
 const A1 = "0x1111111111111111111111111111111111111111";
@@ -203,9 +204,14 @@ describe("Admins and settings cards", () => {
   });
 
   test("AdminOpsCards shows the Admins card only to the owner", () => {
-    const { rerender } = render(<AdminOpsCards access={{ canWrite: true, isOwner: false }} />);
+    const ui = (isOwner) => (
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <AdminOpsCards access={{ canWrite: true, isOwner }} />
+      </MemoryRouter>
+    );
+    const { rerender } = render(ui(false));
     expect(screen.queryByText("Admins")).toBeNull();
-    rerender(<AdminOpsCards access={{ canWrite: true, isOwner: true }} />);
+    rerender(ui(true));
     expect(screen.getByText("Admins")).toBeInTheDocument();
   });
 
