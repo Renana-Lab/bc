@@ -1,6 +1,7 @@
 import {
   chainNowMs,
   subscribeChainClock,
+  NOTIFY_THRESHOLD_MS,
   syncChainClock,
   getChainClockOffsetMs,
   __resetChainClockForTests,
@@ -72,4 +73,74 @@ test("many subscribers share one in-flight request and sync at most every 30 s",
   await flush();
   expect(readOnlyExecute).toHaveBeenCalledTimes(2);
   offs.forEach((off) => off());
+});
+
+describe("refinements", () => {
+  afterEach(() => { Object.defineProperty(document, "hidden", { configurable: true, value: false }); });
+
+  test("the forced 30 s sync is skipped while the tab is hidden and resumes when visible", async () => {
+    mockBlock(() => Date.now());
+    Object.defineProperty(document, "hidden", { configurable: true, value: false });
+    const off = subscribeChainClock(() => {});
+    await flush();
+    expect(readOnlyExecute).toHaveBeenCalledTimes(1);
+    Object.defineProperty(document, "hidden", { configurable: true, value: true });
+    jest.advanceTimersByTime(SYNC_INTERVAL_MS * 3); await flush();
+    expect(readOnlyExecute).toHaveBeenCalledTimes(1);
+    Object.defineProperty(document, "hidden", { configurable: true, value: false });
+    jest.advanceTimersByTime(SYNC_INTERVAL_MS); await flush();
+    expect(readOnlyExecute).toHaveBeenCalledTimes(2);
+    off();
+  });
+
+  test("subscribers are notified only when the offset moves by more than 250 ms", async () => {
+    let skew = 0;
+    mockBlock(() => Date.now() - skew);
+    const listener = jest.fn();
+    const off = subscribeChainClock(listener);
+    await flush();
+    expect(listener).toHaveBeenCalledTimes(1); // first sync
+    // Block timestamps are whole seconds; use steps that survive that rounding.
+    skew = -1000; // chain 1 s further ahead: a real change
+    jest.advanceTimersByTime(SYNC_INTERVAL_MS); await flush();
+    expect(listener).toHaveBeenCalledTimes(2);
+    jest.advanceTimersByTime(SYNC_INTERVAL_MS); await flush(); // same offset again
+    expect(listener).toHaveBeenCalledTimes(2);
+    expect(NOTIFY_THRESHOLD_MS).toBe(250);
+    off();
+  });
+
+  test("keeps the largest offset of the last 5 syncs, since block age only shrinks it", async () => {
+    let age = 0; // how old the latest block is, in ms
+    mockBlock(() => Date.now() + 10 * 60 * 1000 - age);
+    const off = subscribeChainClock(() => {});
+    await flush();
+    const best = getChainClockOffsetMs();
+    for (const next of [3000, 1000]) {
+      age = next;
+      jest.advanceTimersByTime(SYNC_INTERVAL_MS); await flush();
+      expect(getChainClockOffsetMs()).toBe(best); // an older block does not pull the offset back
+    }
+    for (let i = 0; i < 5; i += 1) { // once the best sample leaves the window it can drop
+      age = 3000;
+      jest.advanceTimersByTime(SYNC_INTERVAL_MS); await flush();
+    }
+    expect(getChainClockOffsetMs()).toBeLessThan(best);
+    off();
+  });
+
+  test("the sync interval is cleared when the last subscriber leaves", async () => {
+    mockBlock(() => Date.now());
+    const a = subscribeChainClock(() => {});
+    const b = subscribeChainClock(() => {});
+    await flush();
+    expect(jest.getTimerCount()).toBeGreaterThan(0);
+    a();
+    expect(jest.getTimerCount()).toBeGreaterThan(0);
+    b();
+    expect(jest.getTimerCount()).toBe(0);
+    const calls = readOnlyExecute.mock.calls.length;
+    jest.advanceTimersByTime(SYNC_INTERVAL_MS * 3); await flush();
+    expect(readOnlyExecute.mock.calls.length).toBe(calls);
+  });
 });

@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 import NewAuctionPage from "./NewAuctionPage";
 import factory from "../../real_ethereum/factory";
-import { PAYLOAD_MAX_CHARS } from "./auctionLimits";
+import { PAYLOAD_MAX_BYTES, utf8ByteLength } from "./auctionLimits";
 
 let mockIsAdmin = false;
 const mockSend = jest.fn();
@@ -60,7 +60,7 @@ test("fields are in marketplace order, labelled, and duration defaults to 10", a
   expect(field("Auction Duration (1–30 minutes)").value).toBe("10");
   expect(screen.getByRole("button", { name: "Create auction" }).textContent).toBe("CREATE AUCTION");
   expect(screen.getByRole("button", { name: "RETURN TO AUCTIONS MAIN SCREEN" })).toBeTruthy();
-  expect(screen.getByText(`0 / ${PAYLOAD_MAX_CHARS}`)).toBeTruthy();
+  expect(screen.getByText(`0 / ${PAYLOAD_MAX_BYTES} bytes`)).toBeTruthy();
 });
 
 test.each([
@@ -88,7 +88,8 @@ test("the minimum bid help mentions wei and no longer promises price changes", (
 test.each([
   ["a number-only description", "Description of the Data", "12345", "The data description must include words, not only numbers"],
   ["a description over 300 chars", "Description of the Data", "a".repeat(301), /at most 300 characters/],
-  ["a payload over the limit", "Data for sale", "x".repeat(PAYLOAD_MAX_CHARS + 1), new RegExp(`at most ${PAYLOAD_MAX_CHARS} characters`)],
+  ["a payload over the byte limit", "Data for sale", "x".repeat(PAYLOAD_MAX_BYTES + 1), new RegExp(`at most ${PAYLOAD_MAX_BYTES} bytes`)],
+  ["1001 Hebrew letters (2002 bytes, under 2000 characters)", "Data for sale", "א".repeat(1001), new RegExp(`at most ${PAYLOAD_MAX_BYTES} bytes`)],
   ["a minimum of 0", "Minimum Bid", "0", /from 1 to 1,000,000,000/],
   ["a minimum above 1,000,000,000", "Minimum Bid", "1000000001", /from 1 to 1,000,000,000/],
   ["a duration of 0", "Auction Duration (1–30 minutes)", "0", /from 1 to 30/],
@@ -146,4 +147,21 @@ test("the factory address panel is for admins only", () => {
   renderPage();
   expect(screen.getByText("Auction destination")).toBeTruthy();
   expect(screen.getByText(/0xfactory/)).toBeTruthy();
+});
+
+test("PAYLOAD_MAX_BYTES defaults to 2000 and the counter shows UTF-8 bytes", () => {
+  expect(PAYLOAD_MAX_BYTES).toBe(2000);
+  expect(utf8ByteLength("abc")).toBe(3);
+  expect(utf8ByteLength("שלום")).toBe(8);
+  renderPage();
+  type("Data for sale", "שלום");
+  expect(screen.getByText("8 / 2000 bytes")).toBeTruthy();
+});
+
+test("exactly 1000 Hebrew letters (2000 bytes) is accepted", async () => {
+  renderPage();
+  fillValid();
+  type("Data for sale", "א".repeat(1000));
+  await submit();
+  expect(mockCreate).toHaveBeenCalledTimes(1);
 });

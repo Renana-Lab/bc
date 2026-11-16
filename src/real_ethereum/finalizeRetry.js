@@ -5,6 +5,9 @@ import { chainNowMs } from "./chainClock";
 export const MAX_FINALIZE_ATTEMPTS = 3;
 export const FINALIZE_RETRY_AFTER_END_MS = 3000;
 
+// Same error the contract would raise; lets "not ended yet" results share the revert retry path.
+export const notEndedError = () => new Error("Auction not ended yet");
+
 export const isNotEndedRevert = (err) =>
   /auction not ended|not ended yet/i.test(
     String(err?.message || err?.data?.message || err?.cause?.message || ""),

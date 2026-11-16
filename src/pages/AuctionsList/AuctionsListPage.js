@@ -352,6 +352,10 @@ const rowActionTooltip = ({ auctionOpen, userIsManager, userWon }) =>
       ? "This auction has closed. Open it to access the data you won."
       : "This auction has closed. Review its details and bidding history.";
 
+// 0 is a real, exhausted budget on-chain; only null/undefined means "unknown" (Infinity sentinel).
+export const normalizeRemainingBudget = (budget) =>
+  budget === null || budget === undefined ? Infinity : budget;
+
 // Ended-but-not-closed auctions the user took part in are finalized once per session,
 // one transaction at a time, so winners can read their data and losers can be refunded.
 const finalizeRecordsThisSession = new Map();
@@ -1247,7 +1251,7 @@ function AuctionsListPage() {
   const lastEventRefreshRef = useRef(0);
 
   const [remainingBudget, setRemainingBudget] = useState(
-    navState?.remainingBudget ?? Infinity,
+    normalizeRemainingBudget(navState?.remainingBudget),
   );
   const currentUserAddress = connectedAccount;
   const searchIsActive = Boolean(searchQuery.trim());
@@ -1267,8 +1271,7 @@ function AuctionsListPage() {
       }
 
       // 0 is a real, exhausted budget on-chain; only null/undefined means unknown.
-      const isUnknown = budget === null || budget === undefined;
-      setRemainingBudget(isUnknown ? Infinity : budget);
+      setRemainingBudget(normalizeRemainingBudget(budget));
     } catch (error) {
       console.error("Error loading remaining budget:", error);
     }
@@ -1541,21 +1544,25 @@ function AuctionsListPage() {
     const attempts = (finalizeRecordsThisSession.get(key)?.attempts || 0) + 1;
     finalizeRecordsThisSession.set(key, { attempts, retryAtMs: null });
     finalizeInFlight = true;
+    const scheduleNotEndedRetry = () => {
+      if (attempts >= MAX_FINALIZE_ATTEMPTS) return;
+      finalizeRecordsThisSession.set(key, {
+        attempts,
+        retryAtMs: nextFinalizeAttemptAtMs(Number(candidate.endTime) / 1000, attempts),
+      });
+    };
     finalizeAuctionIfReady(candidate.address, connectedAccount)
-      .then((finalized) => {
-        if (!finalized) return;
+      .then((result) => {
+        // "not-ended": our chain clock ran ahead of the block; same retry path as the revert.
+        if (result?.reason === "not-ended") return scheduleNotEndedRetry();
+        if (!result?.finalized) return;
         invalidateAuctionCaches();
         fetchAuctionsListRef.current?.();
       })
       .catch((error) => {
         // Only "not ended yet" is retried (chain time, endTime + 3 s, max 3 attempts); other
         // failures stay silent here and the auction page explains them.
-        if (isNotEndedRevert(error) && attempts < MAX_FINALIZE_ATTEMPTS) {
-          finalizeRecordsThisSession.set(key, {
-            attempts,
-            retryAtMs: nextFinalizeAttemptAtMs(Number(candidate.endTime) / 1000, attempts),
-          });
-        }
+        if (isNotEndedRevert(error)) scheduleNotEndedRetry();
       })
       .finally(() => {
         finalizeInFlight = false;

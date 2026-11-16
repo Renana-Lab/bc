@@ -114,3 +114,12 @@ test("a row shows the minimum bid with locale grouping and a row tooltip", async
   await act(async () => { fireEvent.mouseOver(screen.getByRole("button", { name: "View Auction" })); });
   expect(await screen.findByText(/Review the data description and minimum/)).toBeTruthy();
 });
+
+test("budget 0 is a real budget, not unknown or unlimited", () => {
+  const { normalizeRemainingBudget } = jest.requireActual("./AuctionsListPage");
+  expect(normalizeRemainingBudget(0)).toBe(0);
+  expect(normalizeRemainingBudget("0")).toBe("0");
+  expect(normalizeRemainingBudget("1500")).toBe("1500");
+  expect(normalizeRemainingBudget(null)).toBe(Infinity);
+  expect(normalizeRemainingBudget(undefined)).toBe(Infinity);
+});

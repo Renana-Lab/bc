@@ -33,7 +33,8 @@ import {
   DESCRIPTION_MAX_CHARS,
   DURATION_MAX,
   MIN_BID_MAX,
-  PAYLOAD_MAX_CHARS,
+  PAYLOAD_MAX_BYTES,
+  utf8ByteLength,
   validateAuctionForm,
 } from "./auctionLimits";
 import { getWalletCopy } from "../../real_ethereum/wallets/walletCopy";
@@ -299,9 +300,9 @@ function NewAuctionPage() {
             error={Boolean(errors.dataForSell)}
             helperText={
               errors.dataForSell ||
-              `${formData.dataForSell.length} / ${PAYLOAD_MAX_CHARS}`
+              `${utf8ByteLength(formData.dataForSell)} / ${PAYLOAD_MAX_BYTES} bytes`
             }
-            inputProps={{ maxLength: PAYLOAD_MAX_CHARS, "aria-label": "Data for sale" }}
+            inputProps={{ maxLength: PAYLOAD_MAX_BYTES, "aria-label": "Data for sale" }}
           />
 
           {renderTooltip(

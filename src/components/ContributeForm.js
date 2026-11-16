@@ -45,8 +45,11 @@ export const minimumAcceptedBid = (minimum, highest, myBid) => {
 const budgetLabel = (budget) =>
   budget === Infinity || budget === null || budget === undefined ? "unknown" : String(budget);
 
-export const bidRangeMessage = (minimumAccepted, budget) =>
-  `Your total bid must be at least ${minimumAccepted} and the increase must fit your remaining budget (${budgetLabel(budget)}).`;
+// The contract reserves the whole new total from a non-leader's budget, but only the increase from the leader's.
+export const bidRangeMessage = (minimumAccepted, budget, isLeader = false) =>
+  `Your total bid must be at least ${minimumAccepted} and ${
+    isLeader ? "the increase" : "the amount reserved"
+  } must fit your remaining budget (${budgetLabel(budget)}).`;
 
 // Maps a failed bid to a message that matches the real cause.
 export function describeBidError(err, auctionClosed = false) {
@@ -137,7 +140,7 @@ class ContributeForm extends Component {
     if (!/^\d+$/.test(String(this.state.bidAmount || ""))) {
       this.setState({
         error: true,
-        errorMessage: "Bid amount must be a whole number in wei",
+        errorMessage: "Bid amount must be a whole number",
         transactionIsLoading: false,
       });
       return;
@@ -151,6 +154,9 @@ class ContributeForm extends Component {
       remainingBudget === Infinity ? null : BigInt(String(remainingBudget || 0));
     const additionalBid =
       newBid > currentUserBid ? newBid - currentUserBid : 0n;
+    const highestBidder = String(summary[6] || "").toLowerCase();
+    const isLeader =
+      Boolean(connectedAccount) && highestBidder === String(connectedAccount).toLowerCase();
 
     // Basic validations
     if (newBid <= 0n) {
@@ -168,11 +174,12 @@ class ContributeForm extends Component {
     );
     if (
       newBid < minimumAccepted ||
-      (remainingBudgetValue !== null && additionalBid > remainingBudgetValue)
+      (remainingBudgetValue !== null &&
+        newBid > (isLeader ? currentUserBid : 0n) + remainingBudgetValue)
     ) {
       this.setState({
         error: true,
-        errorMessage: bidRangeMessage(minimumAccepted.toString(), remainingBudget),
+        errorMessage: bidRangeMessage(minimumAccepted.toString(), remainingBudget, isLeader),
         transactionIsLoading: false,
       });
       return;
@@ -261,7 +268,7 @@ class ContributeForm extends Component {
           </label>
           <Tooltip
             enterTouchDelay={0}
-            title={`Enter your total bid, including any amount you already bid (${userBid}). When you lead, only the increase is reserved; otherwise the full total is reserved. Minimum accepted now: ${minimumAccepted}. If another bidder takes the lead, your reserved budget is released. Amounts are in wei.`}
+            title={`Enter your total bid, including any amount you already bid (${userBid}). When you lead, only the increase is reserved; otherwise the full total is reserved. Minimum accepted now: ${minimumAccepted}. If another bidder takes the lead, your reserved budget is released.`}
           >
             <IconButton size="small" aria-label="How total bids work">?</IconButton>
           </Tooltip>

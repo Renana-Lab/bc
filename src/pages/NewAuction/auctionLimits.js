@@ -1,9 +1,21 @@
 // Input limits for the create-auction form (mirrors the marketplace release rules).
 export const DESCRIPTION_MAX_CHARS = 300;
-// One config constant for the confidential payload size; override with REACT_APP_PAYLOAD_MAX_CHARS.
-export const PAYLOAD_MAX_CHARS = Number(process.env.REACT_APP_PAYLOAD_MAX_CHARS) > 0
-  ? Number(process.env.REACT_APP_PAYLOAD_MAX_CHARS)
+// One config constant for the confidential payload size. The on-chain cap is in BYTES (UTF-8),
+// so Hebrew and other non-Latin text counts 2+ bytes per character. Override with REACT_APP_PAYLOAD_MAX_BYTES.
+export const PAYLOAD_MAX_BYTES = Number(process.env.REACT_APP_PAYLOAD_MAX_BYTES) > 0
+  ? Number(process.env.REACT_APP_PAYLOAD_MAX_BYTES)
   : 2000;
+
+export const utf8ByteLength = (text) => {
+  const value = String(text ?? "");
+  if (typeof TextEncoder !== "undefined") return new TextEncoder().encode(value).length;
+  let bytes = 0;
+  for (const char of value) {
+    const code = char.codePointAt(0);
+    bytes += code < 0x80 ? 1 : code < 0x800 ? 2 : code < 0x10000 ? 3 : 4;
+  }
+  return bytes;
+};
 export const MIN_BID_MAX = 1000000000;
 export const DURATION_MIN = 1;
 export const DURATION_MAX = 30;
@@ -23,8 +35,8 @@ export const validateAuctionForm = (form) => {
 
   const payload = String(form.dataForSell ?? "");
   if (!payload.trim()) errors.dataForSell = "Data for sale is required";
-  else if (payload.length > PAYLOAD_MAX_CHARS) {
-    errors.dataForSell = `The data can be at most ${PAYLOAD_MAX_CHARS} characters`;
+  else if (utf8ByteLength(payload) > PAYLOAD_MAX_BYTES) {
+    errors.dataForSell = `The data can be at most ${PAYLOAD_MAX_BYTES} bytes (Hebrew and other non-Latin letters use 2 or more bytes each)`;
   }
 
   const minimum = String(form.minimumContribution ?? "").trim();

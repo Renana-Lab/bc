@@ -1,6 +1,6 @@
 import React from "react";
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import { MemoryRouter, Routes, Route } from "react-router-dom";
+import { MemoryRouter, Routes, Route, useNavigate } from "react-router-dom";
 import ShowAuctionPage from "./ShowAuctionPage";
 import { readOnlyCall } from "../../real_ethereum/readOnly";
 import { getEthereumAccounts, waitForEthereumProvider } from "../../real_ethereum/ethereumProvider";
@@ -28,6 +28,7 @@ jest.mock("../../real_ethereum/ethereumProvider", () => ({
   getEthereumAccounts: jest.fn(), waitForEthereumProvider: jest.fn(),
 }));
 
+const DONE = { finalized: true, reason: "finalized" };
 const seller = "0x00000000000000000000000000000000000000aa";
 const winner = "0x00000000000000000000000000000000000000bb";
 const loser = "0x00000000000000000000000000000000000000cc";
@@ -38,13 +39,14 @@ const mockChain = ({ endOffsetSec, closed = false, userBid = "0", refunded = fal
   readOnlyCall.mockImplementation(async (fn) => {
     const spec = fn({ campaign: () => ({ methods: new Proxy({}, { get: (_, method) => () => ({ method }) }) }) });
     if (spec.method === "getListSummary") {
-      return ["1", "0", "2", seller, "50", "desc", winner, String(endTime), closed];
+      return ["1", "0", "2", seller, "50", "desc", winner, String(endTime), typeof closed === "function" ? closed() : closed];
     }
     if (spec.method === "getTransactions") return [];
     if (spec.method === "getUserAuctionStatus") return [participated, userBid, refunded];
     return null;
   });
 };
+const NavSwitch = () => { const navigate = useNavigate(); return <button onClick={() => navigate("/auction/0xdef")}>to-other</button>; };
 const renderPage = () => render(
   <MemoryRouter initialEntries={["/auction/0xabc"]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
     <Routes><Route path="/auction/:address" element={<ShowAuctionPage />} /></Routes>
@@ -56,7 +58,7 @@ beforeEach(() => {
   jest.useFakeTimers();
   Object.defineProperty(document, "hidden", { configurable: true, value: false });
   waitForEthereumProvider.mockResolvedValue({});
-  finalizeAuctionIfReady.mockReset().mockResolvedValue(true);
+  finalizeAuctionIfReady.mockReset().mockResolvedValue(DONE);
   readWinnerData.mockReset();
   clearWinnerDataCooldown.mockReset();
   mockWithdraw.mockReset().mockResolvedValue({});
@@ -98,12 +100,58 @@ test("a failed finalize shows a message once and never loops", async () => {
   expect(finalizeAuctionIfReady).toHaveBeenCalledTimes(1);
 });
 
-test("a finalize race (already finalized) stays silent", async () => {
+test("a finalize race (already finalized) stays silent once the refetch shows it closed", async () => {
   getEthereumAccounts.mockResolvedValue([loser]);
-  mockChain({ endOffsetSec: -60, userBid: "10" });
-  finalizeAuctionIfReady.mockRejectedValue(new Error("execution reverted: already finalized"));
+  let closed = false;
+  mockChain({ endOffsetSec: -60, userBid: "10", closed: () => closed });
+  finalizeAuctionIfReady.mockImplementation(async () => { closed = true; throw new Error("execution reverted: Auction already finalized"); });
   renderPage(); await flush();
   expect(screen.queryByRole("alert")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Finalize" })).toBeNull();
+});
+
+test("a race that still reads as not closed after the refetch shows the Finalize button", async () => {
+  getEthereumAccounts.mockResolvedValue([loser]);
+  mockChain({ endOffsetSec: -60, userBid: "10" });
+  finalizeAuctionIfReady.mockRejectedValue(new Error("Auction already finalized"));
+  renderPage(); await flush();
+  expect(screen.getByRole("alert").textContent).toMatch(/could not confirm/);
+  expect(screen.getByRole("button", { name: "Finalize" })).toBeTruthy();
+});
+
+test("a generic EVM revert is not treated as a race: it shows the Finalize button", async () => {
+  getEthereumAccounts.mockResolvedValue([winner]);
+  mockChain({ endOffsetSec: -60 });
+  finalizeAuctionIfReady.mockRejectedValue(new Error("Transaction has been reverted by the EVM"));
+  renderPage(); await flush();
+  expect(screen.getByRole("alert").textContent).toMatch(/Could not finalize the auction automatically/);
+  expect(screen.getByRole("button", { name: "Finalize" })).toBeTruthy();
+  await advance(60000);
+  expect(finalizeAuctionIfReady).toHaveBeenCalledTimes(1);
+});
+
+test("a not-ended result from the helper (clock ahead of the block) is retried, not treated as success", async () => {
+  getEthereumAccounts.mockResolvedValue([loser]);
+  mockChain({ endOffsetSec: -60, userBid: "10" });
+  finalizeAuctionIfReady
+    .mockResolvedValueOnce({ finalized: false, reason: "not-ended" })
+    .mockResolvedValue(DONE);
+  renderPage(); await flush();
+  expect(finalizeAuctionIfReady).toHaveBeenCalledTimes(1);
+  expect(screen.getByText("Finalizing auction...")).toBeTruthy();
+  expect(screen.queryByRole("alert")).toBeNull();
+  await advance(1500);
+  expect(finalizeAuctionIfReady).toHaveBeenCalledTimes(2);
+});
+
+test("repeated not-ended results stop after 3 attempts and show the Finalize button", async () => {
+  getEthereumAccounts.mockResolvedValue([loser]);
+  mockChain({ endOffsetSec: -60, userBid: "10" });
+  finalizeAuctionIfReady.mockResolvedValue({ finalized: false, reason: "not-ended" });
+  renderPage(); await flush();
+  for (let i = 0; i < 6; i += 1) await advance(1500);
+  expect(finalizeAuctionIfReady).toHaveBeenCalledTimes(3);
+  expect(screen.getByRole("button", { name: "Finalize" })).toBeTruthy();
 });
 
 test("shows a neutral status while finalizing", async () => {
@@ -184,7 +232,7 @@ test("a 'not ended yet' revert is retried once at endTime + 3 s chain time and t
   // Ended 100 ms ago on our clock, but the chain says it is not over yet.
   const endTime = Math.floor(Date.now() / 1000);
   mockChain({ endOffsetSec: 0, userBid: "10" });
-  finalizeAuctionIfReady.mockRejectedValueOnce(notEnded()).mockResolvedValue(true);
+  finalizeAuctionIfReady.mockRejectedValueOnce(notEnded()).mockResolvedValue(DONE);
   renderPage(); await flush();
   expect(finalizeAuctionIfReady).toHaveBeenCalledTimes(1);
   expect(screen.queryByRole("alert")).toBeNull();
@@ -207,7 +255,7 @@ test("after 3 failed attempts a Finalize button appears for any participant and 
   expect(screen.getByRole("alert").textContent).toMatch(/not ready to be finalized yet/);
   await advance(120000);
   expect(finalizeAuctionIfReady).toHaveBeenCalledTimes(3); // never loops
-  finalizeAuctionIfReady.mockResolvedValue(true);
+  finalizeAuctionIfReady.mockResolvedValue(DONE);
   fireEvent.click(screen.getByRole("button", { name: "Finalize" }));
   await flush();
   expect(finalizeAuctionIfReady).toHaveBeenCalledTimes(4);
@@ -221,4 +269,24 @@ test("a non-retryable failure offers the Finalize button without retrying", asyn
   await advance(20000);
   expect(finalizeAuctionIfReady).toHaveBeenCalledTimes(1);
   expect(screen.getByRole("button", { name: "Finalize" })).toBeTruthy();
+});
+
+test("finalize/refund/winner state does not leak to another auction when the address changes", async () => {
+  getEthereumAccounts.mockResolvedValue([loser]);
+  mockChain({ endOffsetSec: -60, userBid: "10" });
+  finalizeAuctionIfReady.mockRejectedValue(new Error("Transaction has been reverted by the EVM"));
+  render(
+    <MemoryRouter initialEntries={["/auction/0xabc"]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <Routes><Route path="/auction/:address" element={<ShowAuctionPage />} /></Routes>
+      <NavSwitch />
+    </MemoryRouter>,
+  );
+  await flush();
+  expect(screen.getByRole("button", { name: "Finalize" })).toBeTruthy();
+  finalizeAuctionIfReady.mockReturnValue(new Promise(() => {}));
+  fireEvent.click(screen.getByRole("button", { name: "to-other" }));
+  await flush();
+  // The old failure banner is gone; the new auction starts its own finalize ("pending").
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(screen.getByText("Finalizing auction...")).toBeTruthy();
 });

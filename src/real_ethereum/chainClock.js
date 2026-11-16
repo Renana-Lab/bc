@@ -6,10 +6,16 @@ import { readOnlyExecute } from "./readOnly";
 export const SYNC_INTERVAL_MS = 30000;
 // Block timestamps lag real time by up to one round; keep a margin before the deadline.
 export const BID_SAFETY_MARGIN_MS = 2000;
+// Offsets that move less than this do not re-render subscribers.
+export const NOTIFY_THRESHOLD_MS = 250;
+// A block is always a little older than "now", which only makes a measured offset smaller, so the
+// largest of the last few measurements is the closest to real chain time.
+export const OFFSET_HISTORY = 5;
 
 let offsetMs = 0;
 let synced = false;
 let lastSyncAt = 0;
+let samples = [];
 let inFlight = null;
 const listeners = new Set();
 let timerId = null;
@@ -42,10 +48,13 @@ export const syncChainClock = ({ force = false } = {}) => {
       if (!Number.isFinite(seconds) || seconds <= 0) throw new Error("bad block timestamp");
       // Use the midpoint of the request so latency does not skew the offset.
       const localAtFetch = Math.round((startedAt + Date.now()) / 2);
-      offsetMs = seconds * 1000 - localAtFetch;
+      samples = [...samples, seconds * 1000 - localAtFetch].slice(-OFFSET_HISTORY);
+      const previous = offsetMs;
+      const wasSynced = synced;
+      offsetMs = Math.max(...samples);
       synced = true;
       lastSyncAt = Date.now();
-      notify();
+      if (!wasSynced || Math.abs(offsetMs - previous) > NOTIFY_THRESHOLD_MS) notify();
       return offsetMs;
     })
     .catch(() => offsetMs) // keep the last offset, never throw into render
@@ -62,7 +71,11 @@ const onFocus = () => {
 
 const start = () => {
   syncChainClock();
-  if (!timerId) timerId = setInterval(() => syncChainClock({ force: true }), SYNC_INTERVAL_MS);
+  if (!timerId) timerId = setInterval(() => {
+      // Hidden tabs do not need fresh time; the focus handler syncs when the user returns.
+      if (typeof document !== "undefined" && document.hidden) return;
+      syncChainClock({ force: true });
+    }, SYNC_INTERVAL_MS);
   if (!focusBound && typeof window !== "undefined") {
     window.addEventListener("focus", onFocus);
     focusBound = true;
@@ -92,6 +105,7 @@ export const __resetChainClockForTests = () => {
   offsetMs = 0;
   synced = false;
   lastSyncAt = 0;
+  samples = [];
   inFlight = null;
 };
 

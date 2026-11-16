@@ -13,7 +13,7 @@ const me = "0x00000000000000000000000000000000000000bb";
 const seller = "0x00000000000000000000000000000000000000aa";
 const endTime = () => Math.floor(Date.now() / 1000) + 600;
 // getListSummary: [minimum, _, approvers, manager, highestBid, desc, highestBidder, endTime, closed]
-const mockSummary = (minimum, highest) => readOnlyCall.mockImplementation(async () => [String(minimum), "0", "1", seller, String(highest), "d", seller, String(endTime()), false]);
+const mockSummary = (minimum, highest, leader = seller) => readOnlyCall.mockImplementation(async () => [String(minimum), "0", "1", seller, String(highest), "d", leader, String(endTime()), false]);
 const setup = (props = {}) => render(
   <ContributeForm address="0xabc" endTime={endTime()} minimumContribution="10" highestBid="50" userBid={0} remainingBudget="200" {...props} />,
 );
@@ -65,9 +65,9 @@ test("a too-low or unaffordable bid shows the marketplace message and sends noth
   setup();
   await bid("40");
   expect(screen.getByRole("alert").textContent).toBe(bidRangeMessage("51", "200"));
-  expect(screen.getByRole("alert").textContent).toBe("Your total bid must be at least 51 and the increase must fit your remaining budget (200).");
+  expect(screen.getByRole("alert").textContent).toBe("Your total bid must be at least 51 and the amount reserved must fit your remaining budget (200).");
   await bid("500");
-  expect(screen.getByRole("alert").textContent).toMatch(/at least 51 and the increase must fit/);
+  expect(screen.getByRole("alert").textContent).toMatch(/at least 51 and the amount reserved must fit/);
   expect(mockSend).not.toHaveBeenCalled();
 });
 
@@ -88,4 +88,38 @@ test("a failed transaction shows an inline error", async () => {
   setup();
   await bid("60");
   expect(screen.getByRole("alert").textContent).toBe("RPC node unreachable");
+});
+
+test("a non-leader returning bidder must fit the FULL new total in the budget", async () => {
+  mockSummary(10, 50);
+  setup({ userBid: 40, highestBid: "50", remainingBudget: "70" });
+  await bid("80");
+  expect(screen.getByRole("alert").textContent).toBe(
+    "Your total bid must be at least 51 and the amount reserved must fit your remaining budget (70).",
+  );
+  expect(mockSend).not.toHaveBeenCalled();
+  await bid("70");
+  expect(mockSend).toHaveBeenCalledTimes(1);
+  expect(mockSend).toHaveBeenCalledWith({ from: me, value: "30" }); // contract still gets only the increase
+});
+
+test("a leader raising a bid only needs the increase to fit the budget", async () => {
+  mockSummary(10, 60, me);
+  setup({ isLeader: true, userBid: 60, highestBid: "60", remainingBudget: "20" });
+  await bid("81");
+  expect(screen.getByRole("alert").textContent).toBe(
+    "Your total bid must be at least 61 and the increase must fit your remaining budget (20).",
+  );
+  expect(mockSend).not.toHaveBeenCalled();
+  await bid("80");
+  expect(mockSend).toHaveBeenCalledWith({ from: me, value: "20" });
+});
+
+test("the bid tooltip and errors no longer repeat 'in wei'", async () => {
+  mockSummary(10, 50);
+  setup();
+  await act(async () => { fireEvent.mouseOver(screen.getByRole("button", { name: "How total bids work" })); });
+  expect((await screen.findByText(/Minimum accepted now/)).textContent).not.toMatch(/wei/i);
+  await bid("1.5");
+  expect(screen.getByRole("alert").textContent).toBe("Bid amount must be a whole number");
 });

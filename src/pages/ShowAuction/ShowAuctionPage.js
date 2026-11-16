@@ -18,6 +18,7 @@ import {
   MAX_FINALIZE_ATTEMPTS,
   finalizeRetryDelayMs,
   isNotEndedRevert,
+  notEndedError,
 } from "../../real_ethereum/finalizeRetry";
 import ContributeForm from "../../components/ContributeForm";
 import toast from "react-hot-toast";
@@ -78,10 +79,7 @@ const ERROR_LOCKED = "Your wallet is locked. Unlock it to finalize this auction.
 
 // Races (someone else finalized first) are expected and must stay silent.
 const isBenignFinalizeRace = (err) =>
-  !isNotEndedRevert(err) &&
-  /already|finalized|closed|revert/i.test(
-    String(err?.message || err?.data?.message || ""),
-  ) && !/insufficient funds/i.test(String(err?.message || ""));
+  /already finalized/i.test(String(err?.message || err?.data?.message || err?.cause?.message || ""));
 
 export const describeFinalizeError = (err) => {
   const message = String(err?.message || err?.data?.message || "");
@@ -553,6 +551,7 @@ function ShowAuctionPage() {
         };
         loadBudget(); // הפעלה בפועל
       }
+      return Boolean(closed);
     } catch (err) {
       console.error(err);
       dispatch({ type: "SET_ERROR", payload: "Error fetching auction data" });
@@ -616,6 +615,15 @@ function ShowAuctionPage() {
   // Winner data only exists after finalize: any participant triggers it once per auction.
   // A "not ended yet" revert (chain clock slightly ahead of the block) is retried at
   // endTime + 3 s of chain time, at most MAX_FINALIZE_ATTEMPTS times in total.
+  // After a refetch the auction must read as closed; if it does not, offer the Finalize button.
+  const confirmClosedAfterRefetch = (closed) => {
+    if (unmountedRef.current || closed !== false) return;
+    setAutoFinalize({
+      status: "failed",
+      error: "We could not confirm that the auction is finalized yet. Press Finalize to try again.",
+    });
+  };
+
   runFinalizeRef.current = async ({ manual = false } = {}) => {
     const key = String(address).toLowerCase();
     const record = finalizeRecordsRef.current.get(key) || { attempts: 0, timer: null };
@@ -625,13 +633,15 @@ function ShowAuctionPage() {
     record.attempts = manual ? MAX_FINALIZE_ATTEMPTS : record.attempts + 1;
     setAutoFinalize({ status: "pending", error: "" });
     try {
-      const finalized = await finalizeAuctionIfReady(address, state.connectedAccount);
-      if (finalized) {
+      const result = await finalizeAuctionIfReady(address, state.connectedAccount);
+      // Our chain clock can run ahead of the block: treat it exactly like a not-ended revert.
+      if (result?.reason === "not-ended") throw notEndedError();
+      if (result?.finalized) {
         markAuctionClosed(getActiveFactoryAddress(), address, "auction-page-auto-finalized");
       }
       if (unmountedRef.current) return;
       setAutoFinalize({ status: "idle", error: "" });
-      await fetchAuctionData();
+      confirmClosedAfterRefetch(await fetchAuctionData());
     } catch (err) {
       if (unmountedRef.current) return;
       if (isNotEndedRevert(err)) {
@@ -650,13 +660,20 @@ function ShowAuctionPage() {
       }
       if (isBenignFinalizeRace(err)) {
         setAutoFinalize({ status: "idle", error: "" });
-        await fetchAuctionData();
+        confirmClosedAfterRefetch(await fetchAuctionData());
         return;
       }
       console.warn("Auto-finalize failed:", err);
       setAutoFinalize({ status: "failed", error: describeFinalizeError(err) });
     }
   };
+
+  // Per-auction UI state must not leak when the route changes to another auction.
+  useEffect(() => {
+    setAutoFinalize({ status: "idle", error: "" });
+    setAutoRefund({ status: "idle", error: "" });
+    setWinnerData({ status: "idle", error: "" });
+  }, [address]);
 
   useEffect(() => {
     unmountedRef.current = false;
