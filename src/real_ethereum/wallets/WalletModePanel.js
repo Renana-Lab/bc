@@ -1,4 +1,3 @@
-/* global BigInt */
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { getWalletMode } from "./walletMode.mjs";
 import { getParticipantContext, stripParticipantParams } from "./participantId.mjs";
