@@ -1,4 +1,3 @@
-/* global BigInt */
 import React, { useCallback, useEffect, useState } from "react";
 import { claimFunds } from "./faucetClient.mjs";
 import { formatNative } from "./nativeBalance";

@@ -122,3 +122,17 @@ test("admin view backup: passphrase-encrypted, restorable", async () => {
   await reloaded.openSilent();
   expect(reloaded.address).toBe(wallet.address);
 });
+
+test("without WebCrypto or IndexedDB the silent open fails loudly (the host then shows the unsupported-browser page)", async () => {
+  const realSubtle = Object.getOwnPropertyDescriptor(globalThis, "crypto");
+  Object.defineProperty(globalThis, "crypto", { value: {}, configurable: true });
+  try {
+    await expect(newWallet("default").openSilent()).rejects.toThrow(/WebCrypto is not available/);
+  } finally {
+    Object.defineProperty(globalThis, "crypto", realSubtle);
+  }
+  const brokenStorage = { get: async () => { throw new Error("IndexedDB is not available"); }, set: async () => {}, delete: async () => {} };
+  const wallet = createLocalWallet({ storage: brokenStorage, silentStorage: brokenStorage, scope: "default" });
+  await expect(wallet.openSilent()).rejects.toThrow(/IndexedDB is not available/);
+  expect(wallet.isUnlocked()).toBe(false);
+});

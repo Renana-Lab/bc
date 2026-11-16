@@ -1,6 +1,6 @@
 import React from "react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import WalletModePanel from "./WalletModePanel";
+import WalletModePanel, { UNSUPPORTED_MESSAGE } from "./WalletModePanel";
 import { __resetAutoClaimForTests } from "./autoClaim.mjs";
 import { WALLET_OVERRIDE_KEY, WALLET_SCOPE_OVERRIDE_KEY } from "./walletMode.mjs";
 import { getModeProvider, setModeProvider } from "./modeProvider";
@@ -25,10 +25,10 @@ jest.mock("./localWallet.mjs", () => ({
       isUnlocked: () => Boolean(state.address),
       subscribe: (listener) => { subscribers.add(listener); return () => subscribers.delete(listener); },
       openSilent: jest.fn(async () => {
+        if (mockBehavior.open === "throw") throw new Error("IndexedDB is not available");
         if (mockBehavior.open !== "needs-migration") { state.address = mockAddress; emit(); }
         return mockBehavior.open;
       }),
-      openEphemeral: jest.fn(() => { state.address = mockAddress; emit(); }),
       unlock: jest.fn(async () => { state.address = mockAddress; emit(); }),
       migrateToSilent: jest.fn(async () => {}),
       exportBackup: jest.fn(async () => "{}"),
@@ -155,6 +155,22 @@ describe("participant", () => {
     await waitFor(() => expect(mockWallets[0].migrateToSilent).toHaveBeenCalled());
     expect(mockWallets[0].unlock).toHaveBeenCalledWith("an old passphrase");
     await waitFor(() => expect(screen.queryByTestId("wallet-migration")).toBeNull());
+  });
+});
+
+describe("unsupported browser (no IndexedDB / WebCrypto)", () => {
+  test("shows the neutral full-page message, logs the reason, never falls back to a throw-away wallet or claims funds", async () => {
+    mockBehavior.open = "throw";
+    const consoleError = jest.spyOn(console, "error").mockImplementation(() => {});
+    render(<WalletModePanel />);
+    const page = await screen.findByTestId("unsupported-browser");
+    expect(page.textContent).toBe("This browser is not supported for the study. Please open the link in Chrome, Edge or Firefox.");
+    expect(page.textContent).toBe(UNSUPPORTED_MESSAGE);
+    expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("[wallet]"), "IndexedDB is not available");
+    expect(mockWallets[0].isUnlocked()).toBe(false); // no in-memory wallet that would be lost on reload
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+    expect(claimCalls).toHaveLength(0);
+    expect(screen.queryByTestId("preparing-session")).toBeNull();
   });
 });
 

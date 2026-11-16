@@ -225,6 +225,12 @@ const readParticipant = () => {
   return context;
 };
 
+export const UNSUPPORTED_MESSAGE = "This browser is not supported for the study. Please open the link in Chrome, Edge or Firefox.";
+const unsupportedStyle = {
+  position: "fixed", inset: 0, zIndex: 5000, display: "flex", alignItems: "center", justifyContent: "center", padding: 24,
+  textAlign: "center", background: "#fff", color: "#1c2340", font: "1.1rem system-ui, sans-serif",
+};
+
 const bannerStyle = {
   position: "fixed", top: 0, left: 0, right: 0, zIndex: 3000, padding: "6px 12px", textAlign: "center",
   background: "#d8dcf0", color: "#1c2340", font: "0.85rem system-ui, sans-serif",
@@ -276,6 +282,7 @@ const InvisibleWalletHost = () => {
   const [address, setAddress] = useState("");
   const [needsMigration, setNeedsMigration] = useState(false);
   const [preparing, setPreparing] = useState(false);
+  const [unsupported, setUnsupported] = useState(false);
   const { isAdmin } = useIsAdminWallet();
 
   useEffect(() => {
@@ -284,9 +291,11 @@ const InvisibleWalletHost = () => {
       try {
         const result = await wallet.openSilent();
         if (!cancelled) setNeedsMigration(result === "needs-migration");
-      } catch {
-        // Storage or WebCrypto unavailable (private window, old browser): keep working with a session-only wallet.
-        if (!wallet.isUnlocked()) wallet.openEphemeral();
+      } catch (error) {
+        // IndexedDB or WebCrypto unavailable (very old browser, blocked storage): a wallet that would be lost on reload
+        // is worse than none, so the participant gets a clear full-page message instead.
+        console.error("[wallet] This browser cannot keep the study wallet:", error?.message || error);
+        if (!cancelled) setUnsupported(true);
       }
     })();
     // The session is "unlocked" as soon as the silent open finished; RequireWallet therefore never sees a lock screen.
@@ -309,6 +318,14 @@ const InvisibleWalletHost = () => {
     }).finally(() => { if (!cancelled) setPreparing(false); });
     return () => { cancelled = true; };
   }, [adminSlot, address, faucetUrl, strictPid, openPid, studyId, experimentCode, provider]);
+
+  if (unsupported) {
+    return (
+      <div style={unsupportedStyle} role="alert" data-testid="unsupported-browser">
+        <p style={{ maxWidth: 480, margin: 0 }}>{UNSUPPORTED_MESSAGE}</p>
+      </div>
+    );
+  }
 
   return (
     <>

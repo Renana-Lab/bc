@@ -1,4 +1,3 @@
-/* global BigInt */
 // Network readers for the Participants gas card. Reads are batched (25 addresses per JSON-RPC batch) and go through
 // readOnlyExecute, i.e. through the shared RPC lanes/rate limiter, never one request per address.
 import { readOnlyBatchCall, readOnlyExecute, readOnlyCall } from "../../real_ethereum/readOnly";

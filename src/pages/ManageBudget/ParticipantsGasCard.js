@@ -1,4 +1,3 @@
-/* global BigInt */
 // Admin Zone card: who needs native funds ("gas") and a confirmed, sequential top-up. Admin only; never automatic.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, TextField, Typography } from "@mui/material";

@@ -92,8 +92,6 @@ export const createLocalWallet = ({ storage, silentStorage, scope = "default", s
       }
       return opening;
     },
-    // A wallet that lives in memory only (used when browser storage or WebCrypto is unavailable).
-    openEphemeral() { unlockWith(new Wallet(Wallet.createRandom().privateKey)); },
     // After the legacy passphrase unlock: re-save the same key with the invisible scheme and drop the keystore.
     async migrateToSilent() {
       if (!signer) throw walletError(4100, "Unlock the local wallet first.");

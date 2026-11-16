@@ -1,4 +1,3 @@
-/* global BigInt */
 // Data layer of the admin "Participants gas" card: who to list, who is low, and the sequential top-up run.
 // Pure functions + injectable readers/senders so everything is unit-testable without a chain.
 import { ADMIN_GAS_RESERVE_WEI, parseNative } from "../../real_ethereum/wallets/nativeBalance";

@@ -1,4 +1,3 @@
-/* global BigInt */
 // Plain native-token transfers from the connected admin wallet (MetaMask, or the local admin wallet), used by the
 // "Participants gas" and "Faucet funds" cards. Never automatic: callers only run after an explicit confirmation.
 import { requireWalletAccess } from "../../real_ethereum/walletAccess";

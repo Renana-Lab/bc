@@ -1,4 +1,3 @@
-/* global BigInt */
 // Faucet funds & payout limit. Shown (a) in the Admin Zone for admin wallets, with "Top up faucet", and (b) on the
 // password-protected /admin/faucet page without the wallet part. Nothing here is automatic.
 import { useCallback, useEffect, useMemo, useState } from "react";
