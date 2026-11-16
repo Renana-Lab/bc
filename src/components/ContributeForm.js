@@ -262,7 +262,7 @@ class ContributeForm extends Component {
     const bidWindowClosed = remainingMs !== null && remainingMs < BID_SAFETY_MARGIN_MS;
 
     return (
-      <FormControl>
+      <FormControl component="form" fullWidth noValidate onSubmit={this.onSubmit}>
         <div className={styles.tooltip}>
           <label className={styles.tooltiplabe} htmlFor="total-bid">
             Total Bid
@@ -277,7 +277,10 @@ class ContributeForm extends Component {
 
         <TextField
           id="total-bid"
+          name="amount"
           type="number"
+          required
+          fullWidth
           style={{
             borderRadius: ".5rem",
             backgroundColor: "#D8DCF0",
@@ -322,9 +325,9 @@ class ContributeForm extends Component {
             color: "#D8DCF0",
             fontWeight: "600",
             border: "1px solid #002884",
-            minWidth: "11rem",
+            width: "100%",
           }}
-          onClick={this.onSubmit}
+          type="submit"
           disabled={this.state.transactionIsLoading || bidWindowClosed || this.props.noBudget}
         >
           {!this.state.transactionIsLoading ? (

@@ -22,6 +22,8 @@ const MetamaskTutorialPage = lazy(() =>
 );
 const WalletUnlockPage = lazy(() => import("./pages/WalletUnlock/WalletUnlockPage.js"));
 const MetamaskGuidePage = lazy(() => import("./pages/MetamaskGuide/MetamaskGuidePage.js"));
+const AccountPage = lazy(() => import("./pages/Account/AccountPage.js"));
+const GuidePage = lazy(() => import("./pages/Guide/GuidePage.js"));
 const ManageBudgetPage = lazy(() => import("./pages/ManageBudget/ManageBudgetPage.js"));
 const ShowAuctionPage = lazy(() => import("./pages/ShowAuction/ShowAuctionPage.js"));
 const AdminLoginPage = lazy(() => import("./pages/AdminWallet/AdminLoginPage.js")); // hidden route: MetaMask admin sign-in in local wallet mode
@@ -203,7 +205,7 @@ function App() {
       <WalletModePanel />
       <BotnetRuntimeHost />
       <PresenceCoordinator />
-      {isMobile ? (
+      {isMobile && !getWalletCopy().embedded ? (
         <>
           <style>
             {`
@@ -378,6 +380,15 @@ function App() {
                     </RequireWallet>
                   }
                 />
+                <Route
+                  path="/account"
+                  element={
+                    <RequireWallet>
+                      <AccountPage />
+                    </RequireWallet>
+                  }
+                />
+                <Route path="/guide" element={<GuidePage />} />
                 <Route
                   path="/manage-budget"
                   element={

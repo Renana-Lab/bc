@@ -490,6 +490,24 @@
   }
 }
 
+.sellerLine {
+  display: block;
+  color: #5e638a;
+  font-weight: 400;
+  overflow-wrap: anywhere;
+}
+
+.bidPosition {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  margin-top: 4px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #176b3a;
+}
+
 .emptySearch {
   color: #0d0d4e;
   font-size: 1rem;
@@ -805,6 +823,12 @@
 
 @media (max-width: 760px) {
   .page {
+    box-sizing: border-box;
+    padding: 1rem 0 2rem;
+    min-width: 0;
+  }
+
+  .page {
     padding: 1rem 0.75rem;
   }
 
@@ -834,6 +858,8 @@
 
   .tableShell {
     border-radius: 16px !important;
+    box-sizing: border-box !important;
+    max-width: 100% !important;
   }
 
   .tableToolbar,

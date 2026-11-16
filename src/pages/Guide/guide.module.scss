@@ -1,0 +1,43 @@
+.page {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 1rem 0 3rem;
+}
+
+.hero h1 {
+  margin: 0;
+  color: #002884;
+  font-size: 2.2rem;
+  font-weight: 600;
+}
+
+.text {
+  text-align: left;
+  color: #3f50b5;
+  font-size: 1.2rem;
+  line-height: 1.5;
+  padding: 0.8rem 0 1rem;
+}
+
+.step {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  margin-right: 0.5rem;
+  border-radius: 50%;
+  background-color: #9090d0;
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.action {
+  height: 2.5rem;
+  padding: 0.8rem 1.6rem !important;
+  border-radius: 30px !important;
+  background-color: #9090d0 !important;
+  color: #ffffff !important;
+  font-weight: 600 !important;
+  text-transform: none !important;
+}

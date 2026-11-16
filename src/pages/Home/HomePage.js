@@ -4,6 +4,7 @@ import Layout from "../../components/Layout";
 import Button from "@mui/material/Button";
 import { useNavigate } from "react-router-dom";
 import { getWalletCopy } from "../../real_ethereum/wallets/walletCopy";
+import { participantText } from "../../real_ethereum/wallets/participantCopy";
 import Welcomepic from "./Illustration_Wel.png";
 function HomePage() {
   const navigate = useNavigate();
@@ -17,7 +18,7 @@ function HomePage() {
               src={Welcomepic}
               height="330"
               width="400"
-              alt="Blockchain data marketplace illustration"
+              alt={participantText("homeImageAlt")}
             />
             <div className={styles.introText}>
               <h1 style={{ margin: "0", lineHeight: 1.08 }}>
@@ -25,10 +26,12 @@ function HomePage() {
               </h1>
               <br />
               <p style={{ margin: "0", fontSize: "1.2rem" }}>
-                This is a blockchain based research platform, for running <br />
-                auctions of personal data using cryptocurrency.
-                <br />
-                Each auction lasts up to 30 mins.
+                {participantText("homeBody").split("\n").map((line, index) => (
+                  <React.Fragment key={line}>
+                    {index > 0 && <br />}
+                    {line}
+                  </React.Fragment>
+                ))}
               </p>
             </div>
           </div>
@@ -42,16 +45,6 @@ function HomePage() {
             }}
           >
             Continue
-          </Button>
-          <Button className={styles.secondaryButton} variant="outlined">
-            <a
-              style={{
-                color: "#002884",
-              }}
-              href="https://www.mturk.com/"
-            >
-              No Thanks
-            </a>
           </Button>
         </div>
       </div>

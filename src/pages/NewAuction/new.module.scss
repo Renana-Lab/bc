@@ -110,6 +110,26 @@
   }
 }
 
+// Narrow screens: single column, the illustration is hidden.
+@media (max-width: 860px) {
+  .direction {
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .Image {
+    display: none;
+  }
+
+  .form {
+    width: min(35rem, 92vw) !important;
+    max-width: 100%;
+    padding: 20px !important;
+    box-sizing: border-box !important;
+    margin-top: 1rem !important;
+  }
+}
+
 @media (prefers-reduced-motion: reduce), (update: slow) {
   .direction,
   .Image,

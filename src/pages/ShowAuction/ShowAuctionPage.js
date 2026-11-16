@@ -1,5 +1,6 @@
 /* eslint-env es2020 */
-import { participantMessage, isInsufficientFundsError } from "../../real_ethereum/wallets/participantCopy";
+import { participantMessage, isInsufficientFundsError, participantText, shortIdentifier } from "../../real_ethereum/wallets/participantCopy";
+import { isInvisibleWalletMode } from "../../real_ethereum/wallets/walletMode.mjs";
 import {
   useReducer,
   useEffect,
@@ -49,6 +50,7 @@ import {
   ListOutlined as ListIcon,
   KeyboardReturnOutlined as ReturnIcon,
   Close as CloseIcon,
+  CheckCircleOutline as CheckIcon,
 } from "@mui/icons-material";
 import showPageStyles from "./show.module.scss";
 import picSrc from "./medal.png";
@@ -74,6 +76,9 @@ const buttonStyle = {
   fontWeight: "600",
   // border: "1px solid #002884",
 };
+
+// Every action button of the auction page has the same width (never wider than the column).
+const actionButtonSize = { width: "24rem", maxWidth: "100%" };
 
 const ERROR_NO_GAS =
   "Not enough funds to pay the network fee (gas). Add test funds to your wallet and try again.";
@@ -112,6 +117,7 @@ function formatCountdownTime(remainingMs) {
 }
 
 function WeiHelp() {
+  if (isInvisibleWalletMode()) return null; // market wording: no unit hint
   return (
     <span
       title="Amounts are in wei, the smallest unit of the network currency."
@@ -123,7 +129,7 @@ function WeiHelp() {
   );
 }
 
-function LiveCountdown({ endTime }) {
+function LiveCountdown({ endTime, closed = false }) {
   const endTimeMs = Number(endTime) * 1000;
   useChainClockSync();
   const [now, setNow] = useState(() => chainNowMs());
@@ -162,7 +168,7 @@ function LiveCountdown({ endTime }) {
   }
 
   const remainingMs = endTimeMs - now;
-  const isEnded = remainingMs <= 0;
+  const isEnded = closed || remainingMs <= 0;
 
   return (
     <span
@@ -172,7 +178,7 @@ function LiveCountdown({ endTime }) {
       aria-live="polite"
     >
       <span className={showPageStyles.liveCountdownDot} aria-hidden="true" />
-      <span>{isEnded ? "Ended" : formatCountdownTime(remainingMs)}</span>
+      <span>{isEnded ? participantText("countdownEnded") : formatCountdownTime(remainingMs)}</span>
     </span>
   );
 }
@@ -203,8 +209,8 @@ const initialState = {
 function transactionsToCSV(transactions) {
   const CSV_COLUMNS = [
     { key: "bidder", label: "Bidder Address" },
-    { key: "transactionAmount", label: "Transaction Amount (wei)" },
-    { key: "bid", label: "Cumulative Bid (wei)" },
+    { key: "transactionAmount", label: participantText("csvTxAmount") },
+    { key: "bid", label: participantText("csvCumulativeBid") },
     { key: "time", label: "Bid Time" },
   ];
   const requiredKeys = CSV_COLUMNS.map(({ key }) => key);
@@ -398,10 +404,13 @@ function AuctionPageContent() {
       const highestBidderKey = (highestBidder || "").toLowerCase();
       const userIsHighestBidder =
         Boolean(accountKey) && accountKey === highestBidderKey;
+      const userIsManager =
+        Boolean(accountKey) && accountKey === String(manager || "").toLowerCase();
 
       const [rawTransactions, userStatus, fallbackUserBid, closed] =
         await Promise.all([
-          auctionEnded
+          // The seller may read the ledger (public view, no contract change) while the auction is still open.
+          auctionEnded || userIsManager
             ? readOnlyCall(
                 ({ campaign }) => campaign(address).methods.getTransactions(),
                 undefined,
@@ -887,138 +896,150 @@ function AuctionPageContent() {
     };
   }, [address, scheduleEventRefresh]);
 
+  const invisible = isInvisibleWalletMode();
+  // Market wording: the identifier is shortened (full value only in the title attribute).
+  const showAddress = (value) => (invisible ? <span title={value}>{shortIdentifier(value)}</span> : value);
+  const bidPositionLabel =
+    Number(state.highestBid) > 0 && isHighestBidder
+      ? isAuctionActive
+        ? "You are leading"
+        : state.closed && !state.cancelled
+          ? "You won"
+          : ""
+      : "";
+  const returnToList = () => navigate("/auctions-list", { state: { remainingBudget } });
+
   const renderAuctionInfo = () => (
-    <DialogActions>
-      <Box
-        sx={{
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          gap: 0,
-        }}
-      >
-        <div className={showPageStyles.campaignInfo}>
-          <h1 className={showPageStyles.introductionTitle}>
-            Auction # {address}
-          </h1>
-          <hr />
-          <InfoItem label="Data description" value={state.dataDescription} />
-          <InfoItem label="Seller address" value={state.manager} />
-          {isAuctionActive && (
-            <InfoItem
-              label="Time left"
-              value={<LiveCountdown endTime={state.endTime} />}
-            />
-          )}
-          <InfoItem
-            label="Minimum bid"
-            value={<>{state.minimumContribution}<WeiHelp /></>}
-          />
-          <InfoItem
-            label="Highest bid"
-            value={<>{state.highestBid}<WeiHelp /></>}
-          />
-          <InfoItem label="Number of bidders" value={state.approversCount} />
-        </div>
-
-        {!state.closed &&
-          !isAuctionActive &&
-          isManager &&
-          state.transactions.length !== 0 && (
-            <Button
-              id="finalize-auction-button"
-              variant="contained"
-              disabled={finalizingPayment}
-              style={{ ...buttonStyle, marginTop: "2rem", width: "24rem" }}
-              onClick={finalizeAuction}
-            >
-              {finalizingPayment ? "Finalizing payment..." : "Get your money"}
-            </Button>
-          )}
-
-        {state.closed &&
-          !state.cancelled &&
-          !isAuctionActive &&
-          isManager &&
-          state.transactions.length !== 0 && (
-            <div
-              className={showPageStyles.finalizedPaymentBadge}
-              role="status"
-              aria-label="Seller payment finalized"
-            >
-              <span>Seller payment finalized</span>
-              <small>Funds were released to the seller</small>
-            </div>
-          )}
-
-        {!isAuctionActive && isManager && (
-          <Button
-            startIcon={<ListIcon />}
-            variant="contained"
-            style={{ ...buttonStyle, marginTop: "2rem", width: "24rem" }}
-            onClick={() => dispatch({ type: "TOGGLE_DIALOG" })}
-          >
-            Display Bidding History
-          </Button>
-        )}
-        {isAdminViewer && (
-          <Button
-            variant="outlined"
-            disabled={exportingCsv}
-            style={{ marginTop: "0.7rem", width: "24rem" }}
-            onClick={async () => {
-              setExportingCsv(true);
-              try {
-                const { exportAuctionTransactionsCsv } = await import("../ManageBudget/reportUtils");
-                const { count, note } = await exportAuctionTransactionsCsv(address);
-                toast.success(`Exported ${count} transactions`);
-                if (note) toast(`Transaction hashes: ${note}`, { duration: 8000 });
-              } catch (error) {
-                toast.error(error?.message || "Could not export transactions");
-              } finally {
-                setExportingCsv(false);
-              }
-            }}
-          >
-            {exportingCsv ? "Exporting..." : "Export transactions (CSV)"}
-          </Button>
-        )}
-        <br />
-        <Button
-          startIcon={isAuctionActive ? <GavelIcon /> : <ReturnIcon />}
-          onClick={() =>
-            navigate("/auctions-list", { state: { remainingBudget } })
+    <div className={showPageStyles.infoColumn}>
+      <div className={showPageStyles.campaignInfo}>
+        <h2 className={showPageStyles.detailsTitle}>Auction Details</h2>
+        <hr />
+        <InfoItem label="Data description" value={state.dataDescription} />
+        <InfoItem label={participantText("sellerLabel")} value={showAddress(state.manager)} />
+        <InfoItem
+          label="Time left"
+          value={<LiveCountdown endTime={state.endTime} closed={state.closed} />}
+        />
+        <InfoItem
+          label={participantText("minBidLabel")}
+          value={<>{state.minimumContribution}<WeiHelp /></>}
+        />
+        <InfoItem
+          label={participantText("highestBidLabel")}
+          value={
+            <>
+              {state.highestBid}
+              <WeiHelp />
+              {bidPositionLabel && (
+                <span className={showPageStyles.marketBidPosition} role="status">
+                  <CheckIcon fontSize="inherit" aria-hidden="true" />
+                  {bidPositionLabel}
+                </span>
+              )}
+            </>
           }
-          style={{
-            ...buttonStyle,
-            marginTop: "0.7rem",
-            // width: isAuctionActive ? "24rem" : "24rem",
-            width: "24rem",
+        />
+        <InfoItem label="Number of bidders" value={state.approversCount} />
+      </div>
 
-            marginBottom: "2rem",
-          }}
+      {!state.closed &&
+        !isAuctionActive &&
+        isManager &&
+        state.transactions.length !== 0 && (
+          <Button
+            id="finalize-auction-button"
+            variant="contained"
+            disabled={finalizingPayment}
+            style={{ ...buttonStyle, ...actionButtonSize, marginTop: "2rem" }}
+            onClick={finalizeAuction}
+          >
+            {finalizingPayment ? "Finalizing payment..." : "Get your money"}
+          </Button>
+        )}
+
+      {state.closed &&
+        !state.cancelled &&
+        !isAuctionActive &&
+        isManager &&
+        state.transactions.length !== 0 && (
+          <div
+            className={showPageStyles.finalizedPaymentBadge}
+            role="status"
+            aria-label="Seller payment finalized"
+          >
+            <span>Seller payment finalized</span>
+            <small>Funds were released to the seller</small>
+          </div>
+        )}
+
+      {isManager && (
+        <Button
+          startIcon={<ListIcon />}
           variant="contained"
+          style={{ ...buttonStyle, ...actionButtonSize, marginTop: "2rem" }}
+          onClick={() => dispatch({ type: "TOGGLE_DIALOG" })}
         >
-          {isAuctionActive
-            ? "Return To Auctions"
-            : "Return To Auctions Main Screen"}
+          Display Bidding History
         </Button>
-      </Box>
-    </DialogActions>
+      )}
+      {isAdminViewer && (
+        <Button
+          variant="outlined"
+          disabled={exportingCsv}
+          style={{ ...actionButtonSize, marginTop: "0.7rem" }}
+          onClick={async () => {
+            setExportingCsv(true);
+            try {
+              const { exportAuctionTransactionsCsv } = await import("../ManageBudget/reportUtils");
+              const { count, note } = await exportAuctionTransactionsCsv(address);
+              toast.success(`Exported ${count} transactions`);
+              if (note) toast(`Transaction hashes: ${note}`, { duration: 8000 });
+            } catch (error) {
+              toast.error(error?.message || "Could not export transactions");
+            } finally {
+              setExportingCsv(false);
+            }
+          }}
+        >
+          {exportingCsv ? "Exporting..." : "Export transactions (CSV)"}
+        </Button>
+      )}
+      <Button
+        startIcon={isAuctionActive ? <GavelIcon /> : <ReturnIcon />}
+        onClick={returnToList}
+        style={{
+          ...buttonStyle,
+          ...actionButtonSize,
+          marginTop: "0.7rem",
+          marginBottom: "2rem",
+        }}
+        variant="contained"
+      >
+        {isAuctionActive
+          ? "Return To Auctions"
+          : "Return To Auctions Main Screen"}
+      </Button>
+    </div>
   );
 
   if (state.loading)
     return (
       <Layout>
         <Box
+          role="status"
           sx={{
             display: "flex",
+            flexDirection: "column",
             justifyContent: "center",
             alignItems: "center",
-            minHeight: "100vh",
+            gap: 2,
+            minHeight: "60vh",
+            color: "#002884",
+            fontSize: "1.2rem",
           }}
         >
           <CircularProgress />
+          <span>Loading auction...</span>
         </Box>
       </Layout>
     );
@@ -1028,20 +1049,36 @@ function AuctionPageContent() {
         <Box
           sx={{
             display: "flex",
+            flexDirection: "column",
             justifyContent: "center",
             alignItems: "center",
-            minHeight: "100vh",
+            gap: 3,
+            minHeight: "60vh",
+            padding: "3rem 0",
           }}
         >
-          <Typography color="error">{state.error}</Typography>
+          <Typography role="alert" sx={{ color: "#002884", fontSize: "1.2rem", textAlign: "center" }}>
+            {state.error}
+          </Typography>
+          <Button
+            variant="contained"
+            startIcon={<ReturnIcon />}
+            style={{ ...buttonStyle, ...actionButtonSize }}
+            onClick={returnToList}
+          >
+            Return To Auctions Main Screen
+          </Button>
         </Box>
       </Layout>
     );
 
   return (
     <Layout>
+      <h1 className={showPageStyles.heading}>{state.dataDescription}</h1>
+      <p className={showPageStyles.subtitle}>Auction # {showAddress(address)}</p>
       <div className={showPageStyles.page}>
         {renderAuctionInfo()}
+        <div className={showPageStyles.sideColumn}>
         <AuctionAdminPanel
           address={address}
           account={state.connectedAccount}
@@ -1080,7 +1117,7 @@ function AuctionPageContent() {
             <Typography
               variant="h6"
               textAlign="center"
-              sx={{ marginBottom: "1rem" }}
+              className={showPageStyles.remainingBudget}
             >
               Remaining Budget:{" "}
               {hasRealBudget(remainingBudget) ? String(remainingBudget) : "Unknown"}
@@ -1217,8 +1254,9 @@ function AuctionPageContent() {
             )}
           </div>
         )}
+        </div>
       </div>
-      {!isAuctionActive && isManager && (
+      {isManager && (
         <Dialog
           fullWidth
           open={state.dialogOpen}
@@ -1244,7 +1282,7 @@ function AuctionPageContent() {
               </Button>
               <p className={showPageStyles.title}>Bidding History</p>
             </Box>
-            <p className={showPageStyles.subTitle}>Auction # {address}</p>
+            <p className={showPageStyles.subTitle}>Auction # {showAddress(address)}</p>
             <p className={showPageStyles.subTitle}>
               Highest bid: {state.highestBid}
             </p>
@@ -1252,7 +1290,7 @@ function AuctionPageContent() {
               className={showPageStyles.subTitle}
               style={{ wordBreak: "break-all" }}
             >
-              Highest bidder: {state.highestBidder || "None"}
+              Highest bidder: {state.highestBidder ? showAddress(state.highestBidder) : "None"}
             </p>
             <div style={{ display: "flex", justifyContent: "center" }}>
               <Button
@@ -1312,7 +1350,7 @@ function AuctionPageContent() {
                               : undefined
                           }
                         >
-                          <TableCell align="center">{row.bidder}</TableCell>
+                          <TableCell align="center">{showAddress(row.bidder)}</TableCell>
                           <TableCell align="center">
                             {row.transactionAmount}
                           </TableCell>

@@ -4,7 +4,7 @@ import { makeStyles } from "@mui/styles";
 import styles1 from "./../styles/components.module.scss";
 import { useLocation, useNavigate } from "react-router-dom";
 import { getWalletCopy } from "../real_ethereum/wallets/walletCopy";
-import { clearWalletOverrides, hasWalletOverride } from "../real_ethereum/wallets/walletMode.mjs";
+import { clearWalletOverrides, hasWalletOverride, isInvisibleWalletMode } from "../real_ethereum/wallets/walletMode.mjs";
 import { useAdminAccess } from "../pages/ManageBudget/useAdminAccess";
 
 const useStyles = makeStyles({
@@ -192,6 +192,23 @@ const DrawerComponent = (props) => {
           <ListItemText>Start An Auction</ListItemText>
         </ListItemButton>
 
+        {isInvisibleWalletMode() && (
+          <>
+            <ListItemButton className={itemClassName("/account")} onClick={() => nav("/account")}>
+              <span className={classes.iconTile}>
+                <span className={styles1.metamaskIcon}></span>
+              </span>
+              <ListItemText>Account Profile</ListItemText>
+            </ListItemButton>
+            <ListItemButton className={itemClassName("/guide")} onClick={() => nav("/guide")}>
+              <span className={classes.iconTile}>
+                <span className={styles1.metamaskIcon}></span>
+              </span>
+              <ListItemText>Platform Guide</ListItemText>
+            </ListItemButton>
+          </>
+        )}
+
         {getWalletCopy().showTutorial && (
         <ListItemButton className={`${classes.item} ${classes.primaryText}`}>
           <span className={classes.iconTile}>
@@ -212,13 +229,15 @@ const DrawerComponent = (props) => {
       </div>
 
       <div className={classes.adminSection}>
-        <ListItemButton
-          className={`${itemClassName("/manage-budget")} ${classes.adminItem}`}
-          dense
-          onClick={() => nav("/manage-budget")}
-        >
-          <ListItemText>-- Admin Zone --</ListItemText>
-        </ListItemButton>
+        {showAdminLinks && (
+          <ListItemButton
+            className={`${itemClassName("/manage-budget")} ${classes.adminItem}`}
+            dense
+            onClick={() => nav("/manage-budget")}
+          >
+            <ListItemText>-- Admin Zone --</ListItemText>
+          </ListItemButton>
+        )}
         {showAdminLinks && getWalletCopy().embedded && !hasWalletOverride() && (
           <ListItemButton
             className={`${itemClassName("/admin-login")} ${classes.adminItem}`}

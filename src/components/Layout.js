@@ -2,11 +2,12 @@ import React from "react";
 import { Container } from "semantic-ui-react";
 // import Head from "next/head";
 import Navbar from "./Navbar.js";
+import { isInvisibleWalletMode } from "../real_ethereum/wallets/walletMode.mjs";
 import styles from "./../styles/components.module.scss";
 
 const Layout = (props) => {
   return (
-    <Container className={styles.container}>
+    <Container className={`${styles.container} ${isInvisibleWalletMode() ? styles.marketBackground : ""}`.trim()}>
       {/* <Head>
         <link
           rel="stylesheet"

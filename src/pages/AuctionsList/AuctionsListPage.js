@@ -24,6 +24,8 @@ import {
 } from "@mui/material";
 import SearchIcon from "@mui/icons-material/Search";
 import CloseIcon from "@mui/icons-material/Close";
+import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutline";
+import { participantText, shortIdentifier } from "../../real_ethereum/wallets/participantCopy";
 import { useNavigate, useLocation } from "react-router-dom";
 import { readOnlyBatchCall, readOnlyCall } from "../../real_ethereum/readOnly";
 import {
@@ -380,9 +382,21 @@ export const AuctionTableRow = React.memo(function AuctionTableRow({
     : userParticipated && auctionOpen && !userIsManager
       ? "#da0c0cff"
       : "#0D0D4E";
-  const statusFontColor = userFontColor === "#0D0D4E" && auctionOpen
-    ? "#D07030D0"
-    : userFontColor;
+  // Open and not led/outbid: market orange countdown. Closed: the same market orange for the "Closed" label.
+  const statusFontColor = !auctionOpen
+    ? "#ef6c00"
+    : userFontColor === "#0D0D4E"
+      ? "#D07030D0"
+      : userFontColor;
+  const hasBid = Number(auction.highestBid) > 0;
+  const bidPositionLabel =
+    !auction.isReadPlaceholder && isHighestBidder && hasBid
+      ? auctionOpen
+        ? "You are leading"
+        : userWon && auction.closed
+          ? "You won"
+          : ""
+      : "";
 
   let paymentStatus = "";
   if (cancelled) {
@@ -425,12 +439,25 @@ export const AuctionTableRow = React.memo(function AuctionTableRow({
       }}
     >
       <TableCell sx={fontSx} align="center">
-        {auction.isReadPlaceholder ? <LoadingAuctionLabel /> : auction.dataDescription}
-        {auctionBadges({ hidden, cancelled }).map((badge) => (
-          <strong key={badge} data-testid={`auction-badge-${badge.toLowerCase()}`} style={{ marginLeft: 8, fontSize: 11 }}>
-            [{badge}]
-          </strong>
-        ))}
+        <div>
+          {auction.isReadPlaceholder ? <LoadingAuctionLabel /> : auction.dataDescription}
+          {auctionBadges({ hidden, cancelled }).map((badge) => (
+            <strong key={badge} data-testid={`auction-badge-${badge.toLowerCase()}`} style={{ marginLeft: 8, fontSize: 11 }}>
+              [{badge}]
+            </strong>
+          ))}
+        </div>
+        {!auction.isReadPlaceholder && auction.manager && (
+          <small className={styles.sellerLine} title={auction.manager}>
+            {shortIdentifier(auction.manager)}
+          </small>
+        )}
+        {bidPositionLabel && (
+          <span className={styles.bidPosition} role="status">
+            <CheckCircleOutlineIcon fontSize="inherit" aria-hidden="true" />
+            {bidPositionLabel}
+          </span>
+        )}
       </TableCell>
       <TableCell align="center" sx={fontSx}>
         <span className={styles.dateCell}>
@@ -1924,11 +1951,11 @@ function AuctionsListPage() {
                 <img
                   className={styles.heroImage}
                   src={picSrc}
-                  alt="Blockchain auction marketplace dashboard"
+                  alt={participantText("listHeroAlt")}
                 />
                 <div className={styles.heroCopy}>
                   <h1 className={styles.introductionTitle}>
-                    Welcome to the Blockchain Data Market Platform
+                    {participantText("listHero")}
                   </h1>
                   <p className={styles.introductionSubtitle}>
                     Scroll down to see all the open and closed auctions.
@@ -1979,7 +2006,7 @@ function AuctionsListPage() {
                 className={styles.searchInput}
                 value={searchQuery}
                 onChange={handleSearchChange}
-                placeholder="Search auctions by description, address, or exact bid"
+                placeholder={participantText("searchPlaceholder")}
                 variant="outlined"
                 size="small"
                 InputProps={{
@@ -2092,6 +2119,9 @@ function AuctionsListPage() {
               <div className={styles.emptySearch}>
                 No auctions match your search.
               </div>
+            )}
+            {!viewIsFiltered && !sortedAuctions.length && (
+              <div className={styles.emptySearch}>No auctions found.</div>
             )}
             {visibleAuctionCount < totalAuctionCount && (
               <div className={styles.loadMoreWrap}>

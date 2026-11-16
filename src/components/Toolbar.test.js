@@ -47,3 +47,20 @@ test('budget is kept when the wallet briefly re-checks with the same account', a
   expect(screen.getByText('2000')).toBeTruthy();
   expect(getDefaultBudget).not.toHaveBeenCalled();
 });
+
+test('local mode shows the market brand and no forbidden wording or full address; MetaMask mode keeps the original', async () => {
+  const { scanParticipantView } = require('../tests/participantWording');
+  const account = '0x1234567890abcdef1234567890abcdef12345678';
+  mockSession = { status: 'connected', account };
+  process.env.REACT_APP_WALLET_MODE = 'local';
+  try {
+    const view = render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}><ToolbarComponent openDrawerHandler={() => {}} /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByText('2000')).toBeTruthy());
+    expect(screen.getByText('Data Marketplace')).toBeTruthy();
+    expect(scanParticipantView(view.container)).toEqual({ words: [], addresses: [] });
+    view.unmount();
+    process.env.REACT_APP_WALLET_MODE = 'metamask';
+    render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}><ToolbarComponent openDrawerHandler={() => {}} /></MemoryRouter>);
+    expect(screen.getByText('Blockchain Data Market')).toBeTruthy();
+  } finally { delete process.env.REACT_APP_WALLET_MODE; }
+});
