@@ -506,9 +506,7 @@ const ManageBudgetPage = () => {
         notifyBudgetChanged({ factoryAddress: activeMarket.address });
 
         toast.success(
-          budget === 0
-            ? "Unlimited spending enabled for all users"
-            : `Budget set to ${budget} wei for all users`
+          `Budget set to ${budget} wei for all users`
         );
 
         navigate("/auctions-list");
@@ -2054,9 +2052,6 @@ const ManageBudgetPage = () => {
                 fullWidth
                 sx={{ mt: 2 }}
               />
-              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                Set to 0 for unlimited spending
-              </Typography>
               {error && (
                 <Typography color="error" sx={{ mt: 1 }}>
                   {error}

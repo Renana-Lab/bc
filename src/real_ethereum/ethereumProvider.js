@@ -1,5 +1,6 @@
 import { ensureTargetChain } from "./sapphireNetworks";
 import { getWalletMode } from "./wallets/walletMode.mjs";
+import { getWalletCopy } from "./wallets/walletCopy";
 import { discoverWalletProvider, requireWalletAccess, verifyWalletAccess } from "./walletAccess";
 
 export const getEthereumProvider = discoverWalletProvider;
@@ -32,7 +33,8 @@ export const requestEthereumAccounts = async () => {
   return [session.account];
 };
 export const getMetaMaskErrorMessage = (error) => {
-  if (error?.code === 4001) return "MetaMask connection was rejected. Approve the connection to continue.";
-  if (error?.code === -32002) return "MetaMask has a pending request. Open the extension and finish it.";
-  return "Could not verify MetaMask access. Unlock the extension, connect an account to this site, and retry.";
+  const copy = getWalletCopy();
+  if (error?.code === 4001) return copy.connectRejected;
+  if (error?.code === -32002) return copy.connectPending;
+  return copy.connectFailed;
 };

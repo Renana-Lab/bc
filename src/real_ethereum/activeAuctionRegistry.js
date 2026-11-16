@@ -1,5 +1,6 @@
 import { readOnlyBatchCall, readOnlyCall, readOnlyExecute } from "./readOnly";
 import { getActiveFactoryAddress } from "./marketConfig";
+import { chainNowMs } from "./chainClock";
 
 const STORAGE_PREFIX = "data-market:active-auctions:v2";
 const LEGACY_STORAGE_PREFIX = "data-market:active-auctions:v1";
@@ -131,7 +132,7 @@ const mergeAuctions = (...groups) => {
   return [...byAddress.values()];
 };
 
-const classifyAuctions = (auctions, nowSec = Math.floor(Date.now() / 1000)) => {
+const classifyAuctions = (auctions, nowSec = Math.floor(chainNowMs() / 1000)) => {
   const tracked = mergeAuctions(auctions);
   return {
     activeAuctions: tracked
@@ -436,13 +437,13 @@ const getNextSyncDelay = (snapshot, intervalMs) => {
   const nextEndMs = Math.min(
     ...(snapshot?.activeAuctions || [])
       .map((auction) => Number(auction.endTimeSec || 0) * 1000)
-      .filter((endTimeMs) => endTimeMs > Date.now()),
+      .filter((endTimeMs) => endTimeMs > chainNowMs()),
   );
   if (!Number.isFinite(nextEndMs)) return intervalMs;
 
   return Math.max(
     50,
-    Math.min(intervalMs, nextEndMs - Date.now() + DEADLINE_SYNC_GRACE_MS),
+    Math.min(intervalMs, nextEndMs - chainNowMs() + DEADLINE_SYNC_GRACE_MS),
   );
 };
 

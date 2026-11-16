@@ -1,7 +1,8 @@
 import { memo } from "react";
 import { useSharedClock } from "../../performance/sharedClock";
+import { chainNowMs, getChainClockOffsetMs } from "../../real_ethereum/chainClock";
 
-export const formatTimeLeft = (endTime, now = Date.now()) => {
+export const formatTimeLeft = (endTime, now = chainNowMs()) => {
   if (!Number(endTime)) return "";
 
   const millisecondsLeft = Number(endTime) - now;
@@ -30,7 +31,8 @@ export const formatLastUpdated = (updatedAt, now = Date.now()) => {
 
 export const AuctionCountdown = memo(function AuctionCountdown({ endTime }) {
   const now = useSharedClock();
-  return formatTimeLeft(endTime, now);
+  // The shared clock ticks in device time; shift it onto chain time.
+  return formatTimeLeft(endTime, now + getChainClockOffsetMs());
 });
 
 export const LastUpdatedLabel = memo(function LastUpdatedLabel({ updatedAt }) {

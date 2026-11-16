@@ -10,7 +10,9 @@ import { readOnlyCall } from "../real_ethereum/readOnly";
 import styles from "./../styles/components.module.scss";
 import CircularProgress from "@mui/material/CircularProgress";
 import { Typography } from "@mui/material";
-import toast from "react-hot-toast";
+import Tooltip from "@mui/material/Tooltip";
+import IconButton from "@mui/material/IconButton";
+import { chainNowMs, subscribeChainClock, BID_SAFETY_MARGIN_MS } from "../real_ethereum/chainClock";
 
 
   const ERROR_OUTBID = "You were outbid by another user";
@@ -24,6 +26,28 @@ const ERROR_NO_GAS = "Not enough funds to pay the network fee (gas). Add test fu
 const ERROR_WALLET_LOCKED = "Your wallet is locked. Unlock it and try again.";
 const ERROR_VERIFICATION = "Wallet verification expired. Re-check your wallet connection and try again.";
 
+export const BID_MAX = 1000000000;
+
+const toBig = (value) => {
+  try {
+    return BigInt(String(value ?? 0).split(".")[0] || 0);
+  } catch (_error) {
+    return 0n;
+  }
+};
+
+// Smallest total bid the contract accepts now: max(minimum, highest + 1, myBid + 1).
+export const minimumAcceptedBid = (minimum, highest, myBid) => {
+  const candidates = [toBig(minimum), toBig(highest) + 1n, toBig(myBid) + 1n];
+  return candidates.reduce((best, value) => (value > best ? value : best), 0n);
+};
+
+const budgetLabel = (budget) =>
+  budget === Infinity || budget === null || budget === undefined ? "unknown" : String(budget);
+
+export const bidRangeMessage = (minimumAccepted, budget) =>
+  `Your total bid must be at least ${minimumAccepted} and the increase must fit your remaining budget (${budgetLabel(budget)}).`;
+
 // Maps a failed bid to a message that matches the real cause.
 export function describeBidError(err, auctionClosed = false) {
   const message = String(err?.message || err?.data?.message || "");
@@ -31,7 +55,7 @@ export function describeBidError(err, auctionClosed = false) {
   if (code === 4001 || message.includes(USER_DENIED_PREFIX)) return ERROR_USER_DENIED_CONTRIBUTE;
   if (code === 4100) return ERROR_WALLET_LOCKED;
   if (/insufficient funds/i.test(message)) return ERROR_NO_GAS;
-  if (/verification (expired|failed|timed out)|verify your metamask connection/i.test(message)) return ERROR_VERIFICATION;
+  if (/verification (expired|failed|timed out)|verify your metamask connection|unlock your wallet with your passphrase before continuing/i.test(message)) return ERROR_VERIFICATION;
   if (/Bid must exceed current highest/i.test(message)) return ERROR_OUTBID;
   if (/Auction ended/i.test(message) || auctionClosed) return ERROR_DEADLINE;
   return message || "Your bid could not be placed.";
@@ -41,9 +65,30 @@ class ContributeForm extends Component {
   state = {
     bidAmount: "",
     errorMessage: "",
+    successMessage: "",
     transactionIsLoading: false,
     error: false,
     weiInfoClicked: false,
+    clockTick: 0,
+  };
+
+  componentDidMount() {
+    this.unsubscribeClock = subscribeChainClock(() => this.bumpClock());
+    this.clockInterval = setInterval(() => this.bumpClock(), 1000);
+  }
+
+  componentWillUnmount() {
+    this.unsubscribeClock?.();
+    clearInterval(this.clockInterval);
+  }
+
+  bumpClock = () => this.setState((prev) => ({ clockTick: prev.clockTick + 1 }));
+
+  // Remaining time to the deadline on chain time, or null when the end time is unknown.
+  getRemainingMs = () => {
+    const endMs = Number(this.props.endTime) * 1000;
+    if (!Number.isFinite(endMs) || endMs <= 0) return null;
+    return endMs - chainNowMs();
   };
 
   onSubmit = async (event) => {
@@ -52,6 +97,7 @@ class ContributeForm extends Component {
       transactionIsLoading: true,
       error: false,
       errorMessage: "",
+      successMessage: "",
     });
 
     const {
@@ -115,31 +161,23 @@ class ContributeForm extends Component {
       });
       return;
     }
-    if (newBid <= currentUserBid || newBid <= highestBidValue) {
+    const minimumAccepted = minimumAcceptedBid(
+      minimumContributionValue,
+      highestBidValue,
+      currentUserBid,
+    );
+    if (
+      newBid < minimumAccepted ||
+      (remainingBudgetValue !== null && additionalBid > remainingBudgetValue)
+    ) {
       this.setState({
         error: true,
-        errorMessage: `Your new bid must be greater than the highest bid - ${highestBid} wei`,
+        errorMessage: bidRangeMessage(minimumAccepted.toString(), remainingBudget),
         transactionIsLoading: false,
       });
       return;
     }
-    if (remainingBudgetValue !== null && additionalBid > remainingBudgetValue) {
-      this.setState({
-        error: true,
-        errorMessage: `Insufficient budget. You need ${additionalBid.toString()} more wei for this bid.`,
-        transactionIsLoading: false,
-      });
-      return;
-    }
-    if (newBid < minimumContributionValue) {
-      this.setState({
-        error: true,
-        errorMessage: `Total bid must exceed the minimum required of ${minimumContribution} wei.`,
-        transactionIsLoading: false,
-      });
-      return;
-    }
-    if (Number(endTime + "000") < Date.now()) {
+    if (Number(endTime + "000") - chainNowMs() < BID_SAFETY_MARGIN_MS) {
       this.setState({
         error: true,
         errorMessage: "You cannot contribute to a closed auction!",
@@ -168,9 +206,6 @@ class ContributeForm extends Component {
         : receipt?.events?.BidRecorded;
       const budgetAfter = bidRecordedEvent?.returnValues?.budgetAfter;
 
-      toast.success(
-        `Bid placed successfully!`
-      );
       await onSuccessfulBid?.({
         totalBid: newBid.toString(),
         additionalBid: additionalBid.toString(),
@@ -179,12 +214,14 @@ class ContributeForm extends Component {
         receipt,
       });
 
-      this.setState({ bidAmount: "", transactionIsLoading: false });
+      this.setState({
+        bidAmount: "",
+        transactionIsLoading: false,
+        successMessage: "Bid placed successfully!",
+      });
     } catch (err) {
 
-        const message = describeBidError(err, Number(endTime + "000") < Date.now());
-        toast.error(message);
-
+        const message = describeBidError(err, Number(endTime + "000") < chainNowMs());
         this.setState({
           transactionIsLoading: false,
           error: true,
@@ -201,35 +238,37 @@ class ContributeForm extends Component {
     const { userBid = 0 } = this.props;
     const newBid = Number(this.state.bidAmount);
     const difference = newBid > userBid ? newBid - userBid : 0;
+    const minimumAccepted = minimumAcceptedBid(
+      this.props.minimumContribution,
+      this.props.highestBid,
+      userBid,
+    ).toString();
+    const budgetValue = this.props.remainingBudget;
+    const budgetCap =
+      budgetValue === Infinity || budgetValue === null || budgetValue === undefined
+        ? BID_MAX
+        : Number(budgetValue);
+    const maxBid = Math.min(BID_MAX, (this.props.isLeader ? Number(userBid) : 0) + budgetCap);
+    const remainingMs = this.getRemainingMs();
+    const auctionEnded = remainingMs !== null && remainingMs <= 0;
+    const bidWindowClosed = remainingMs !== null && remainingMs < BID_SAFETY_MARGIN_MS;
 
     return (
       <FormControl>
         <div className={styles.tooltip}>
-          <label className={styles.tooltiplabe}>
-            Total Bid (in Wei)
-            <button onClick={this.onReveal} className={styles.circleIcon}>
-              ?
-            </button>
-            <div className={styles.description}>
-              {this.state.weiInfoClicked && (
-                <Typography fontStyle="italic">
-                  Wei is the smallest (base) unit of Ether. You can convert
-                  between Ether units
-                  <a
-                    href="https://eth-converter.com/"
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    {" "}
-                    here.
-                  </a>
-                </Typography>
-              )}
-            </div>
+          <label className={styles.tooltiplabe} htmlFor="total-bid">
+            Total Bid
           </label>
+          <Tooltip
+            enterTouchDelay={0}
+            title={`Enter your total bid, including any amount you already bid (${userBid}). When you lead, only the increase is reserved; otherwise the full total is reserved. Minimum accepted now: ${minimumAccepted}. If another bidder takes the lead, your reserved budget is released. Amounts are in wei.`}
+          >
+            <IconButton size="small" aria-label="How total bids work">?</IconButton>
+          </Tooltip>
         </div>
 
         <TextField
+          id="total-bid"
           type="number"
           style={{
             borderRadius: ".5rem",
@@ -239,6 +278,8 @@ class ContributeForm extends Component {
             border: "1px solid #002884",
           }}
           value={this.state.bidAmount}
+          disabled={this.state.transactionIsLoading}
+          inputProps={{ min: minimumAccepted, max: maxBid, step: 1 }}
           onChange={(event) => this.setState({ bidAmount: event.target.value })}
         />
 
@@ -251,8 +292,14 @@ class ContributeForm extends Component {
           </Typography>
         )}
 
+        {this.state.successMessage && (
+          <Alert severity="success" role="status" sx={{ marginTop: "1rem" }}>
+            {this.state.successMessage}
+          </Alert>
+        )}
+
         {this.state.error && (
-          <Alert severity="error" sx={{ marginTop: "1rem" }}>
+          <Alert severity="error" role="alert" sx={{ marginTop: "1rem" }}>
             {this.state.errorMessage}
           </Alert>
         )}
@@ -270,12 +317,14 @@ class ContributeForm extends Component {
             minWidth: "11rem",
           }}
           onClick={this.onSubmit}
-          disabled={this.state.transactionIsLoading}
+          disabled={this.state.transactionIsLoading || bidWindowClosed || this.props.noBudget}
         >
           {!this.state.transactionIsLoading ? (
-            <span>Submit your bid</span>
+            <span>{auctionEnded ? "Auction ended" : this.props.noBudget ? "No budget left" : "Submit your bid"}</span>
           ) : (
-            <CircularProgress className={styles.progress} size={20} />
+            <span>
+              <CircularProgress className={styles.progress} size={14} /> Submitting...
+            </span>
           )}
         </Button>
       </FormControl>

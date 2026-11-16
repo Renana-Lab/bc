@@ -12,6 +12,7 @@ import PageSeo from "./components/Seo.js";
 import PresenceCoordinator from "./telemetry/PresenceCoordinator.js";
 import BotnetRuntimeHost from "./botnet/BotnetRuntimeHost.js";
 import WalletModePanel from "./real_ethereum/wallets/WalletModePanel.js";
+import { getWalletCopy } from "./real_ethereum/wallets/walletCopy.js";
 
 const HomePage = lazy(() => import("./pages/Home/HomePage.js"));
 const NewAuctionPage = lazy(() => import("./pages/NewAuction/NewAuctionPage.js"));
@@ -19,6 +20,7 @@ const AuctionsListPage = lazy(() => import("./pages/AuctionsList/AuctionsListPag
 const MetamaskTutorialPage = lazy(() =>
   import("./pages/MetamaskLogin/MetamaskTutorialPage.js")
 );
+const WalletUnlockPage = lazy(() => import("./pages/WalletUnlock/WalletUnlockPage.js"));
 const MetamaskGuidePage = lazy(() => import("./pages/MetamaskGuide/MetamaskGuidePage.js"));
 const ManageBudgetPage = lazy(() => import("./pages/ManageBudget/ManageBudgetPage.js"));
 const ShowAuctionPage = lazy(() => import("./pages/ShowAuction/ShowAuctionPage.js"));
@@ -168,11 +170,11 @@ export const RequireWallet = ({ children }) => {
     ? REDIRECT_AFTER_ADMISSION.has(status)
     : status !== "connected" && status !== "checking";
   if (redirect) {
-    return <Navigate to="/metamask-login" replace state={{ from: `${location.pathname}${location.search}` }} />;
+    return <Navigate to={getWalletCopy().loginPath} replace state={{ from: `${location.pathname}${location.search}` }} />;
   }
   if (admitted.current) return <>{children}</>;
   return <>
-    <AppLoadingFallback copy="Verifying your MetaMask connection" status="Checking wallet access" />
+    <AppLoadingFallback copy={getWalletCopy().verifying} status={getWalletCopy().verifyingStatus} />
   </>;
 };
 
@@ -314,9 +316,26 @@ function App() {
                 <Route
                   path="/metamask-login"
                   element={
-                    <PageSeo page="metamaskLogin">
-                      <MetamaskTutorialPage />
-                    </PageSeo>
+                    getWalletCopy().embedded ? (
+                      // Old links keep working: the legacy path is an alias of the unlock screen.
+                      <Navigate to="/wallet-unlock" replace state={location.state} />
+                    ) : (
+                      <PageSeo page="metamaskLogin">
+                        <MetamaskTutorialPage />
+                      </PageSeo>
+                    )
+                  }
+                />
+                <Route
+                  path="/wallet-unlock"
+                  element={
+                    getWalletCopy().embedded ? (
+                      <PageSeo page="metamaskLogin">
+                        <WalletUnlockPage />
+                      </PageSeo>
+                    ) : (
+                      <Navigate to="/metamask-login" replace state={location.state} />
+                    )
                   }
                 />
                 <Route

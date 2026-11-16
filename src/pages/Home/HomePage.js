@@ -3,6 +3,7 @@ import styles from "./home.module.scss";
 import Layout from "../../components/Layout";
 import Button from "@mui/material/Button";
 import { useNavigate } from "react-router-dom";
+import { getWalletCopy } from "../../real_ethereum/wallets/walletCopy";
 import Welcomepic from "./Illustration_Wel.png";
 function HomePage() {
   const navigate = useNavigate();
@@ -37,7 +38,7 @@ function HomePage() {
             className={styles.primaryButton}
             variant="contained"
             onClick={() => {
-              navigate("metamask-login");
+              navigate(getWalletCopy().loginPath.replace(/^\//, ""));
             }}
           >
             Continue

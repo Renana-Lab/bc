@@ -19,6 +19,7 @@ import {
   TextField,
   InputAdornment,
   IconButton,
+  Tooltip,
 } from "@mui/material";
 import SearchIcon from "@mui/icons-material/Search";
 import CloseIcon from "@mui/icons-material/Close";
@@ -40,6 +41,14 @@ import { publishActiveAuctions } from "../../real_ethereum/activeAuctionRegistry
 import { getWalletSessionAccount, subscribeToWalletSession } from "../../telemetry/walletSession";
 import Layout from "../../components/Layout";
 import { preserveAuctionUserState } from "./auctionVisualState";
+import { finalizeAuctionIfReady } from "../../real_ethereum/autoFinalize";
+import {
+  MAX_FINALIZE_ATTEMPTS,
+  isNotEndedRevert,
+  nextFinalizeAttemptAtMs,
+} from "../../real_ethereum/finalizeRetry";
+import { pickAuctionToFinalize } from "./listFinalize";
+import { chainNowMs, useChainClockSync } from "../../real_ethereum/chainClock";
 import { AuctionCountdown, LastUpdatedLabel } from "./AuctionLiveValues";
 import styles from "./auctions.module.scss";
 import picSrc from "./Illustration_Start.png";
@@ -324,7 +333,31 @@ const getAuctionTime = (endTime) => {
 const addressMatches = (left, right) =>
   Boolean(left && right) && String(left).toLowerCase() === String(right).toLowerCase();
 
-const AuctionTableRow = React.memo(function AuctionTableRow({
+// Minimum bid comes from getListSummary()[0]; shown with locale grouping like the marketplace.
+const formatBidAmount = (value) => {
+  try {
+    const text = String(value ?? "");
+    return /^\d+$/.test(text) ? BigInt(text).toLocaleString() : text;
+  } catch (_error) {
+    return String(value ?? "");
+  }
+};
+
+const rowActionTooltip = ({ auctionOpen, userIsManager, userWon }) =>
+  auctionOpen
+    ? userIsManager
+      ? "Review your auction."
+      : "Review the data description and minimum, then submit your total bid within your available budget."
+    : userWon
+      ? "This auction has closed. Open it to access the data you won."
+      : "This auction has closed. Review its details and bidding history.";
+
+// Ended-but-not-closed auctions the user took part in are finalized once per session,
+// one transaction at a time, so winners can read their data and losers can be refunded.
+const finalizeRecordsThisSession = new Map();
+let finalizeInFlight = false;
+
+export const AuctionTableRow = React.memo(function AuctionTableRow({
   auction,
   currentUserAddress,
   boundaryClock,
@@ -396,6 +429,9 @@ const AuctionTableRow = React.memo(function AuctionTableRow({
         <AuctionCountdown endTime={auction.endTime} />
       </TableCell>
       <TableCell align="center" sx={fontSx}>
+        {auction.isReadPlaceholder ? "" : formatBidAmount(auction.minimumContribution)}
+      </TableCell>
+      <TableCell align="center" sx={fontSx}>
         {auction.isReadPlaceholder ? "" : auction.highestBid}
       </TableCell>
       <TableCell align="center" sx={fontSx}>
@@ -403,6 +439,11 @@ const AuctionTableRow = React.memo(function AuctionTableRow({
       </TableCell>
       <TableCell sx={fontSx} align="center">{paymentStatus}</TableCell>
       <TableCell align="center">
+        <Tooltip
+          describeChild
+          enterTouchDelay={0}
+          title={rowActionTooltip({ auctionOpen, userIsManager, userWon })}
+        >
         <Button
           variant="contained"
           className={userWon ? styles.viewDataButton : ""}
@@ -422,6 +463,7 @@ const AuctionTableRow = React.memo(function AuctionTableRow({
         >
           {userWon ? "View Data" : "View Auction"}
         </Button>
+        </Tooltip>
       </TableCell>
     </TableRow>
   );
@@ -753,7 +795,7 @@ const readAuctionFromChain = async (
       readOptions,
     );
     const addresses = details[7];
-    const auctionEnded = Number(details[8]) * 1000 < Date.now();
+    const auctionEnded = Number(details[8]) * 1000 < chainNowMs();
     const closed = auctionEnded
       ? await readOnlyCall(
           ({ campaign }) => campaign(address).methods.getStatus(),
@@ -1144,7 +1186,7 @@ const readUserStatusesForAuctions = async (
     const bid = Number(result.value[1] || 0);
     const isHighestBidder = Boolean(result.value[4]);
     const auctionClosed =
-      Boolean(auction.closed) || Number(auction.endTime) <= Date.now();
+      Boolean(auction.closed) || Number(auction.endTime) <= chainNowMs();
     const isRefunded =
       Boolean(result.value[2]) ||
       (auctionClosed && participated && !isHighestBidder && bid === 0);
@@ -1167,6 +1209,7 @@ const readUserStatusesForAuctions = async (
 };
 
 function AuctionsListPage() {
+  useChainClockSync();
   const navigate = useNavigate();
   const { state: navState } = useLocation();
   const [auctionsList, setAuctionsList] = useState([]);
@@ -1178,7 +1221,7 @@ function AuctionsListPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [sortMode, setSortMode] = useState("normal");
   const deferredSearchQuery = useDeferredValue(searchQuery);
-  const [boundaryClock, setBoundaryClock] = useState(Date.now());
+  const [boundaryClock, setBoundaryClock] = useState(() => chainNowMs());
   const [lastUpdated, setLastUpdated] = useState(
     auctionListCache.updatedAt || null,
   );
@@ -1204,7 +1247,7 @@ function AuctionsListPage() {
   const lastEventRefreshRef = useRef(0);
 
   const [remainingBudget, setRemainingBudget] = useState(
-    navState?.remainingBudget || Infinity,
+    navState?.remainingBudget ?? Infinity,
   );
   const currentUserAddress = connectedAccount;
   const searchIsActive = Boolean(searchQuery.trim());
@@ -1223,12 +1266,9 @@ function AuctionsListPage() {
         return;
       }
 
-      const isUnlimited =
-        budget === 0 ||
-        budget === "0" ||
-        budget === null ||
-        budget === undefined;
-      setRemainingBudget(isUnlimited ? Infinity : budget);
+      // 0 is a real, exhausted budget on-chain; only null/undefined means unknown.
+      const isUnknown = budget === null || budget === undefined;
+      setRemainingBudget(isUnknown ? Infinity : budget);
     } catch (error) {
       console.error("Error loading remaining budget:", error);
     }
@@ -1458,7 +1498,7 @@ function AuctionsListPage() {
   }, []);
 
   useEffect(() => {
-    const currentTime = Date.now();
+    const currentTime = chainNowMs();
     const nextBoundary = auctionsList.reduce((nearest, auction) => {
       const endTime = Number(auction.endTime);
       if (auction.isReadPlaceholder || endTime <= currentTime) return nearest;
@@ -1467,11 +1507,62 @@ function AuctionsListPage() {
 
     if (nextBoundary === null) return undefined;
     const timer = window.setTimeout(
-      () => setBoundaryClock(Date.now()),
+      () => setBoundaryClock(chainNowMs()),
       Math.max(25, nextBoundary - currentTime + 25),
     );
     return () => window.clearTimeout(timer);
   }, [auctionsList, boundaryClock]);
+
+  const [finalizeTick, setFinalizeTick] = useState(0);
+  useEffect(() => {
+    const now = chainNowMs();
+    const candidate = pickAuctionToFinalize({
+      auctions: auctionsList,
+      account: connectedAccount,
+      nowMs: now,
+      records: finalizeRecordsThisSession,
+      inFlight: finalizeInFlight,
+    });
+    if (!candidate) {
+      // Wake up when the next not-ended retry becomes due.
+      const dueAt = [...finalizeRecordsThisSession.values()]
+        .filter((record) => record.retryAtMs != null && record.attempts < MAX_FINALIZE_ATTEMPTS)
+        .map((record) => record.retryAtMs)
+        .sort((a, b) => a - b)[0];
+      if (dueAt === undefined || finalizeInFlight) return undefined;
+      const timer = window.setTimeout(
+        () => setFinalizeTick((n) => n + 1),
+        Math.max(1000, dueAt - now),
+      );
+      return () => window.clearTimeout(timer);
+    }
+
+    const key = String(candidate.address).toLowerCase();
+    const attempts = (finalizeRecordsThisSession.get(key)?.attempts || 0) + 1;
+    finalizeRecordsThisSession.set(key, { attempts, retryAtMs: null });
+    finalizeInFlight = true;
+    finalizeAuctionIfReady(candidate.address, connectedAccount)
+      .then((finalized) => {
+        if (!finalized) return;
+        invalidateAuctionCaches();
+        fetchAuctionsListRef.current?.();
+      })
+      .catch((error) => {
+        // Only "not ended yet" is retried (chain time, endTime + 3 s, max 3 attempts); other
+        // failures stay silent here and the auction page explains them.
+        if (isNotEndedRevert(error) && attempts < MAX_FINALIZE_ATTEMPTS) {
+          finalizeRecordsThisSession.set(key, {
+            attempts,
+            retryAtMs: nextFinalizeAttemptAtMs(Number(candidate.endTime) / 1000, attempts),
+          });
+        }
+      })
+      .finally(() => {
+        finalizeInFlight = false;
+        setFinalizeTick((n) => n + 1);
+      });
+    return undefined;
+  }, [auctionsList, boundaryClock, connectedAccount, finalizeTick]);
 
   useEffect(() => {
     if (!didMountVisibleCountRef.current) {
@@ -1597,7 +1688,7 @@ function AuctionsListPage() {
     const maxSubscriptions = shouldLimitLiveEventLoad()
       ? Math.min(2, MAX_LIVE_BID_SUBSCRIPTIONS)
       : MAX_LIVE_BID_SUBSCRIPTIONS;
-    const currentTime = Date.now();
+    const currentTime = chainNowMs();
 
     return auctionsList
       .slice(0, Math.min(AUCTIONS_PAGE_SIZE, maxSubscriptions))
@@ -1943,6 +2034,7 @@ function AuctionsListPage() {
                     "Description",
                     "End Date",
                     "Auction Status",
+                    "Minimum Bid",
                     "Highest Bid",
                     "Number Of Bidders",
                     "Payment Status",

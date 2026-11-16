@@ -64,6 +64,13 @@ import {
   getBidDecision as getSharedBidDecision,
 } from "../../botnet/cyclePlanner.mjs";
 import { BOT_SCHEDULER_TICK_EVENT } from "../../botnet/runtimeEvents";
+import { getTargetNetwork } from "../../real_ethereum/sapphireNetworks";
+
+// Block explorer link for the configured Sapphire network; undefined when it has none.
+const explorerUrl = (kind, value) => {
+  const base = getTargetNetwork().blockExplorerUrls?.[0];
+  return base && value ? `${base.replace(/\/$/, "")}/${kind}/${value}` : undefined;
+};
 
 const activeBotCycles = new Set();
 export const PRIVATE_KEY_WALLET = "private-key";
@@ -916,7 +923,7 @@ const DynamicAuctionIndex = ({
                       <Tooltip title={auction.address || "Unknown auction"}>
                         <Typography
                           component="a"
-                          href={auction.address ? `https://sepolia.etherscan.io/address/${auction.address}` : undefined}
+                          href={auction.address ? explorerUrl("address", auction.address) : undefined}
                           target="_blank"
                           rel="noreferrer"
                           variant="caption"
@@ -1006,8 +1013,8 @@ const ObservatoryRound = ({ round }) => {
                     <Typography variant="caption" color="text.secondary">{step.auction ? shortAddress(step.auction) : "round"}</Typography>
                     <Typography variant="caption" sx={{ overflowWrap: "anywhere" }}>
                       {step.reason || step.detail || step.outcome || "completed"}
-                      {step.transactionHash && (
-                        <Box component="a" href={`https://sepolia.etherscan.io/tx/${step.transactionHash}`} target="_blank" rel="noreferrer" sx={{ ml: 0.7, color: "#173b91", fontWeight: 700, textDecoration: "none" }}>
+                      {step.transactionHash && explorerUrl("tx", step.transactionHash) && (
+                        <Box component="a" href={explorerUrl("tx", step.transactionHash)} target="_blank" rel="noreferrer" sx={{ ml: 0.7, color: "#173b91", fontWeight: 700, textDecoration: "none" }}>
                           transaction
                         </Box>
                       )}

@@ -1,5 +1,5 @@
 import React from "react";
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import AuctionsListPage from "./AuctionsListPage";
 import { readOnlyCall, readOnlyBatchCall } from "../../real_ethereum/readOnly";
@@ -85,4 +85,32 @@ test("a label-only market event does not reload", async () => {
   act(() => storage("data-market:market-label"));
   expect(screen.queryByText(LOADING)).toBeNull();
   view.unmount();
+});
+
+test("the table header lists Minimum Bid between Auction Status and Highest Bid", async () => {
+  renderPage();
+  await flush();
+  const headers = screen.getAllByRole("columnheader").map((cell) => cell.textContent);
+  expect(headers).toEqual([
+    "Description", "End Date", "Auction Status", "Minimum Bid", "Highest Bid",
+    "Number Of Bidders", "Payment Status", "",
+  ]);
+});
+
+test("a row shows the minimum bid with locale grouping and a row tooltip", async () => {
+  const { AuctionTableRow } = jest.requireActual("./AuctionsListPage");
+  const auction = {
+    address: "0xabc", dataDescription: "shoe size", endTime: Date.now() + 600000, minimumContribution: "1234567",
+    highestBid: "5000", approversCount: 2, highestBidder: "0x1", manager: "0x2", addresses: [], closed: false,
+  };
+  render(
+    <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <table><tbody><AuctionTableRow auction={auction} currentUserAddress="0x3" boundaryClock={Date.now()} onOpen={() => {}} /></tbody></table>
+    </MemoryRouter>,
+  );
+  const cells = screen.getAllByRole("cell").map((cell) => cell.textContent);
+  expect(cells[3]).toBe((1234567).toLocaleString());
+  expect(cells[4]).toBe("5000");
+  await act(async () => { fireEvent.mouseOver(screen.getByRole("button", { name: "View Auction" })); });
+  expect(await screen.findByText(/Review the data description and minimum/)).toBeTruthy();
 });

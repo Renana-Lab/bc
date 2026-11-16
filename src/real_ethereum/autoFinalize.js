@@ -1,8 +1,9 @@
 import Campaign from "./campaign";
+import { chainNowMs } from "./chainClock";
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 
-export const isAuctionEnded = (endTime) => Number(endTime) * 1000 <= Date.now();
+export const isAuctionEnded = (endTime) => Number(endTime) * 1000 <= chainNowMs();
 
 export const shouldFinalizeAuction = async (auction) => {
   const [summary, closed] = await Promise.all([

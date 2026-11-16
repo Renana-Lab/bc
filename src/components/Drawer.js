@@ -3,6 +3,7 @@ import { ListItemButton, ListItemText, Drawer } from "@mui/material";
 import { makeStyles } from "@mui/styles";
 import styles1 from "./../styles/components.module.scss";
 import { useLocation, useNavigate } from "react-router-dom";
+import { getWalletCopy } from "../real_ethereum/wallets/walletCopy";
 
 const useStyles = makeStyles({
   paper: {
@@ -186,6 +187,7 @@ const DrawerComponent = (props) => {
           <ListItemText>Start An Auction</ListItemText>
         </ListItemButton>
 
+        {getWalletCopy().showTutorial && (
         <ListItemButton className={`${classes.item} ${classes.primaryText}`}>
           <span className={classes.iconTile}>
             <span className={styles1.metamaskIcon}></span>
@@ -201,6 +203,7 @@ const DrawerComponent = (props) => {
             </a>
           </ListItemText>
         </ListItemButton>
+        )}
       </div>
 
       <div className={classes.adminSection}>

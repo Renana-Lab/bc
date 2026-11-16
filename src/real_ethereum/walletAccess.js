@@ -1,5 +1,6 @@
 import { setWalletSessionAccount } from "../telemetry/walletSession";
 import { getWalletMode } from "./wallets/walletMode.mjs";
+import { getWalletCopy } from "./wallets/walletCopy";
 import { getModeProvider, subscribeModeProvider } from "./wallets/modeProvider";
 
 const ACCOUNT = /^0x[0-9a-fA-F]{40}$/;
@@ -65,7 +66,7 @@ export const discoverWalletProvider = () => {
   return eligible.length === 1 ? eligible[0] : null;
 };
 const changed = () => { invalidate(); void verifyWalletAccess(); };
-const disconnected = () => invalidate("unavailable", "MetaMask disconnected. Unlock it and reconnect.");
+const disconnected = () => invalidate("unavailable", getWalletCopy().disconnected);
 const reconcileProvider = () => {
   const provider = discoverWalletProvider();
   if (provider !== boundProvider) {
@@ -85,14 +86,14 @@ const reconcileProvider = () => {
 };
 const fatal = (message) => Object.assign(new Error(message), { fatal: true });
 const deadline = (promise) => new Promise((resolve, reject) => {
-  const id = setTimeout(() => reject(new Error("MetaMask verification timed out. Open the extension and retry.")), TIMEOUT);
+  const id = setTimeout(() => reject(new Error(getWalletCopy().timeout)), TIMEOUT);
   Promise.resolve(promise).then(resolve, reject).finally(() => clearTimeout(id));
 });
 export const verifyWalletAccess = () => {
   const provider = reconcileProvider();
   if (pending) return pending;
   if (!provider) {
-    publish("unavailable", { provider: null, reason: "A verifiable MetaMask extension was not detected. Enable it for this site and retry." });
+    publish("unavailable", { provider: null, reason: getWalletCopy().notDetected });
     return Promise.resolve(snapshot);
   }
   if (document.hidden) return Promise.resolve(snapshot);
@@ -101,14 +102,14 @@ export const verifyWalletAccess = () => {
     try {
       const probe = getWalletMode() === "metamask" ? provider._metamask : provider;
       if (typeof probe?.isUnlocked !== "function") {
-        throw fatal("This wallet cannot verify its unlock state. Update the MetaMask extension and retry.");
+        throw fatal(getWalletCopy().cannotVerifyUnlock);
       }
       const result = await deadline((async () => {
         const unlocked = await probe.isUnlocked();
         if (unlocked !== true) return { status: unlocked === false ? "locked" : "verification-failed" };
         const accounts = await provider.request({ method: "eth_accounts" });
         if (!Array.isArray(accounts) || accounts.some((account) => !ACCOUNT.test(account))) {
-          throw fatal("MetaMask returned an invalid account response.");
+          throw fatal(getWalletCopy().invalidAccounts);
         }
         if (!accounts.length) return { status: "unauthorized" };
         if (await probe.isUnlocked() !== true) return { status: "locked" };
@@ -120,7 +121,7 @@ export const verifyWalletAccess = () => {
         invalidate("checking");
         return snapshot;
       }
-      const reasons = { locked: "Unlock MetaMask to continue.", unauthorized: "Connect an account to this website in MetaMask.", "verification-failed": "MetaMask unlock state could not be verified." };
+      const reasons = getWalletCopy().reasons;
       const stamp = result.status === "connected" ? Date.now() : 0;
       publish(result.status, { provider, account: result.account || "", verifiedAt: stamp, reason: reasons[result.status] || "" });
       setFresh(stamp);
@@ -129,7 +130,7 @@ export const verifyWalletAccess = () => {
         setFresh(0); // writes re-verify, so a failed check can never authorize one
         // A transient failure must not drop a connected session; only a real result does.
         if (snapshot.status !== "connected" || error?.fatal) {
-          invalidate("verification-failed", "MetaMask verification failed or timed out. Unlock or update the extension and retry.");
+          invalidate("verification-failed", getWalletCopy().verificationFailed);
         }
       }
     }
@@ -174,7 +175,7 @@ export const startWalletAccess = () => {
 export const requireWalletAccess = async () => {
   const result = await verifyWalletAccess();
   if (result.status !== "connected" || document.hidden || !verifiedMark || Date.now() - verifiedMark >= TIMEOUT) {
-    throw new Error(result.reason || "Verify your MetaMask connection before continuing.");
+    throw new Error(result.reason || getWalletCopy().requireWallet);
   }
   return result;
 };
