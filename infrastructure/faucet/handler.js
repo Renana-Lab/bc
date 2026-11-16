@@ -23,6 +23,7 @@ const crypto = require("crypto");
 const { verifyPassword, safeEqual } = require("./adminAuth");
 const { Wallet, Transaction, getAddress, isAddress } = require("ethers");
 const sweep = require("./sweep");
+const inbox = require("./inbox");
 
 const PID_PATTERN = /^(?=.*[A-Za-z])[A-Za-z0-9]{8,24}$/; // same rule as src/real_ethereum/wallets/participantId.mjs
 const PROLIFIC_PID_PATTERN = /^[a-fA-F0-9]{24}$/; // Prolific participant id
@@ -99,6 +100,9 @@ const loadConfig = (env = process.env) => {
     sweepIdleMinutes: Number(env.SWEEP_IDLE_MINUTES || 30),
     sweepRateLimit: Number(env.SWEEP_RATE_LIMIT_PER_WINDOW || 600),
     sweepGlobalRateLimit: Number(env.SWEEP_GLOBAL_RATE_LIMIT_PER_WINDOW || 6000),
+    // Participant inbox polling (every 30 s per open tab; a whole lab may share one address).
+    inboxRateLimit: Number(env.INBOX_RATE_LIMIT_PER_WINDOW || 3000),
+    inboxGlobalRateLimit: Number(env.INBOX_GLOBAL_RATE_LIMIT_PER_WINDOW || 30000),
   };
 };
 
@@ -508,6 +512,149 @@ const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, getAdminSecret
     }
   };
 
+  // ---- admin messages to participants: see inbox.js ----
+  const MAX_MESSAGE_REQUEST_BYTES = 8000; // 1000 characters can take 6 bytes each once JSON-escaped
+  const inboxLimited = (request) => overLimit(request, "ib:", "ib-global", config.inboxRateLimit ?? 3000, config.inboxGlobalRateLimit ?? 30000);
+  const queryOf = (request) => {
+    if (request.queryStringParameters && typeof request.queryStringParameters === "object") return request.queryStringParameters;
+    try { return Object.fromEntries(new URLSearchParams(request.rawQueryString || "")); } catch { return {}; }
+  };
+  const inboxExpiry = () => Math.floor(now() / 1000) + inbox.TTL_SECONDS;
+  // Optimistic read-modify-write: `change(current)` returns the next value, or null for "nothing to write".
+  const modifyInbox = async (read, write, change) => {
+    for (let attempt = 0; attempt < inbox.MAX_WRITE_ATTEMPTS; attempt += 1) {
+      const current = await read();
+      const next = change(current);
+      if (next === null) return null;
+      if (await write(next, current?.v || 0)) return next;
+    }
+    throw Object.assign(new Error("inbox busy"), { code: "INBOX_BUSY" });
+  };
+  const readPidHash = (value) => (typeof value === "string" && sweep.PID_HASH_PATTERN.test(value) ? value : null);
+
+  // The participant proves it owns the wallet the pid was paid to (same EIP-191 scheme as the heartbeat, action "inbox" / "ack").
+  // Returns { pidHash, pid } or { denied: response }.
+  const inboxParticipant = async (action, { pidHash, address, ts, sig }) => {
+    if (!readPidHash(pidHash) || typeof address !== "string" || !isAddress(address)) return { denied: json(400, { error: "bad_request" }) };
+    if (!sweep.verifySweepSignature({ action, address, pidHash, ts, sig, nowMs: now() })) return { denied: json(403, { error: "bad_signature" }) };
+    const pid = await store.get(pidHash);
+    if (!pid || pid.address !== getAddress(address).toLowerCase() || !(pid.status === "paid" || pid.status === "pending")) return { denied: json(403, { error: "not_eligible" }) };
+    return { pidHash, pid };
+  };
+
+  // GET /inbox?pidHash&address&ts&sig: what this participant has not read yet. No secret in the URL: the signature is good for 5 minutes.
+  const inboxList = async (request) => {
+    try {
+      if (await inboxLimited(request)) return rateLimited();
+      const query = queryOf(request);
+      const who = await inboxParticipant("inbox", { ...query, ts: Number(query.ts) });
+      if (who.denied) return who.denied;
+      const [record, broadcast] = await Promise.all([store.getInbox(who.pidHash), store.getBroadcast()]);
+      const since = who.pid.paidAt ? who.pid.paidAt * 1000 : 0;
+      return json(200, { messages: inbox.unreadFor({ inbox: record, broadcast, since, nowMs: now() }), serverTime: now() });
+    } catch {
+      event("error", { code: "inbox" });
+      return json(500, { error: "internal" });
+    }
+  };
+
+  // POST /inbox/ack { pidHash, address, ts, sig, ids }: marks messages as read (idempotent). Broadcast ids are remembered per participant.
+  const inboxAck = async (request) => {
+    try {
+      const raw = readBody(request);
+      if (Buffer.byteLength(raw) > MAX_BODY_BYTES) return json(413, { error: "too_large" });
+      if (await inboxLimited(request)) return rateLimited();
+      const body = parseBody(raw);
+      const { ids } = body;
+      if (!Array.isArray(ids) || ids.length < 1 || ids.length > inbox.MAX_ACK_IDS || !ids.every((id) => typeof id === "string" && inbox.ID_PATTERN.test(id))) return json(400, { error: "bad_request" });
+      const who = await inboxParticipant("ack", body);
+      if (who.denied) return who.denied;
+      const wanted = new Set(ids);
+      const broadcastIds = new Set(((await store.getBroadcast())?.messages || []).map((message) => message.id));
+      const readAt = now();
+      let matched = 0;
+      await modifyInbox(() => store.getInbox(who.pidHash), (next, version) => store.putInbox(who.pidHash, next, version, inboxExpiry()), (current) => {
+        const record = current || { messages: [], acked: [] };
+        let changed = false;
+        matched = 0;
+        const messages = record.messages.map((message) => {
+          if (!wanted.has(message.id)) return message;
+          matched += 1;
+          if (message.readAt) return message;
+          changed = true;
+          return { ...message, readAt };
+        });
+        const known = new Set(record.acked);
+        const added = ids.filter((id) => broadcastIds.has(id) && !known.has(id));
+        matched += ids.filter((id) => broadcastIds.has(id)).length;
+        if (!changed && !added.length) return null;
+        // Forget broadcast ids that no longer exist, so the list cannot grow without bound.
+        return { messages, acked: [...record.acked, ...added].filter((id) => broadcastIds.has(id)).slice(-inbox.MAX_ACKED) };
+      });
+      return json(200, { acked: matched });
+    } catch {
+      event("error", { code: "inbox_ack" });
+      return json(500, { error: "internal" });
+    }
+  };
+
+  // POST /admin/messages { pidHash | all: true, body } (x-admin-password header or body.password). Never logs the text.
+  const adminSendMessage = async (request) => {
+    try {
+      const raw = readBody(request);
+      if (Buffer.byteLength(raw) > MAX_MESSAGE_REQUEST_BYTES) return json(413, { error: "too_large" });
+      const body = parseBody(raw);
+      const denied = await adminGuard(request, headerValue(request, "x-admin-password") ?? body.password);
+      if (denied) return denied;
+      const text = inbox.cleanBody(body.body);
+      const toAll = body.all === true;
+      if (!text || text.length > inbox.MAX_BODY_CHARS || toAll === (body.pidHash !== undefined)) return json(400, { error: "bad_request" });
+      const message = { id: crypto.randomUUID(), body: text, createdAt: now() };
+      if (toAll) {
+        await modifyInbox(() => store.getBroadcast(), (next, version) => store.putBroadcast(next, version, inboxExpiry()),
+          (current) => ({ messages: [...(current?.messages || []), message].slice(-inbox.MAX_BROADCASTS) }));
+      } else {
+        const pidHash = readPidHash(body.pidHash);
+        if (!pidHash) return json(400, { error: "bad_request" });
+        if (!(await store.get(pidHash))) return json(404, { error: "unknown_participant" }); // no inbox for an id that never existed
+        await modifyInbox(() => store.getInbox(pidHash), (next, version) => store.putInbox(pidHash, next, version, inboxExpiry()),
+          (current) => ({ messages: [...(current?.messages || []), message].slice(-inbox.MAX_DIRECT_MESSAGES), acked: current?.acked || [] }));
+      }
+      event("admin_message_sent", { to: toAll ? "all" : body.pidHash.slice(0, 8), length: text.length });
+      return json(200, { id: message.id, createdAt: new Date(message.createdAt).toISOString() });
+    } catch (error) {
+      event("error", { code: "admin_message", message: scrub(error?.code) });
+      return json(500, { error: "internal" });
+    }
+  };
+
+  // GET /admin/messages[?pidHash=...] (x-admin-password): history with read status. Without pidHash: broadcasts (with the number of
+  // participants that acknowledged each) and every participant's messages. With pidHash: that participant only.
+  const adminListMessages = async (request) => {
+    try {
+      const denied = await adminGuard(request, headerValue(request, "x-admin-password"));
+      if (denied) return denied;
+      const { pidHash: asked } = queryOf(request);
+      const pidHash = asked === undefined ? null : readPidHash(asked);
+      if (asked !== undefined && !pidHash) return json(400, { error: "bad_request" });
+      const [broadcast, records] = await Promise.all([store.getBroadcast(), pidHash ? store.getInbox(pidHash).then((record) => (record ? [record] : [])) : store.listInboxes()]);
+      const iso = (ms) => (ms ? new Date(ms).toISOString() : null);
+      return json(200, {
+        broadcasts: (broadcast?.messages || []).map((message) => ({
+          id: message.id, body: message.body, createdAt: iso(message.createdAt),
+          ...(pidHash ? { read: Boolean(records[0]?.acked.includes(message.id)) } : { readCount: records.filter((record) => record.acked.includes(message.id)).length }),
+        })),
+        participants: records.map((record) => ({
+          pidHash: record.pidHash,
+          messages: record.messages.map((message) => ({ id: message.id, body: message.body, createdAt: iso(message.createdAt), readAt: iso(message.readAt) })),
+        })),
+      });
+    } catch {
+      event("error", { code: "admin_messages" });
+      return json(500, { error: "internal" });
+    }
+  };
+
   const claimFunds = async (request) => {
     const started = now();
     let pidHash = "";
@@ -620,6 +767,9 @@ const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, getAdminSecret
       if (path === "/sweep/heartbeat") return await methodOnly("POST", sweepHeartbeat);
       if (path === "/admin/sweeps") return await methodOnly("GET", adminSweeps);
       if (path === "/admin/sweep-settings") return await methodOnly("POST", adminSweepSettings);
+      if (path === "/inbox") return await methodOnly("GET", inboxList);
+      if (path === "/inbox/ack") return await methodOnly("POST", inboxAck);
+      if (path === "/admin/messages") return method === "GET" ? await adminListMessages(request) : method === "POST" ? await adminSendMessage(request) : json(405, { error: "method_not_allowed" });
       if (path !== "/claim") return json(404, { error: "not_found" });
       if (method !== "POST") return json(405, { error: "method_not_allowed" });
       return await claimFunds(request);
