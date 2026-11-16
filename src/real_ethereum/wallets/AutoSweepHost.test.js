@@ -265,3 +265,19 @@ test("no warning when the build-time address equals the server's; the build-time
     expect(warn).not.toHaveBeenCalled();
   } finally { delete process.env.REACT_APP_FAUCET_ADDRESS; warn.mockRestore(); }
 });
+
+test("no sweep address anywhere: one console warning, auto-return stays off", async () => {
+  fetchSweepConfig.mockResolvedValue({ sweepAddress: null, chainId: 23295, pidMode: "prolific" });
+  const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const view = mount();
+    await flush();
+    view.unmount();
+    mount();
+    await flush();
+    act(() => { jest.advanceTimersByTime(10_000); });
+    await flush();
+    expect(warn.mock.calls.filter(([message]) => /No sweep address/.test(message))).toHaveLength(1);
+    expect(arms()).toHaveLength(0);
+  } finally { warn.mockRestore(); }
+});

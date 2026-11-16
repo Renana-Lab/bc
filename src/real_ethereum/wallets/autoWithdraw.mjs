@@ -20,7 +20,16 @@ export const createAutoWithdraw = ({ readState, withdrawRefund, withdrawSeller, 
 
   const process = async (address, account) => {
     blocked.delete(address);
-    const state = await readState(address, account);
+    let state;
+    try {
+      state = await readState(address, account);
+    } catch (error) {
+      // Unknown is not "nothing due": hold the sweep back (drain() says false) and look at this auction again.
+      blocked.add(address);
+      handled.delete(address);
+      onError(error);
+      return;
+    }
     if (!state?.closed) { handled.delete(address); return; } // a stale list entry: look again at the next refresh
     // A cancelled auction refunds everyone, including the leader; otherwise the winner has nothing to withdraw.
     const refundDue = state.participated && state.bid > 0n && (state.cancelled || !state.isHighestBidder);

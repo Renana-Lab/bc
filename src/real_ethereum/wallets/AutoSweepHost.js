@@ -12,6 +12,7 @@ import { beaconSweep, fetchSweepConfig, pidHashFor, postSweep } from "./sweepCli
 //  * Auto-return: keeps a pre-signed transfer of the leftover balance with the faucet server (see autoSweep.mjs).
 // Only runs for the invisible local wallet of a participant: never in MetaMask mode, never with the admin override
 // or the admin key slot, and never for an admin address.
+let warnedNoSweepAddress = false;
 const CONFIG_RETRY_MS = 30_000;
 const CONFIG_ATTEMPTS = 4;
 
@@ -81,6 +82,10 @@ const AutoSweepHost = ({ wallet, provider, address, faucetUrl, strictPid, openPi
       const sweepAddress = config.sweepAddress || configured[0];
       if (config.sweepAddress && configured.some((value) => String(value).toLowerCase() !== String(config.sweepAddress).toLowerCase())) {
         console.warn("[sweep] The configured address differs from the faucet server's sweep address; using the server's.");
+      }
+      if (!sweepAddress && !warnedNoSweepAddress) {
+        warnedNoSweepAddress = true;
+        console.warn("[sweep] No sweep address: the faucet server reports none and REACT_APP_SWEEP_ADDRESS / REACT_APP_FAUCET_ADDRESS are unset; auto-return is off.");
       }
       // Signature timestamps use the server's clock (a participant's clock may be minutes off).
       const clockOffset = Number.isFinite(config.serverTime) ? config.serverTime - Date.now() : 0;
