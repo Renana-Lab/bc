@@ -20,16 +20,34 @@ yours to run. Testnet is a public network; use a dedicated deployer wallet that 
 
 ## 2. Deploy the factory (the only on-chain step here)
 
-PowerShell, in the repo root:
+This factory has an **admin role** (owner + admins) and deploys each auction as an EIP-1167 clone. There is no migration:
+a NEW factory is deployed and `REACT_APP_FACTORY_ADDRESS` is pointed at it (auctions on the old factory are abandoned).
+The owner is a constructor argument, never hardcoded in the contract. For this deployment the owner is
+`0xa38C101659f5a1DC28745c47746e0ae84b574D26` (it also needs to be in `REACT_APP_ADMIN_ADDRESSES` to see the Admin Zone).
+
+Steps, in order:
 
 ```powershell
+npm run sapphire:compile                                   # regenerates src/real_ethereum/build/*.json (commit them)
+# with sapphire-localnet running (docker run -d -p8544-8548:8544-8548 ghcr.io/oasisprotocol/sapphire-localnet):
+$env:REQUIRE_LOCALNET = "1"; npm run sapphire:test         # confidentiality + admin tests must all pass
+
 $env:DEPLOY_PRIVATE_KEY = "0x<deployer key>"      # this shell session only; do NOT put it in .env
 $env:FACTORY_SIWE_DOMAIN = "spike-embedded-wallets-sapphire.<appId>.amplifyapp.com"   # the TEST Amplify app host
+$env:FACTORY_OWNER_ADDRESS = "0xa38C101659f5a1DC28745c47746e0ae84b574D26"             # factory owner and first admin
 node scripts/sapphire/deployTestnet.js --dry-run                  # checks only: nothing is sent
 node scripts/sapphire/deployTestnet.js --confirm-public-testnet   # sends the deployment transaction
 ```
 
-The wrapper refuses to run if the key is in `.env`, the domain is `localhost`/has a scheme, or the flag is missing. It calls
+After the deploy:
+
+1. Copy the printed `CampaignFactory deployed at: 0x...` address into Amplify `REACT_APP_FACTORY_ADDRESS` (test app) and redeploy the site.
+2. Verify read-only: `factory.domain()` equals the host, `factory.owner()` and `factory.isAdmin(owner)` match `FACTORY_OWNER_ADDRESS`.
+3. Browsers that used the old factory keep a stored factory-address override only while the env address is unchanged; a new
+   `REACT_APP_FACTORY_ADDRESS` always wins and the stale override is deleted automatically.
+4. Further admins are added by the owner in the Admin Zone ("Admins" card) or with `factory.addAdmin(address)`.
+
+The wrapper refuses to run if the key is in `.env`, `FACTORY_OWNER_ADDRESS` is missing/invalid/zero, the domain is `localhost`/has a scheme, or the flag is missing. It calls
 `src/real_ethereum/deploy.js` with `DEPLOY_NETWORK=sapphire-testnet` (chain 23295, `https://testnet.sapphire.oasis.io`); the
 constructor payload is sent through the Sapphire wrapper. It prints `CampaignFactory deployed at: 0x...` and writes
 `REACT_APP_REAL_FACTORY_ADDRESS` to the git-ignored `.env`. Then close the shell (or `Remove-Item Env:DEPLOY_PRIVATE_KEY`).

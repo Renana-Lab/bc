@@ -21,7 +21,10 @@ import { getActiveFactoryAddress, subscribeToMarketChanges } from "../../real_et
 import { getTargetNetwork } from "../../real_ethereum/sapphireNetworks";
 import { getConfiguredRpcUrls } from "../../real_ethereum/rpcConfig";
 import { canUseLiveEvents, factorySocket } from "../../real_ethereum/socketFactory";
-import { subscribeToBudgetChanges } from "../../real_ethereum/budget";
+import { notifyBudgetChanged, subscribeToBudgetChanges } from "../../real_ethereum/budget";
+import { readCancelledSet, readFactoryOwner, readHiddenSet } from "../../real_ethereum/adminChain";
+import { chainNowMs } from "../../real_ethereum/chainClock";
+import { createAdminActions } from "./adminActions";
 import { subscribeActiveAuctionRegistry } from "../../real_ethereum/activeAuctionRegistry";
 import { getLivePresence, isPresenceConfigured } from "../../telemetry/presenceClient";
 import { LOCAL_BOTS_KEY } from "../../telemetry/botPresence";
@@ -36,7 +39,9 @@ import {
 import {
   AUDIT_EVENT_TYPES,
   filterAuditEvents,
+  getAdminActionAvailability,
   inspectEventJson,
+  mapAuctionAdminRow,
   joinUrl,
   mapBotConfig,
   mapUserRows,
@@ -45,7 +50,16 @@ import {
 
 const READ_OPTIONS = { preferInjected: false, allowInjectedFallback: false };
 const PROBE_TIMEOUT_MS = 6000;
-const LIVE_FACTORY_EVENTS = ["BudgetChanged", "AuctionCreatedDetailed", "AuctionFinalizationFailed"];
+const LIVE_FACTORY_EVENTS = [
+  "BudgetChanged",
+  "AuctionCreatedDetailed",
+  "AuctionFinalizationFailed",
+  "GlobalBudgetReset",
+  "MinimumChanged",
+  "AuctionCancelled",
+  "AuctionHiddenChanged",
+];
+const AUCTION_ADMIN_LIMIT = 30;
 
 const cardSx = {
   width: "100%",
@@ -148,7 +162,54 @@ const monoSx = { fontFamily: "monospace", fontSize: 12, wordBreak: "break-all" }
 
 // ---- Users and budgets -------------------------------------------------------------------------
 
-export const UsersBudgetsCard = () => {
+// Runs one admin transaction at a time and reports the outcome; `onDone` refreshes the card.
+export const useAdminActionRunner = (onDone) => {
+  const [busy, setBusy] = useState("");
+  const [message, setMessage] = useState(null);
+  const run = useCallback(
+    async (label, action) => {
+      setBusy(label);
+      setMessage(null);
+      let outcome;
+      try {
+        await action();
+        outcome = { ok: true, text: `${label}: done` };
+      } catch (error) {
+        outcome = { ok: false, text: `${label} failed: ${error?.message || error}` };
+      }
+      // One batched update: the message appears exactly when the buttons are usable again.
+      setMessage(outcome);
+      setBusy("");
+      if (outcome.ok) {
+        try {
+          await onDone?.();
+        } catch (_) {
+          // the refresh reports its own errors
+        }
+      }
+    },
+    [onDone]
+  );
+  return { busy, message, run };
+};
+
+const ActionMessage = ({ message }) =>
+  message ? (
+    <Typography variant="body2" color={message.ok ? "success.main" : "error"} sx={{ mt: 1 }} role="status">
+      {message.text}
+    </Typography>
+  ) : null;
+
+const WriteNotice = ({ canWrite }) =>
+  canWrite ? null : (
+    <Typography variant="body2" sx={{ color: "#8a5a00", mb: 1 }} data-testid="admin-write-disabled">
+      Read-only: this wallet is not an on-chain admin of the active factory, so write actions are disabled.
+    </Typography>
+  );
+
+export const UsersBudgetsCard = ({ canWrite = false, actions: actionsOverride }) => {
+  const actions = useMemo(() => actionsOverride || createAdminActions(), [actionsOverride]);
+  const [budgetDraft, setBudgetDraft] = useState({ address: "", value: "" });
   const [open, toggle] = useCardState(false);
   const [state, setState] = useState({ rows: [], loading: false, error: "", warnings: [], audit: null, historyError: "" });
   const requestRef = useRef(0);
@@ -163,12 +224,23 @@ export const UsersBudgetsCard = () => {
         readOnlyCall(({ factory }) => factory.methods.allUsers(index), 1, options)
       );
       let budgetErrors = 0;
+      const held = {};
+      const disabled = new Set();
+      // getBudget applies a pending lazy global reset; usersBudget would show a stale raw value.
       const budgetPairs = await mapWithConcurrency(users.addresses, 4, async (address) => {
+        const key = address.toLowerCase();
         try {
-          return [address.toLowerCase(), String(await readOnlyCall(({ factory }) => factory.methods.usersBudget(address), 1, options))];
+          const [budget, heldAmount, isDisabled] = await Promise.all([
+            readOnlyCall(({ factory }) => factory.methods.getBudget(address), 1, options),
+            readOnlyCall(({ factory }) => factory.methods.heldBy(address), 1, options),
+            readOnlyCall(({ factory }) => factory.methods.disabled(address), 1, options),
+          ]);
+          held[key] = String(heldAmount);
+          if (isDisabled) disabled.add(key);
+          return [key, String(budget)];
         } catch (_) {
           budgetErrors += 1;
-          return [address.toLowerCase(), "unavailable"];
+          return [key, "unavailable"];
         }
       });
       // One audit read is shared with the Audit events card.
@@ -186,6 +258,8 @@ export const UsersBudgetsCard = () => {
         events: (audit?.events || []).filter((event) => event.name === "BudgetChanged"),
         labels,
         bots,
+        held,
+        disabled,
       });
       const warnings = [users.warning, budgetErrors ? `${budgetErrors} budget reads failed.` : ""].filter(Boolean);
       if (requestId === requestRef.current) {
@@ -202,6 +276,7 @@ export const UsersBudgetsCard = () => {
     if (open) load();
   }, [open, load]);
   useAdminLiveRefresh(() => open && load(true));
+  const { busy, message, run } = useAdminActionRunner(() => load(true));
 
   const history = state.historyError ? "unavailable" : state.audit?.failedRanges?.length ? "partial" : "ok";
   const historyNote = describeRangeHealth(state.audit || {});
@@ -209,12 +284,16 @@ export const UsersBudgetsCard = () => {
   return (
     <AdminCard
       title="Users and budgets"
-      description="Registered wallets from the factory, their current budget and last budget change. Read-only."
+      description="Registered wallets from the factory, their available budget, funds held by leading bids and last budget change. Admins can set a user's total budget or disable them."
       open={open}
       onToggle={toggle}
       onRefresh={() => load(true)}
       loading={state.loading}
     >
+      <WriteNotice canWrite={canWrite} />
+      <Typography variant="caption" color="text.secondary" display="block">
+        Disabling blocks creating and bidding for that wallet only; a new wallet bypasses it.
+      </Typography>
       <ErrorLine error={state.error} />
       {state.warnings.map((warning) => (
         <Typography key={warning} variant="body2" sx={{ color: "#8a5a00", mb: 0.5 }}>
@@ -234,8 +313,11 @@ export const UsersBudgetsCard = () => {
           <thead>
             <tr style={{ textAlign: "left" }}>
               <th>User</th>
-              <th>Budget</th>
+              <th>Available</th>
+              <th>Held</th>
+              <th>Total</th>
               <th>Last change</th>
+              {canWrite ? <th>Actions</th> : null}
             </tr>
           </thead>
           <tbody>
@@ -246,9 +328,12 @@ export const UsersBudgetsCard = () => {
                     {shortAddress(row.address)}
                   </span>{" "}
                   {row.label ? <strong>{row.label}</strong> : null}{" "}
-                  {row.isBot ? <Chip size="small" label="bot" color="secondary" /> : null}
+                  {row.isBot ? <Chip size="small" label="bot" color="secondary" /> : null}{" "}
+                  {row.disabled ? <Chip size="small" label="disabled" color="error" /> : null}
                 </td>
                 <td style={monoSx}>{row.budget}</td>
+                <td style={monoSx}>{row.held}</td>
+                <td style={monoSx}>{row.total}</td>
                 <td style={{ fontSize: 12 }}>
                   {row.lastChange
                     ? `${row.lastChange.direction} ${row.lastChange.amount} at block ${row.lastChange.blockNumber}`
@@ -256,11 +341,63 @@ export const UsersBudgetsCard = () => {
                       ? "budget history unavailable"
                       : `none in last ${state.audit?.lookback ?? getAuditLookbackBlocks()} blocks`}
                 </td>
+                {canWrite ? (
+                  <td style={{ whiteSpace: "nowrap" }}>
+                    <Button
+                      size="small"
+                      disabled={Boolean(busy)}
+                      onClick={() => setBudgetDraft({ address: row.address, value: row.total })}
+                    >
+                      Set budget
+                    </Button>
+                    <Button
+                      size="small"
+                      color={row.disabled ? "primary" : "error"}
+                      disabled={Boolean(busy)}
+                      onClick={() =>
+                        run(row.disabled ? "Enable user" : "Disable user", () => actions.setDisabled(row.address, !row.disabled))
+                      }
+                    >
+                      {row.disabled ? "Enable" : "Disable"}
+                    </Button>
+                  </td>
+                ) : null}
               </tr>
             ))}
           </tbody>
         </table>
       </Box>
+      {canWrite && budgetDraft.address ? (
+        <Box sx={{ display: "flex", gap: 1, alignItems: "center", mt: 1.5, flexWrap: "wrap" }}>
+          <Typography variant="body2">
+            Total budget for <span style={monoSx}>{shortAddress(budgetDraft.address)}</span> (available = total - held):
+          </Typography>
+          <TextField
+            size="small"
+            label="Total budget"
+            value={budgetDraft.value}
+            onChange={(event) => setBudgetDraft((current) => ({ ...current, value: event.target.value }))}
+          />
+          <Button
+            size="small"
+            variant="contained"
+            disabled={Boolean(busy)}
+            onClick={() =>
+              run("Set budget", async () => {
+                await actions.setUserBudget(budgetDraft.address, budgetDraft.value);
+                notifyBudgetChanged({ factoryAddress: getActiveFactoryAddress() });
+                setBudgetDraft({ address: "", value: "" });
+              })
+            }
+          >
+            Save
+          </Button>
+          <Button size="small" onClick={() => setBudgetDraft({ address: "", value: "" })}>
+            Cancel
+          </Button>
+        </Box>
+      ) : null}
+      <ActionMessage message={message} />
     </AdminCard>
   );
 };
@@ -492,13 +629,302 @@ export const FaucetCard = () => {
   );
 };
 
-export const AdminOpsCards = () => (
-  <>
-    <UsersBudgetsCard />
-    <AuditEventsCard />
-    <ArchitectureCard />
-    <FaucetCard />
-  </>
-);
+// ---- Auction controls ---------------------------------------------------------------------------
+
+const STATUS_COLOR = { live: "success", ended: "warning", finalized: "default", cancelled: "error" };
+
+export const AuctionControlsCard = ({ canWrite = false, actions: actionsOverride, reader }) => {
+  const actions = useMemo(() => actionsOverride || createAdminActions(), [actionsOverride]);
+  const [open, toggle] = useCardState(false);
+  const [state, setState] = useState({ rows: [], loading: false, error: "" });
+  const [pending, setPending] = useState(null); // { type: "minimum" | "cancel", address, value }
+  const requestRef = useRef(0);
+
+  const load = useCallback(async () => {
+    const requestId = ++requestRef.current;
+    setState((current) => ({ ...current, loading: true, error: "" }));
+    try {
+      const options = { ...READ_OPTIONS, factoryAddress: getActiveFactoryAddress() };
+      const rows = reader
+        ? await reader()
+        : await (async () => {
+            const all = await readOnlyCall(({ factory }) => factory.methods.getDeployedCampaigns(), 1, options);
+            const recent = [...all].slice(-AUCTION_ADMIN_LIMIT).reverse();
+            const summaries = await mapWithConcurrency(recent, 4, async (address) => {
+              try {
+                return await readOnlyCall(({ campaign }) => campaign(address).methods.getListSummary(), 1, options);
+              } catch (_) {
+                return null;
+              }
+            });
+            const hidden = await readHiddenSet(recent, { options }).catch(() => new Set());
+            const closed = recent.filter((_, index) => summaries[index]?.[8]);
+            const cancelled = await readCancelledSet(closed, { options });
+            return recent
+              .map((address, index) =>
+                summaries[index]
+                  ? mapAuctionAdminRow({
+                      address,
+                      summary: summaries[index],
+                      cancelled: cancelled.has(address.toLowerCase()),
+                      hidden: hidden.has(address.toLowerCase()),
+                    })
+                  : null
+              )
+              .filter(Boolean);
+          })();
+      if (requestId === requestRef.current) setState({ rows, loading: false, error: "" });
+    } catch (error) {
+      if (requestId === requestRef.current) {
+        setState((current) => ({ ...current, loading: false, error: error?.message || "Could not read auctions." }));
+      }
+    }
+  }, [reader]);
+
+  useEffect(() => {
+    if (open) load();
+  }, [open, load]);
+  useAdminLiveRefresh(() => open && load());
+  const { busy, message, run } = useAdminActionRunner(load);
+
+  const nowSec = Math.floor(chainNowMs() / 1000);
+
+  return (
+    <AdminCard
+      title="Auction controls"
+      description="Edit the minimum bid, close early, cancel (refunds the leader, seller not paid) or hide an auction. Hidden auctions are only hidden in the UI."
+      open={open}
+      onToggle={toggle}
+      onRefresh={load}
+      loading={state.loading}
+    >
+      <WriteNotice canWrite={canWrite} />
+      <ErrorLine error={state.error} />
+      <Typography variant="caption" color="text.secondary">
+        Newest {AUCTION_ADMIN_LIMIT} auctions. Auction payloads are never shown here.
+      </Typography>
+      <Box sx={{ overflowX: "auto", mt: 1 }}>
+        <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 13 }}>
+          <thead>
+            <tr style={{ textAlign: "left" }}>
+              <th>Auction</th>
+              <th>Status</th>
+              <th>Min</th>
+              <th>Highest</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {state.rows.map((row) => {
+              const can = getAdminActionAvailability(row, nowSec);
+              const disabled = !canWrite || Boolean(busy);
+              return (
+                <tr key={row.address} style={{ borderTop: "1px solid #e3e7f5" }} data-testid={`auction-row-${row.address}`}>
+                  <td>
+                    <span style={monoSx} title={row.address}>
+                      {shortAddress(row.address)}
+                    </span>{" "}
+                    {row.description}
+                  </td>
+                  <td>
+                    <Chip size="small" label={can.status} color={STATUS_COLOR[can.status]} />{" "}
+                    {row.hidden ? <Chip size="small" label="hidden" variant="outlined" /> : null}
+                  </td>
+                  <td style={monoSx}>{row.minimum}</td>
+                  <td style={monoSx}>{row.highestBid}</td>
+                  <td style={{ whiteSpace: "nowrap" }}>
+                    <Button
+                      size="small"
+                      disabled={disabled || !can.editMinimum}
+                      onClick={() => setPending({ type: "minimum", address: row.address, value: row.minimum })}
+                    >
+                      Edit minimum
+                    </Button>
+                    <Button
+                      size="small"
+                      disabled={disabled || !can.closeNow}
+                      onClick={() => run("Close now", () => actions.closeNow(row.address))}
+                    >
+                      Close now
+                    </Button>
+                    <Button
+                      size="small"
+                      color="error"
+                      disabled={disabled || !can.cancel}
+                      onClick={() => setPending({ type: "cancel", address: row.address, value: "" })}
+                    >
+                      {can.cancelHidesOnly ? "Cancel (hide only)" : "Cancel"}
+                    </Button>
+                    <Button
+                      size="small"
+                      disabled={disabled}
+                      onClick={() =>
+                        run(row.hidden ? "Unhide" : "Hide", () => actions.setHidden(row.address, !row.hidden))
+                      }
+                    >
+                      {row.hidden ? "Unhide" : "Hide"}
+                    </Button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </Box>
+      {canWrite && pending ? (
+        <Box sx={{ display: "flex", gap: 1, alignItems: "center", mt: 1.5, flexWrap: "wrap" }}>
+          <Typography variant="body2">
+            {pending.type === "minimum" ? "New minimum bid" : "Cancellation note (optional, max 500 bytes)"} for{" "}
+            <span style={monoSx}>{shortAddress(pending.address)}</span>:
+          </Typography>
+          <TextField
+            size="small"
+            label={pending.type === "minimum" ? "Minimum" : "Note"}
+            value={pending.value}
+            onChange={(event) => setPending((current) => ({ ...current, value: event.target.value }))}
+          />
+          <Button
+            size="small"
+            variant="contained"
+            color={pending.type === "cancel" ? "error" : "primary"}
+            disabled={Boolean(busy)}
+            onClick={() =>
+              run(pending.type === "minimum" ? "Edit minimum" : "Cancel auction", async () => {
+                if (pending.type === "minimum") await actions.setMinimum(pending.address, pending.value);
+                else await actions.cancelAuction(pending.address, pending.value);
+                setPending(null);
+              })
+            }
+          >
+            {pending.type === "minimum" ? "Save" : "Confirm cancel"}
+          </Button>
+          <Button size="small" onClick={() => setPending(null)}>
+            Back
+          </Button>
+        </Box>
+      ) : null}
+      <ActionMessage message={message} />
+    </AdminCard>
+  );
+};
+
+// ---- Admins (owner only) and settings ----------------------------------------------------------
+
+export const AdminsCard = ({ isOwner = false, actions: actionsOverride, ownerReader = readFactoryOwner }) => {
+  const actions = useMemo(() => actionsOverride || createAdminActions(), [actionsOverride]);
+  const [open, toggle] = useCardState(false);
+  const [owner, setOwner] = useState("");
+  const [address, setAddress] = useState("");
+  const { busy, message, run } = useAdminActionRunner();
+
+  useEffect(() => {
+    if (open && isOwner) ownerReader().then(setOwner, () => setOwner(""));
+  }, [open, isOwner, ownerReader]);
+
+  if (!isOwner) return null;
+  return (
+    <AdminCard
+      title="Admins"
+      description="Only the factory owner can add or remove admins. The owner can never be removed; ownership transfers are 2-step."
+      open={open}
+      onToggle={toggle}
+    >
+      <Typography variant="body2" sx={monoSx}>
+        Owner: {owner || "..."}
+      </Typography>
+      <Box sx={{ display: "flex", gap: 1, alignItems: "center", mt: 1.5, flexWrap: "wrap" }}>
+        <TextField
+          size="small"
+          label="Wallet address"
+          value={address}
+          onChange={(event) => setAddress(event.target.value)}
+          sx={{ minWidth: 360 }}
+        />
+        <Button
+          size="small"
+          variant="contained"
+          disabled={Boolean(busy)}
+          onClick={() => run("Add admin", () => actions.addAdmin(address))}
+        >
+          Add admin
+        </Button>
+        <Button
+          size="small"
+          color="error"
+          disabled={Boolean(busy)}
+          onClick={() => run("Remove admin", () => actions.removeAdmin(address))}
+        >
+          Remove admin
+        </Button>
+      </Box>
+      <ActionMessage message={message} />
+    </AdminCard>
+  );
+};
+
+export const MarketSettingsCard = ({ canWrite = false, actions: actionsOverride, reader }) => {
+  const actions = useMemo(() => actionsOverride || createAdminActions(), [actionsOverride]);
+  const [open, toggle] = useCardState(false);
+  const [allowSellerEdit, setAllowSellerEdit] = useState(null);
+  const [error, setError] = useState("");
+
+  const load = useCallback(async () => {
+    try {
+      const value = reader
+        ? await reader()
+        : await readOnlyCall(({ factory }) => factory.methods.allowSellerEdit(), 1, {
+            ...READ_OPTIONS,
+            factoryAddress: getActiveFactoryAddress(),
+          });
+      setAllowSellerEdit(Boolean(value));
+      setError("");
+    } catch (readError) {
+      setError(readError?.message || "Could not read settings.");
+    }
+  }, [reader]);
+  useEffect(() => {
+    if (open) load();
+  }, [open, load]);
+  const { busy, message, run } = useAdminActionRunner(load);
+
+  return (
+    <AdminCard
+      title="Marketplace settings"
+      description="Whether sellers may edit the minimum bid of their own auction while it has no bids."
+      open={open}
+      onToggle={toggle}
+      onRefresh={load}
+    >
+      <WriteNotice canWrite={canWrite} />
+      <ErrorLine error={error} />
+      <FormControlLabel
+        control={
+          <Checkbox
+            checked={Boolean(allowSellerEdit)}
+            disabled={!canWrite || allowSellerEdit === null || Boolean(busy)}
+            onChange={(event) => run("Seller edits", () => actions.setAllowSellerEdit(event.target.checked))}
+          />
+        }
+        label="Allow sellers to edit the minimum (before the first bid)"
+      />
+      <ActionMessage message={message} />
+    </AdminCard>
+  );
+};
+
+export const AdminOpsCards = ({ access } = {}) => {
+  const canWrite = Boolean(access?.canWrite);
+  return (
+    <>
+      <UsersBudgetsCard canWrite={canWrite} />
+      <AuctionControlsCard canWrite={canWrite} />
+      <MarketSettingsCard canWrite={canWrite} />
+      <AdminsCard isOwner={Boolean(access?.isOwner)} />
+      <AuditEventsCard />
+      <ArchitectureCard />
+      <FaucetCard />
+    </>
+  );
+};
 
 export default AdminOpsCards;

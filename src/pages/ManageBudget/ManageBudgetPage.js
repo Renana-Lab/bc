@@ -490,16 +490,13 @@ const ManageBudgetPage = () => {
 
   const handleBudgetChange = (e) => {
     const value = Number(e.target.value);
-    if (value >= 0) {
-      setBudget(value);
-      setError("");
-    } else {
-      setError("Budget must be a non-negative number");
-    }
+    setBudget(value);
+    // 0 is not "unlimited": the contract rejects it, so reject it here too.
+    setError(Number.isInteger(value) && value >= 1 ? "" : "Budget must be a whole number of at least 1");
   };
 
   const handleSaveBudget = async () => {
-    if (budget >= 0) {
+    if (Number.isInteger(budget) && budget >= 1) {
       try {
         const userAddress = await requestConnectedAccount();
         await factory.methods.resetAllBudgets(budget).send({ from: userAddress });
@@ -1657,7 +1654,7 @@ const ManageBudgetPage = () => {
               {ADMIN_GATE_NOTE}
             </Typography>
 
-            <AdminOpsCards />
+            <AdminOpsCards access={adminAccess} />
 
             <Box
               sx={{
@@ -2041,8 +2038,10 @@ const ManageBudgetPage = () => {
                 color="text.secondary"
                 sx={{ mt: 0.5, maxWidth: 680 }}
               >
-                Set the default spending budget applied to bidder accounts.
-                Reset restores the standard 2000 wei budget.
+                Set the default spending budget applied to bidder accounts
+                (minimum 1). Funds held by a user's leading bids are kept, so
+                their available budget is the new default minus what they hold.
+                Reset restores the standard 2000 wei budget. Admin wallets only.
               </Typography>
               <TextField
                 label="Budget (wei)"
@@ -2062,6 +2061,7 @@ const ManageBudgetPage = () => {
                   variant="contained"
                   color="success"
                   onClick={handleSaveBudget}
+                  disabled={!adminAccess.canWrite}
                   fullWidth
                   sx={{ borderRadius: 999 }}
                 >
@@ -2071,6 +2071,7 @@ const ManageBudgetPage = () => {
                   variant="outlined"
                   color="secondary"
                   onClick={handleResetBudget}
+                  disabled={!adminAccess.canWrite}
                   fullWidth
                   sx={{ borderRadius: 999 }}
                 >

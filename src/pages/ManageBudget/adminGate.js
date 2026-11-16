@@ -1,14 +1,15 @@
 // Admin Zone UI gate.
 //
-// This is a FRONT-END gate only. The allowlist is public (REACT_APP_ADMIN_ADDRESSES is bundled
-// into the page) and the contracts do not have an admin role yet, so nothing here protects
-// contract writes: anyone can still call the contract functions directly from their own wallet.
+// The signed gate only decides who sees the Admin Zone UI. The allowlist is public
+// (REACT_APP_ADMIN_ADDRESSES is bundled into the page) and is NOT a security boundary. Contract
+// writes are enforced by the factory admin role (CampaignFactory.isAdmin / onlyAdmin); the UI
+// additionally requires isAdmin(account) on-chain before it offers any write action.
 import { verifyMessage } from "ethers";
 import { buildSiweMessage, utf8ToHex } from "../../real_ethereum/siwe.mjs";
 import { getTargetNetwork } from "../../real_ethereum/sapphireNetworks";
 
 export const ADMIN_GATE_NOTE =
-  "UI gate only: contract writes are not enforced until the contract has an admin role.";
+  "This page is only a UI allowlist. Contract writes are enforced by the factory admin role, so the wallet must also be an on-chain admin.";
 export const ADMIN_GATE_STATEMENT =
   "Unlock the Admin Zone UI. This signature does not authorize any transaction.";
 export const ADMIN_PROOF_MINUTES = 60;

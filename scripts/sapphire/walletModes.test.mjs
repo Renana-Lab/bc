@@ -115,7 +115,7 @@ test("wallet modes keep calldata confidential on sapphire-localnet", { skip, tim
 
   const deployed = await new ContractFactory(
     compiledFactory.abi, `0x${compiledFactory.evm.bytecode.object}`, wrapEthersSigner(seller)
-  ).deploy(DOMAIN);
+  ).deploy(DOMAIN, seller.address);
   await deployed.waitForDeployment();
   const factoryAddress = await deployed.getAddress();
   const wrappedPlain = wrapEthersProvider(plain);

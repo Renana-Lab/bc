@@ -58,7 +58,7 @@ test("5 parallel participants: pid, wallet, faucet, bid, winner reads", { skip, 
 
   // --- auction on localnet (seller = dev account 0) ---
   const seller = dev(0);
-  const factory = await new ContractFactory(compiledFactory.abi, `0x${compiledFactory.evm.bytecode.object}`, wrapEthersSigner(seller)).deploy(DOMAIN);
+  const factory = await new ContractFactory(compiledFactory.abi, `0x${compiledFactory.evm.bytecode.object}`, wrapEthersSigner(seller)).deploy(DOMAIN, seller.address);
   await factory.waitForDeployment();
   const factoryAddress = await factory.getAddress();
   const wrappedPlain = wrapEthersProvider(plain);

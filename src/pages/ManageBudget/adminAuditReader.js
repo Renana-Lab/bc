@@ -5,7 +5,12 @@ import Campaign from "../../real_ethereum/build/Campaign.json";
 import { readOnlyExecute } from "../../real_ethereum/readOnly";
 import { getActiveAuctionSnapshot } from "../../real_ethereum/activeAuctionRegistry";
 import { readLogsChunked } from "../../real_ethereum/chunkedLogs";
-import { mergeAuditEvents, normalizeAuditEvent } from "./adminCardData";
+import {
+  CAMPAIGN_AUDIT_EVENTS,
+  FACTORY_AUDIT_EVENTS,
+  mergeAuditEvents,
+  normalizeAuditEvent,
+} from "./adminCardData";
 
 export const DEFAULT_AUDIT_LOOKBACK_BLOCKS = 1000;
 export const MAX_AUDIT_LOOKBACK_BLOCKS = 100000;
@@ -49,8 +54,9 @@ export const decodeLogs = (web3, items, logs) => {
     .filter(Boolean);
 };
 
-const FACTORY_EVENTS = ["BudgetChanged", "AuctionCreatedDetailed", "AuctionFinalizationFailed"];
-const CAMPAIGN_EVENTS = ["SellerPaid", "RefundProcessed"];
+// Events never carry auction payloads (the contract only emits descriptions, amounts and addresses).
+const FACTORY_EVENTS = FACTORY_AUDIT_EVENTS;
+const CAMPAIGN_EVENTS = CAMPAIGN_AUDIT_EVENTS;
 
 const recentCampaignAddresses = (createdEvents, factoryAddress) => {
   const addresses = createdEvents.map((event) => event.auction).filter(Boolean);
