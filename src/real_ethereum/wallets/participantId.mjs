@@ -37,12 +37,19 @@ const firstParam = (params, names) => {
 // Reads one value from the URL (when valid, remembering it for the tab session) or falls back to the stored one.
 // `lastKey` + `persistentStorage`: the last valid value also survives in the long-lived storage and is read only when
 // neither the URL nor the tab session has one.
-const readValue = ({ fromUrl, isValid, key, storage, lastKey, persistentStorage }) => {
+// `strictUrl` (participant ids): when the URL DOES carry the parameter but its value is invalid, the answer is "" and the
+// remembered values are dropped. An invalid link must never silently reuse another participant's id.
+const readValue = ({ fromUrl, isValid, key, storage, lastKey, persistentStorage, strictUrl = false }) => {
   let value = fromUrl;
   if (isValid(value)) {
     try { storage?.setItem(key, value); } catch { /* storage unavailable: use the URL value only */ }
     if (lastKey) { try { persistentStorage?.setItem(lastKey, value); } catch { /* ignore */ } }
     return value;
+  }
+  if (strictUrl && fromUrl) {
+    try { storage?.removeItem?.(key); } catch { /* ignore */ }
+    if (lastKey) { try { persistentStorage?.removeItem?.(lastKey); } catch { /* ignore */ } }
+    return "";
   }
   value = "";
   try { value = storage?.getItem(key) || ""; } catch { value = ""; }
@@ -59,8 +66,8 @@ export const getParticipantContext = ({ search = "", storage, persistentStorage 
   const params = new URLSearchParams(search);
   return {
     // Candidate for open-mode faucets. Never sent unless the faucet says it is in open mode.
-    openPid: readValue({ fromUrl: firstParam(params, ["pid", "PROLIFIC_PID"]).trim(), isValid: isValidOpenParticipantId, key: OPEN_STORAGE_KEY, storage, lastKey: LAST_OPEN_PID_KEY, persistentStorage }),
-    pid: readValue({ fromUrl: firstParam(params, ["pid", "PROLIFIC_PID"]), isValid: isValidParticipantId, key: STORAGE_KEY, storage, lastKey: LAST_PID_KEY, persistentStorage }),
+    openPid: readValue({ fromUrl: firstParam(params, ["pid", "PROLIFIC_PID"]).trim(), isValid: isValidOpenParticipantId, key: OPEN_STORAGE_KEY, storage, lastKey: LAST_OPEN_PID_KEY, persistentStorage, strictUrl: true }),
+    pid: readValue({ fromUrl: firstParam(params, ["pid", "PROLIFIC_PID"]), isValid: isValidParticipantId, key: STORAGE_KEY, storage, lastKey: LAST_PID_KEY, persistentStorage, strictUrl: true }),
     studyId: readValue({ fromUrl: firstParam(params, ["study", "STUDY_ID"]), isValid: (v) => STUDY_PATTERN.test(v), key: STUDY_KEY, storage }),
     experimentCode: readValue({ fromUrl: firstParam(params, ["exp"]), isValid: (v) => EXPERIMENT_PATTERN.test(v), key: EXPERIMENT_KEY, storage }),
   };

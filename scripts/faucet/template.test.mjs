@@ -49,6 +49,15 @@ test("IAM is least privilege: rate table update only, one secret, monitor has no
   assert.equal(template.Resources.MonitorFunction.Properties.Environment.Variables.FAUCET_SECRET_ID, undefined);
 });
 
+test("globalRateLimit is wired into GLOBAL_RATE_LIMIT_PER_WINDOW (default 600) next to the per-caller limit", () => {
+  const make = (extra = {}) => buildTemplate({ origins: "x", rpcUrl: "u", chainId: 23295, amountWei: "1", lowBalance: 1, faucetCodeDir: "a", monitorCodeDir: "b", ...extra }).Resources.FaucetFunction.Properties.Environment.Variables;
+  assert.equal(make().GLOBAL_RATE_LIMIT_PER_WINDOW, "600");
+  assert.equal(make().RATE_LIMIT_PER_WINDOW, "20");
+  const raised = make({ rateLimit: "300", globalRateLimit: "3000" });
+  assert.equal(raised.RATE_LIMIT_PER_WINDOW, "300");
+  assert.equal(raised.GLOBAL_RATE_LIMIT_PER_WINDOW, "3000");
+});
+
 test("network, alarm and exposure settings", () => {
   const env = template.Resources.FaucetFunction.Properties.Environment.Variables;
   assert.equal(env.CHAIN_ID, "23295");

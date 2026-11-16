@@ -252,3 +252,24 @@ test("dynamo store: a claim that takes a slot while the cap is being lowered mak
   assert.equal(await store.setMaxPayouts(2, NOW), false, "the counter is re-checked after the write");
   assert.equal(await store.getMaxPayouts(), null);
 });
+
+test("dynamo store: the rollback is conditional - a concurrent write by someone else is not clobbered", async () => {
+  const client = fakeDynamo();
+  const store = createDynamoStore({ table: "codes", rateTable: "rates", client });
+  assert.equal(await store.setMaxPayouts(8, NOW), true);
+  client.tableOf("codes").set("counter#payouts", { pk: { S: "counter#payouts" }, count: { N: "6" } });
+  const realSend = client.send.bind(client);
+  client.send = async (command) => {
+    const result = await realSend(command);
+    if (command.input.Key?.pk?.S === "config#maxPayouts" && command.input.ReturnValues === "ALL_OLD") {
+      // another admin saves 20 between our write (4) and our rollback
+      client.tableOf("codes").set("config#maxPayouts", { pk: { S: "config#maxPayouts" }, value: { N: "20" }, updatedAt: { N: String(NOW + 9) } });
+    }
+    return result;
+  };
+  assert.equal(await store.setMaxPayouts(4, NOW + 1), false, "6 slots are in use, 4 is refused");
+  assert.equal(await store.getMaxPayouts(), 20, "the other admin's value survives");
+  const rollback = client.commands.filter((c) => c.name === "UpdateItemCommand" && c.input.Key.pk.S === "config#maxPayouts").at(-1);
+  assert.equal(rollback.input.ConditionExpression, "#v = :value", "rollback only applies while the value is still ours");
+  assert.equal(rollback.input.ExpressionAttributeValues[":value"].N, "4");
+});

@@ -4,6 +4,7 @@ import WalletModePanel, { UNREADABLE_MESSAGE, UNSUPPORTED_MESSAGE } from "./Wall
 import { __resetAutoClaimForTests } from "./autoClaim.mjs";
 import { WALLET_OVERRIDE_KEY, WALLET_SCOPE_OVERRIDE_KEY } from "./walletMode.mjs";
 import { getModeProvider, setModeProvider } from "./modeProvider";
+import { scopeIdFor } from "./silentVault.mjs";
 
 const mockAdmin = { value: false };
 jest.mock("./useIsAdminWallet", () => ({ useIsAdminWallet: () => ({ account: "0xadmin", isAdmin: mockAdmin.value }) }));
@@ -186,7 +187,7 @@ describe("stored wallet that cannot be decrypted", () => {
     expect(page.textContent).toBe(UNREADABLE_MESSAGE);
     expect(page.textContent).not.toBe(UNSUPPORTED_MESSAGE);
     expect(screen.queryByTestId("unsupported-browser")).toBeNull();
-    expect(page.textContent).not.toMatch(/wallet|key|TEST|gas/i);
+    expect(page.textContent).not.toMatch(/wallet|key|TEST|gas|experimenter|contact|staff/i);
     expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("cannot be decrypted"), expect.stringContaining("could not be decrypted"));
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
     expect(claimCalls).toHaveLength(0);
@@ -205,6 +206,25 @@ describe("participant identity across tabs", () => {
     await waitFor(() => expect(mockWallets).toHaveLength(2));
     expect(mockWallets[1].options.scope).toBe(scope);
     expect(window.localStorage.getItem("data-market:last-participant-code")).toBe(PID);
+  });
+
+  test("open mode: the scope comes from the open id, not a stale strict id remembered earlier", async () => {
+    window.localStorage.setItem("data-market:last-participant-code", PID); // stale strict id from an earlier visit
+    window.history.pushState({}, "", "/?pid=Participant_42%21");
+    render(<WalletModePanel />);
+    await waitFor(() => expect(mockWallets).toHaveLength(1));
+    expect(mockWallets[0].options.scope).toBe(scopeIdFor("Participant_42!"));
+    expect(mockWallets[0].options.scope).not.toBe(scopeIdFor(PID));
+  });
+
+  test("an invalid ?pid does not reuse the previous participant's wallet", async () => {
+    const first = render(<WalletModePanel />);
+    await waitFor(() => expect(mockWallets).toHaveLength(1));
+    first.unmount();
+    window.history.pushState({}, "", "/?pid=bad%20id");
+    render(<WalletModePanel />);
+    await waitFor(() => expect(mockWallets).toHaveLength(2));
+    expect(mockWallets[1].options.scope).toBe("default");
   });
 
   test("with no pid anywhere the default wallet is used", async () => {

@@ -1,13 +1,12 @@
 import { Box, Button, Typography } from "@mui/material";
 import { clearWalletOverrides, hasWalletOverride } from "../../real_ethereum/wallets/walletMode.mjs";
-import { useIsAdminWallet } from "../../real_ethereum/wallets/useIsAdminWallet";
 import ParticipantsGasCard from "./ParticipantsGasCard";
 import FaucetFundsCard from "./FaucetFundsCard";
 
-// Visible while an admin session override is active (MetaMask sign-in or an imported admin key).
+// Visible whenever an admin session override is active (MetaMask sign-in or an imported admin key), also for an
+// account admitted only by the on-chain role (not on REACT_APP_ADMIN_ADDRESSES), so nobody gets stuck in the override.
 export const AdminSessionControls = ({ reload = () => window.location.reload() }) => {
-  const { isAdmin } = useIsAdminWallet();
-  if (!hasWalletOverride() || !isAdmin) return null;
+  if (!hasWalletOverride()) return null;
   return (
     <Box sx={{ width: "100%", mb: 2, display: "flex", gap: 2, alignItems: "center" }} data-testid="admin-session-controls">
       <Typography variant="body2">Admin session: you are using your admin wallet instead of the participant wallet.</Typography>

@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import DrawerComponent from "./Drawer";
 
@@ -43,4 +43,25 @@ test("MetaMask-mode builds never show them", () => {
   open();
   expect(screen.queryByText("Admin sign-in")).toBeNull();
   expect(screen.queryByText("Admin wallet")).toBeNull();
+});
+
+test("while any wallet override is active the drawer offers 'Switch back to participant wallet' (even in the resulting MetaMask mode)", () => {
+  window.sessionStorage.setItem("walletModeOverride", "metamask"); // account need not be on the env allowlist
+  const reload = jest.fn();
+  const original = window.location;
+  Object.defineProperty(window, "location", { configurable: true, value: { ...original, reload } });
+  try {
+    open();
+    fireEvent.click(screen.getByText("Switch back to participant wallet"));
+    expect(window.sessionStorage.getItem("walletModeOverride")).toBeNull();
+    expect(reload).toHaveBeenCalledTimes(1);
+  } finally { Object.defineProperty(window, "location", { configurable: true, value: original }); }
+});
+
+test("an imported-key (scope) override shows it too, and without an override it is absent", () => {
+  open();
+  expect(screen.queryByText("Switch back to participant wallet")).toBeNull();
+  window.sessionStorage.setItem("walletScopeOverride", "admin");
+  open();
+  expect(screen.getAllByText("Switch back to participant wallet").length).toBeGreaterThan(0);
 });

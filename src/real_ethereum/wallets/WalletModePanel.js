@@ -231,7 +231,7 @@ const readParticipant = () => {
 };
 
 export const UNSUPPORTED_MESSAGE = "This browser is not supported for the study. Please open the link in Chrome, Edge or Firefox.";
-export const UNREADABLE_MESSAGE = "Your session could not be restored in this browser. Please contact the experimenter.";
+export const UNREADABLE_MESSAGE = "Your session could not be restored in this browser. Please reload the page and try again.";
 const unsupportedStyle = {
   position: "fixed", inset: 0, zIndex: 5000, display: "flex", alignItems: "center", justifyContent: "center", padding: 24,
   textAlign: "center", background: "#fff", color: "#1c2340", font: "1.1rem system-ui, sans-serif",
@@ -276,7 +276,8 @@ const InvisibleWalletHost = () => {
   const faucetUrl = process.env.REACT_APP_FAUCET_URL;
   // An admin who imported a key on /admin-login uses that separate slot, never auto-claims, and leaves the participant wallet alone.
   const adminSlot = getWalletScopeOverride() === "admin";
-  const scope = adminSlot ? "admin" : scopeIdFor(strictPid || openPid);
+  // openPid is the most recently seen valid id (every strict id is a valid open id too), so it never goes stale.
+  const scope = adminSlot ? "admin" : scopeIdFor(openPid || strictPid);
   const { wallet, provider } = useMemo(() => {
     const created = createLocalWallet({
       storage: createIndexedDbStorage(),

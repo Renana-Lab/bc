@@ -4,7 +4,7 @@ import { makeStyles } from "@mui/styles";
 import styles1 from "./../styles/components.module.scss";
 import { useLocation, useNavigate } from "react-router-dom";
 import { getWalletCopy } from "../real_ethereum/wallets/walletCopy";
-import { hasWalletOverride } from "../real_ethereum/wallets/walletMode.mjs";
+import { clearWalletOverrides, hasWalletOverride } from "../real_ethereum/wallets/walletMode.mjs";
 import { useAdminAccess } from "../pages/ManageBudget/useAdminAccess";
 
 const useStyles = makeStyles({
@@ -226,6 +226,15 @@ const DrawerComponent = (props) => {
             onClick={() => nav("/admin-login")}
           >
             <ListItemText>Admin sign-in</ListItemText>
+          </ListItemButton>
+        )}
+        {hasWalletOverride() && (
+          <ListItemButton
+            className={`${itemClassName("")} ${classes.adminItem}`}
+            dense
+            onClick={() => { clearWalletOverrides(); window.location.reload(); }}
+          >
+            <ListItemText>Switch back to participant wallet</ListItemText>
           </ListItemButton>
         )}
         {showAdminLinks && getWalletCopy().embedded && (

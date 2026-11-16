@@ -194,6 +194,7 @@ describe("private key format and /admin/wallet restore", () => {
     Object.defineProperty(globalThis, "crypto", { value: webcrypto, configurable: true });
   });
   const admin = new Wallet(`0x${"11".repeat(32)}`);
+  const ALLOW = [admin.address.toLowerCase()];
 
   test("a private key without the 0x prefix (as exported by MetaMask) is accepted, with or without surrounding spaces", async () => {
     expect(normalizePrivateKey(`  ${"11".repeat(32)} `)).toBe(`0x${"11".repeat(32)}`);
@@ -214,7 +215,7 @@ describe("private key format and /admin/wallet restore", () => {
   test("restore goes into the 'admin' slot, sets walletScopeOverride=admin and never touches the participant slot", async () => {
     const storage = memoryStorage();
     storage.map.set("wallet:pid-participant", { v: 2, marker: "keep" });
-    const result = await restoreAdminBackup({ json: await backupJson(), passphrase: "a long passphrase!", silentStorage: storage });
+    const result = await restoreAdminBackup({ json: await backupJson(), passphrase: "a long passphrase!", allowlist: ALLOW, silentStorage: storage });
     expect(result).toEqual({ ok: true, account: admin.address });
     expect([...storage.map.keys()].sort()).toEqual(["wallet:admin", "wallet:pid-participant"]);
     expect(storage.map.get("wallet:pid-participant")).toEqual({ v: 2, marker: "keep" });
@@ -222,25 +223,34 @@ describe("private key format and /admin/wallet restore", () => {
   });
   test("an existing admin wallet is replaced only after confirmation; declining keeps it and the override unset", async () => {
     const storage = memoryStorage();
-    await restoreAdminBackup({ json: await backupJson(), passphrase: "a long passphrase!", silentStorage: storage });
+    await restoreAdminBackup({ json: await backupJson(), passphrase: "a long passphrase!", allowlist: ALLOW, silentStorage: storage });
     const before = storage.map.get("wallet:admin");
     window.sessionStorage.clear();
     const confirmReplace = jest.fn(async () => false);
-    const declined = await restoreAdminBackup({ json: await backupJson(), passphrase: "a long passphrase!", silentStorage: storage, confirmReplace });
+    const declined = await restoreAdminBackup({ json: await backupJson(), passphrase: "a long passphrase!", allowlist: ALLOW, silentStorage: storage, confirmReplace });
     expect(confirmReplace).toHaveBeenCalledTimes(1);
     expect(declined).toMatchObject({ ok: false, cancelled: true });
     expect(storage.map.get("wallet:admin")).toBe(before);
     expect(window.sessionStorage.getItem(WALLET_SCOPE_OVERRIDE_KEY)).toBeNull();
-    const accepted = await restoreAdminBackup({ json: await backupJson(), passphrase: "a long passphrase!", silentStorage: storage, confirmReplace: async () => true });
+    const accepted = await restoreAdminBackup({ json: await backupJson(), passphrase: "a long passphrase!", allowlist: ALLOW, silentStorage: storage, confirmReplace: async () => true });
     expect(accepted.ok).toBe(true);
     expect(storage.map.get("wallet:admin")).not.toBe(before);
+  });
+  test("a backup of a non-admin address is rejected like a non-admin key: nothing stored, no override", async () => {
+    const storage = memoryStorage();
+    const stranger = new Wallet(`0x${"22".repeat(32)}`);
+    const json = await encryptKeystoreJson({ address: stranger.address, privateKey: stranger.privateKey }, "a long passphrase!", { scrypt: { N: 2 ** 4 } });
+    const result = await restoreAdminBackup({ json, passphrase: "a long passphrase!", allowlist: ALLOW, silentStorage: storage });
+    expect(result).toEqual({ ok: false, message: "This account is not an admin." });
+    expect(storage.map.size).toBe(0);
+    expect(window.sessionStorage.getItem(WALLET_SCOPE_OVERRIDE_KEY)).toBeNull();
   });
   test("no confirmation is asked on a first restore; a wrong passphrase stores nothing", async () => {
     const storage = memoryStorage();
     const confirmReplace = jest.fn(async () => true);
-    await expect(restoreAdminBackup({ json: await backupJson(), passphrase: "wrong passphrase!!", silentStorage: storage, confirmReplace })).rejects.toThrow(/could not be decrypted/);
+    await expect(restoreAdminBackup({ json: await backupJson(), passphrase: "wrong passphrase!!", allowlist: ALLOW, silentStorage: storage, confirmReplace })).rejects.toThrow(/could not be decrypted/);
     expect(storage.map.size).toBe(0);
-    await restoreAdminBackup({ json: await backupJson(), passphrase: "a long passphrase!", silentStorage: storage, confirmReplace });
+    await restoreAdminBackup({ json: await backupJson(), passphrase: "a long passphrase!", allowlist: ALLOW, silentStorage: storage, confirmReplace });
     expect(confirmReplace).not.toHaveBeenCalled();
   });
   test("the restore control asks window confirmation before replacing and reports the result", async () => {
@@ -284,8 +294,16 @@ describe("switch back", () => {
     expect(reload).toHaveBeenCalledTimes(1);
   });
 
-  test("a non-admin never sees it", () => {
+  test("it shows whenever an override is active, also for an account that is not on the env allowlist (admitted on-chain only)", () => {
+    const reload = jest.fn();
     setWalletModeOverride();
+    mockAccess.account = OTHER;
+    render(<AdminSessionControls reload={reload} />);
+    fireEvent.click(screen.getByRole("button", { name: "Switch back to participant wallet" }));
+    expect(hasWalletOverride()).toBe(false);
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+  test("without an override nobody sees it", () => {
     mockAccess.account = OTHER;
     expect(render(<AdminSessionControls reload={jest.fn()} />).container.textContent).toBe("");
   });
