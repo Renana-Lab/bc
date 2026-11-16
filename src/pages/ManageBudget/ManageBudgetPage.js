@@ -329,10 +329,10 @@ const ManageBudgetPage = () => {
   const [bulkText, setBulkText] = useState("");
   const [bulkDefaults, setBulkDefaults] = useState({
     rowCount: "10",
-    minimumContribution: "100",
+    minimumContribution: "50",
     auctionDuration: "10",
-    descriptionPrefix: "Auction",
-    dataPrefix: "Data",
+    descriptionPrefix: "Research dataset",
+    dataPrefix: "Personal research records",
   });
   const [showBulkImport, setShowBulkImport] = useState(false);
   const [contractManagerOpen, setContractManagerOpen] = useState(false);
@@ -442,7 +442,7 @@ const ManageBudgetPage = () => {
         notifyBudgetChanged({ factoryAddress: activeMarket.address });
 
         toast.success(
-          `Budget set to ${budget} wei for all users`
+          `Budget set to ${budget} for all users`
         );
 
         navigate("/auctions-list");
@@ -456,6 +456,13 @@ const ManageBudgetPage = () => {
   };
 
   const handleResetBudget = async () => {
+    if (
+      !window.confirm(
+        `Reset every account budget? All users get ${DEFAULT_GLOBAL_BUDGET} again; funds held by leading bids are kept.`
+      )
+    ) {
+      return;
+    }
     try {
       const userAddress = await requestConnectedAccount();
       setBudget(DEFAULT_GLOBAL_BUDGET);
@@ -463,7 +470,7 @@ const ManageBudgetPage = () => {
         .resetAllBudgets(DEFAULT_GLOBAL_BUDGET)
         .send({ from: userAddress });
       notifyBudgetChanged({ factoryAddress: activeMarket.address });
-      toast.success(`Budget reset to ${DEFAULT_GLOBAL_BUDGET} wei for all users`);
+      toast.success(`Budget reset to ${DEFAULT_GLOBAL_BUDGET} for all users`);
       navigate("/auctions-list");
     } catch (resetError) {
       console.error("Error resetting budget:", resetError);
@@ -1612,10 +1619,10 @@ const ManageBudgetPage = () => {
 
             <AdminCard title="Set Global Budget">
               <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1.5 }}>
-                Set the default spending budget applied to bidder accounts (minimum 1). Funds held by a user's leading bids are kept, so their available budget is the new default minus what they hold. Reset restores the standard 2000 wei budget. Admin wallets only.
+                Set the default spending budget applied to bidder accounts (minimum 1). Funds held by a user's leading bids are kept, so their available budget is the new default minus what they hold. Reset restores the standard 2000 budget. Admin wallets only.
               </Typography>
               <TextField
-                label="Budget (wei)"
+                label="Budget"
                 type="number"
                 value={budget}
                 onChange={handleBudgetChange}
@@ -1765,6 +1772,9 @@ const ManageBudgetPage = () => {
                 <Box>
                   <Typography variant="caption" color="text.secondary">
                     Start with
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary" display="block">
+                    Limited by block gas: at most {BULK_MAX_AUCTIONS} auctions per batch.
                   </Typography>
                   <Box display="flex" gap={1} flexWrap="wrap" sx={{ mt: 0.75 }}>
                     {[3, 5, 10, 20].map((count) => (

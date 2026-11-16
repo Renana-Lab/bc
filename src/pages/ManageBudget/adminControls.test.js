@@ -29,7 +29,9 @@ jest.mock("../../telemetry/presenceClient", () => ({ getLivePresence: jest.fn(),
 // eslint-disable-next-line import/first
 import { MemoryRouter } from "react-router-dom";
 // eslint-disable-next-line import/first
-import { AdminOpsCards, AdminsCard, AuctionControlsCard, MarketSettingsCard } from "./AdminOpsCards";
+import { AdminOpsCards, AdminsCard, AuctionControlsCard, MarketSettingsCard, UsersBudgetsCard } from "./AdminOpsCards";
+// eslint-disable-next-line import/first
+import { readOnlyCall } from "../../real_ethereum/readOnly";
 
 const A1 = "0x1111111111111111111111111111111111111111";
 const A2 = "0x2222222222222222222222222222222222222222";
@@ -242,5 +244,36 @@ describe("Admins and settings cards", () => {
     await waitFor(() => expect(screen.getByRole("checkbox")).toBeEnabled());
     fireEvent.click(screen.getByRole("checkbox"));
     await waitFor(() => expect(actions.setAllowSellerEdit).toHaveBeenCalledWith(false));
+  });
+});
+
+describe("Users and budgets confirmations", () => {
+  const U1 = "0x5555555555555555555555555555555555555555";
+  const mockUsers = () =>
+    readOnlyCall.mockImplementation(async (fn) => {
+      const spec = fn({ factory: { methods: new Proxy({}, { get: (_, method) => (...args) => ({ method, args }) }) } });
+      if (spec.method === "allUsers") {
+        if (spec.args[0] === 0) return U1;
+        throw new Error("execution reverted");
+      }
+      if (spec.method === "getBudget") return "100";
+      if (spec.method === "heldBy") return "0";
+      if (spec.method === "disabled") return false;
+      return null;
+    });
+
+  test("Disable asks for confirmation first and does nothing when declined", async () => {
+    mockUsers();
+    const actions = makeActions();
+    const confirm = jest.spyOn(window, "confirm").mockReturnValue(false);
+    render(<UsersBudgetsCard canWrite actions={actions} />);
+    await openCard("Users and budgets");
+    fireEvent.click(await screen.findByRole("button", { name: "Disable" }));
+    expect(confirm).toHaveBeenCalledWith(expect.stringMatching(/^Disable .+\?$/));
+    expect(actions.setDisabled).not.toHaveBeenCalled();
+    confirm.mockReturnValue(true);
+    fireEvent.click(screen.getByRole("button", { name: "Disable" }));
+    await waitFor(() => expect(actions.setDisabled).toHaveBeenCalledWith(U1, true));
+    confirm.mockRestore();
   });
 });

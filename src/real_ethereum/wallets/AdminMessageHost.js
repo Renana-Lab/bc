@@ -4,7 +4,7 @@ import { getWalletScopeOverride, isInvisibleWalletMode } from "./walletMode.mjs"
 import { fetchSweepConfig, pidHashFor } from "./sweepClient.mjs";
 import { ackInbox, fetchInbox } from "./inboxClient.mjs";
 
-// Messages from the experiment team. Draws nothing until one arrives, then a blocking popup, one message at a time.
+// Messages from the administrator. Draws nothing until one arrives, then a blocking popup, one message at a time.
 //  * Polls the faucet server every 30 s while the tab is visible, and right away when the participant returns to the tab.
 //  * "Got it" tells the server (signed with the wallet) so the message is not shown again; ids are also remembered
 //    for this page load, so a message never opens twice even if the acknowledgement is still on its way.
@@ -89,7 +89,7 @@ const AdminMessageHost = ({ wallet, address, faucetUrl, strictPid, openPid, isAd
   // Blocking: no backdrop or Escape dismissal, only the button. The text is rendered as plain text (React escapes it).
   return (
     <Dialog open disableEscapeKeyDown onClose={() => {}} aria-labelledby="admin-message-title" data-testid="admin-message-dialog">
-      <DialogTitle id="admin-message-title">Message from the experiment team</DialogTitle>
+      <DialogTitle id="admin-message-title">Message from the administrator</DialogTitle>
       <DialogContent>
         <div style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", fontSize: "1.3rem", lineHeight: 1.5 }} data-testid="admin-message-body">{current.body}</div>
       </DialogContent>

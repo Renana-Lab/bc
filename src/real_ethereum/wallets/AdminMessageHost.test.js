@@ -44,7 +44,7 @@ test("a message opens a blocking popup; Got it acknowledges it and closes it", a
   fetchInbox.mockResolvedValueOnce({ ok: true, messages: [msg("m1-aaaaaaaa", "Please come to the front desk.")], serverTime: null });
   mount();
   await flush();
-  expect(screen.getByText("Message from the experiment team")).toBeTruthy();
+  expect(screen.getByText("Message from the administrator")).toBeTruthy();
   expect(screen.getByTestId("admin-message-body").textContent).toBe("Please come to the front desk.");
   fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
   expect(screen.getByRole("dialog")).toBeTruthy(); // Escape does not dismiss it

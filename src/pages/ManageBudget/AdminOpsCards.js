@@ -333,9 +333,12 @@ export const UsersBudgetsCard = ({ canWrite = false, actions: actionsOverride })
                       size="small"
                       color={row.disabled ? "primary" : "error"}
                       disabled={Boolean(busy)}
-                      onClick={() =>
-                        run(row.disabled ? "Enable user" : "Disable user", () => actions.setDisabled(row.address, !row.disabled))
-                      }
+                      onClick={() => {
+                        const name = row.label || shortAddress(row.address);
+                        // Same confirmation as the marketplace admin, before the wallet asks to sign.
+                        if (!window.confirm(row.disabled ? `Enable ${name}?` : `Disable ${name}?`)) return;
+                        run(row.disabled ? "Enable user" : "Disable user", () => actions.setDisabled(row.address, !row.disabled));
+                      }}
                     >
                       {row.disabled ? "Enable" : "Disable"}
                     </Button>

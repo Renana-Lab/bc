@@ -940,8 +940,8 @@ const DynamicAuctionIndex = ({
                       {active ? "Active" : "Finalize"}
                     </Typography>
                     <BotMetric label={active ? "Time remaining" : "Ended"} value={active ? formatAuctionCountdown(auction.endTimeSec, nowMs) : formatDate(Number(auction.endTimeSec || 0) * 1000)} tone={active ? "#d97724" : "#64739f"} />
-                    <BotMetric label="Minimum" value={`${auction.minimumContribution || 0} wei`} tone="#64739f" />
-                    <BotMetric label="Highest bid" value={`${auction.highestBid || 0} wei`} tone="#64739f" />
+                    <BotMetric label="Minimum" value={`${auction.minimumContribution || 0}`} tone="#64739f" />
+                    <BotMetric label="Highest bid" value={`${auction.highestBid || 0}`} tone="#64739f" />
                     <BotMetric label="Bidders" value={auction.approversCount || 0} tone="#64739f" />
                   </Box>
                 );
@@ -999,7 +999,7 @@ const ObservatoryRound = ({ round }) => {
             <Box key={bot.id} sx={{ p: 1, borderRadius: 1.25, backgroundColor: "#f8faff", border: "1px solid #e7ebf7" }}>
               <Box sx={{ display: "flex", justifyContent: "space-between", gap: 1, flexWrap: "wrap" }}>
                 <Typography variant="caption" sx={{ fontWeight: 800 }}>{bot.name}</Typography>
-                <Typography variant="caption" color="text.secondary">{bot.outcome || "completed"} / budget {bot.budgetWei ?? "unreadable"} wei</Typography>
+                <Typography variant="caption" color="text.secondary">{bot.outcome || "completed"} / budget {bot.budgetWei ?? "unreadable"}</Typography>
               </Box>
               <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.35, overflowWrap: "anywhere" }}>
                 Primary {(bot.primary || []).map(shortAddress).join(", ") || "none"} / reserve {(bot.reserve || []).map(shortAddress).join(", ") || "none"}
@@ -1653,12 +1653,12 @@ const BotnetControlPanel = ({
               stage: "decision",
               auction: candidate.address,
               outcome: decision.bid ? "eligible" : "skipped",
-              reason: decision.reason || (decision.bid ? `Bid ${decision.amountWei.toString()} wei` : "Not eligible"),
+              reason: decision.reason || (decision.bid ? `Bid ${decision.amountWei.toString()}` : "Not eligible"),
               amountWei: decision.bid ? decision.amountWei.toString() : "0",
             });
             if (!decision.bid) continue;
             attempted += 1;
-            botTrace?.steps.push({ at: Date.now(), stage: "write", auction: candidate.address, outcome: "attempted", reason: `Submitting ${decision.amountWei.toString()} wei` });
+            botTrace?.steps.push({ at: Date.now(), stage: "write", auction: candidate.address, outcome: "attempted", reason: `Submitting ${decision.amountWei.toString()}` });
 
             try {
               const receipt = await withBrowserWriteSlot(() => {
@@ -1680,7 +1680,7 @@ const BotnetControlPanel = ({
                 stage: "receipt",
                 auction: candidate.address,
                 outcome: "sent",
-                reason: `Confirmed ${decision.amountWei.toString()} wei bid`,
+                reason: `Confirmed ${decision.amountWei.toString()} bid`,
                 transactionHash: receipt.transactionHash || "",
               });
               publishActiveAuctions(factoryAddress, [{
@@ -2360,7 +2360,7 @@ const BotnetControlPanel = ({
               }
             />
             <TextField
-              label="Max bid wei"
+              label="Max bid"
               size="small"
               type="number"
               value={botForm.maxBidWei}
