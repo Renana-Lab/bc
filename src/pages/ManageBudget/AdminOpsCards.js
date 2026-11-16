@@ -55,6 +55,7 @@ import {
 import StatusLabel from "./AuctionStatusLabel";
 import { Countdown, useChainNowSec } from "./AdminCountdown";
 import useAuctionAdminDialogs from "./useAuctionAdminDialogs";
+import { buildRunbook } from "./architectureRunbook";
 
 const READ_OPTIONS = { preferInjected: false, allowInjectedFallback: false };
 const PROBE_TIMEOUT_MS = 6000;
@@ -406,6 +407,31 @@ const probeJson = async (url) => {
 export const getFaucetBaseUrl = () => String(process.env.REACT_APP_FAUCET_URL || "").trim();
 export const getBotnetBaseUrl = () => String(process.env.REACT_APP_BOTNET_API_URL || "/api/botnet").trim();
 
+export const RunbookBlock = ({ factoryAddress = getActiveFactoryAddress(), network = getTargetNetwork() }) => {
+  const runbook = buildRunbook({ factoryAddress, network });
+  return (
+    <Box sx={{ mt: 2 }} data-testid="architecture-runbook">
+      <Typography variant="subtitle1" sx={{ fontWeight: 700, color: "#002884" }}>
+        How to access and maintain each component
+      </Typography>
+      {runbook.components.map((component) => (
+        <Box key={component.name} sx={{ mt: 1.5 }}>
+          <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>{component.name}</Typography>
+          {component.lines.map((line) => (
+            <Typography key={line} variant="body2" color="text.secondary" sx={{ wordBreak: "break-word" }}>{line}</Typography>
+          ))}
+          <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap", mt: 0.5 }}>
+            {component.links.map((link) => (
+              <a key={link.href} href={link.href} target="_blank" rel="noopener noreferrer" style={{ fontSize: 13 }}>{link.label}</a>
+            ))}
+          </Box>
+        </Box>
+      ))}
+      <Typography variant="body2" sx={{ mt: 1.5, fontWeight: 600 }} data-testid="runbook-deploy">{runbook.deploy.text}</Typography>
+    </Box>
+  );
+};
+
 export const ArchitectureCard = () => {
   const [open, toggle] = useCardState(false);
   const [state, setState] = useState({ rows: [], loading: false, error: "", checkedAt: "" });
@@ -478,6 +504,7 @@ export const ArchitectureCard = () => {
           <Box sx={{ ...monoSx, minWidth: 0 }}>{row.detail}</Box>
         </Box>
       ))}
+      <RunbookBlock />
     </AdminCard>
   );
 };
