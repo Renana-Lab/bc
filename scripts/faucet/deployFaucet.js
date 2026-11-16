@@ -75,7 +75,7 @@ bundle("monitor.js", "monitor");
 
 const template = buildTemplate({
   origins, alertEmail, secretArn, faucetAddress, rpcUrl, chainId, amountWei, lowBalance, rateLimit, globalRateLimit, reservedConcurrency,
-  pidMode, maxPayouts, requiredStudyId, adminSecretArn,
+  pidMode, maxPayouts, requiredStudyId, adminSecretArn, sweepAddress: process.env.SWEEP_ADDRESS || faucetAddress, sweepIdleMinutes: Number(process.env.SWEEP_IDLE_MINUTES || 30),
   faucetCodeDir: path.join(work, "faucet"), monitorCodeDir: path.join(work, "monitor"),
 });
 

@@ -7,6 +7,7 @@ const buildTemplate = ({
   origins, alertEmail = "", secretArn = "", faucetAddress = "", rpcUrl, chainId, amountWei, lowBalance,
   rateLimit = "20", globalRateLimit = "600", reservedConcurrency = 1,
   pidMode = "allowlist", maxPayouts = "", requiredStudyId = "", adminSecretArn = "", faucetCodeDir, monitorCodeDir,
+  sweepAddress = "", sweepIdleMinutes = 30, sweepRateLimit = "600", sweepGlobalRateLimit = "6000",
 }) => {
 const policy = (statement) => ({ PolicyName: "inline", PolicyDocument: { Version: "2012-10-17", Statement: statement } });
   const assume = { Version: "2012-10-17", Statement: [{ Effect: "Allow", Principal: { Service: "lambda.amazonaws.com" }, Action: "sts:AssumeRole" }] };
@@ -49,7 +50,7 @@ const policy = (statement) => ({ PolicyName: "inline", PolicyDocument: { Version
         AssumeRolePolicyDocument: assume,
         ManagedPolicyArns: basic,
         Policies: [policy([
-          { Effect: "Allow", Action: ["dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:PutItem"], Resource: { "Fn::GetAtt": ["FaucetTable", "Arn"] } },
+          { Effect: "Allow", Action: ["dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:PutItem", "dynamodb:Scan"], Resource: { "Fn::GetAtt": ["FaucetTable", "Arn"] } },
           { Effect: "Allow", Action: "dynamodb:UpdateItem", Resource: { "Fn::GetAtt": ["RateTable", "Arn"] } },
           { Effect: "Allow", Action: "secretsmanager:GetSecretValue", Resource: secretArn || "arn:aws:secretsmanager:*:*:secret:unset" },
           // The admin password hash (scrypt) lives in its own secret.
@@ -73,6 +74,9 @@ const policy = (statement) => ({ PolicyName: "inline", PolicyDocument: { Version
             FAUCET_PID_MODE: pidMode, FAUCET_MAX_PAYOUTS: String(maxPayouts), FAUCET_REQUIRED_STUDY_ID: requiredStudyId,
             FAUCET_EXPERIMENT_CODE: { Ref: "ExperimentCode" }, FAUCET_ADMIN_SECRET_ID: adminSecretArn || "unset",
             ADMIN_RATE_LIMIT_PER_WINDOW: "5", ADMIN_GLOBAL_RATE_LIMIT_PER_WINDOW: "300", ADMIN_SECRET_TTL_SECONDS: "60",
+            SWEEP_ADDRESS: sweepAddress || faucetAddress || "", SWEEP_IDLE_MINUTES: String(sweepIdleMinutes),
+            // A whole lab shares one NAT address: every participant heartbeats every 2 minutes and re-arms on activity.
+            SWEEP_RATE_LIMIT_PER_WINDOW: String(sweepRateLimit), SWEEP_GLOBAL_RATE_LIMIT_PER_WINDOW: String(sweepGlobalRateLimit),
           },
         },
         Code: faucetCodeDir,
@@ -96,6 +100,41 @@ const policy = (statement) => ({ PolicyName: "inline", PolicyDocument: { Version
     FaucetInvokePermission: {
       Type: "AWS::Lambda::Permission",
       Properties: { Action: "lambda:InvokeFunction", FunctionName: { Ref: "FaucetFunction" }, Principal: "*", InvokedViaFunctionUrl: true },
+    },
+    // Auto-return job: broadcasts the transfers participants pre-signed once they have been idle. It has NO secrets access
+    // (it never holds a key) and may only read/update the codes table and scan it for sweep records.
+    SweepJobRole: {
+      Type: "AWS::IAM::Role",
+      Properties: {
+        AssumeRolePolicyDocument: assume, ManagedPolicyArns: basic,
+        Policies: [policy([{ Effect: "Allow", Action: ["dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:Scan"], Resource: { "Fn::GetAtt": ["FaucetTable", "Arn"] } }])],
+      },
+    },
+    SweepJobFunction: {
+      Type: "AWS::Lambda::Function",
+      Properties: {
+        Runtime: "nodejs20.x", Handler: "index.sweepJob", Role: { "Fn::GetAtt": ["SweepJobRole", "Arn"] }, Timeout: 60, MemorySize: 256,
+        ...(reservedConcurrency > 0 ? { ReservedConcurrentExecutions: 1 } : {}),
+        Environment: {
+          Variables: {
+            FAUCET_TABLE: { Ref: "FaucetTable" }, RPC_URL: rpcUrl, CHAIN_ID: String(chainId), FAUCET_AMOUNT_WEI: amountWei,
+            SWEEP_ADDRESS: sweepAddress || faucetAddress || "", SWEEP_IDLE_MINUTES: String(sweepIdleMinutes),
+          },
+        },
+        Code: faucetCodeDir,
+      },
+    },
+    SweepJobLogGroup: {
+      Type: "AWS::Logs::LogGroup", DeletionPolicy: "Retain", UpdateReplacePolicy: "Retain",
+      Properties: { LogGroupName: { "Fn::Sub": "/aws/lambda/${SweepJobFunction}" }, RetentionInDays: 30 },
+    },
+    SweepSchedule: {
+      Type: "AWS::Events::Rule",
+      Properties: { ScheduleExpression: "rate(5 minutes)", State: "ENABLED", Targets: [{ Id: "sweep", Arn: { "Fn::GetAtt": ["SweepJobFunction", "Arn"] } }] },
+    },
+    SweepSchedulePermission: {
+      Type: "AWS::Lambda::Permission",
+      Properties: { Action: "lambda:InvokeFunction", FunctionName: { Ref: "SweepJobFunction" }, Principal: "events.amazonaws.com", SourceArn: { "Fn::GetAtt": ["SweepSchedule", "Arn"] } },
     },
     MonitorRole: {
       Type: "AWS::IAM::Role",

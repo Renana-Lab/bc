@@ -1,6 +1,7 @@
 import { readOnlyBatchCall, readOnlyCall, readOnlyExecute } from "./readOnly";
 import { getActiveFactoryAddress } from "./marketConfig";
 import { chainNowMs } from "./chainClock";
+import { observeAuctions } from "./auctionObserver.mjs";
 
 const STORAGE_PREFIX = "data-market:active-auctions:v2";
 const LEGACY_STORAGE_PREFIX = "data-market:active-auctions:v1";
@@ -595,6 +596,8 @@ export const markAuctionClosed = (
       ? { ...auction, closed: true }
       : auction,
   );
+  // The local wallet's auto-withdraw looks at an auction as soon as it is known to be closed.
+  observeAuctions([{ address: auctionAddress, closed: true, probe: true }]);
   return publishActiveAuctions(factoryAddress, tracked, source);
 };
 

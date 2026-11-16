@@ -22,6 +22,7 @@
 const crypto = require("crypto");
 const { verifyPassword, safeEqual } = require("./adminAuth");
 const { Wallet, Transaction, getAddress, isAddress } = require("ethers");
+const sweep = require("./sweep");
 
 const PID_PATTERN = /^(?=.*[A-Za-z])[A-Za-z0-9]{8,24}$/; // same rule as src/real_ethereum/wallets/participantId.mjs
 const PROLIFIC_PID_PATTERN = /^[a-fA-F0-9]{24}$/; // Prolific participant id
@@ -93,6 +94,11 @@ const loadConfig = (env = process.env) => {
     confirmTimeoutMs: Number(env.CONFIRM_TIMEOUT_MS || 20000),
     absentChecks: 3,
     absentDelayMs: 700,
+    // Auto-return of leftover TEST (see sweep.js). The sweep address defaults to the faucet wallet.
+    sweepAddress: env.SWEEP_ADDRESS && isAddress(env.SWEEP_ADDRESS) ? getAddress(env.SWEEP_ADDRESS) : "",
+    sweepIdleMinutes: Number(env.SWEEP_IDLE_MINUTES || 30),
+    sweepRateLimit: Number(env.SWEEP_RATE_LIMIT_PER_WINDOW || 600),
+    sweepGlobalRateLimit: Number(env.SWEEP_GLOBAL_RATE_LIMIT_PER_WINDOW || 6000),
   };
 };
 
@@ -392,6 +398,115 @@ const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, getAdminSecret
     }
   };
 
+  // ---- auto-return (sweep): see sweep.js ----
+  const sweepAddressOf = async () => (config.sweepAddress ? getAddress(config.sweepAddress) : getAddress((await getWallet()).address));
+  const sweepLimited = (request) => overLimit(request, "sw:", "sw-global", config.sweepRateLimit ?? 600, config.sweepGlobalRateLimit ?? 6000);
+  const sweepIdle = async () => sweep.parseIdleMinutes((await store.getSweepSettings().catch(() => null))?.idleMinutes) ?? sweep.parseIdleMinutes(config.sweepIdleMinutes) ?? sweep.DEFAULT_IDLE_MINUTES;
+
+  // GET /sweep/config: public. The address the browser signs its leftover transfer to, and the pid mode (to hash the id).
+  const sweepConfig = async (request) => {
+    try {
+      if (await sweepLimited(request)) return rateLimited();
+      let sweepAddress = null;
+      try { sweepAddress = await sweepAddressOf(); } catch { sweepAddress = null; }
+      return json(200, { sweepAddress, chainId: config.chainId, pidMode: config.pidMode || "allowlist" });
+    } catch {
+      event("error", { code: "sweep_config" });
+      return json(500, { error: "internal" });
+    }
+  };
+
+  // POST /sweep/arm { pidHash, address, rawTx, signedAt? } stores (replaces) the signed transaction;
+  // { pidHash, address, cancel: true } disarms. Every rejection is a plain 4xx with a short reason, no state change.
+  const sweepArm = async (request) => {
+    try {
+      const raw = readBody(request);
+      if (Buffer.byteLength(raw) > MAX_BODY_BYTES) return json(413, { error: "too_large" });
+      if (await sweepLimited(request)) return rateLimited();
+      const body = parseBody(raw);
+      const { pidHash, address, rawTx, cancel } = body;
+      if (typeof pidHash !== "string" || !sweep.PID_HASH_PATTERN.test(pidHash) || typeof address !== "string" || !isAddress(address)) return json(400, { error: "bad_request" });
+      const owner = getAddress(address).toLowerCase();
+      // Only a pid that was paid out to this very address (or reserved for it) may arm: strangers cannot create records.
+      const pid = await store.get(pidHash);
+      if (!pid || pid.address !== owner || !(pid.status === "paid" || pid.status === "pending")) return json(403, { error: "not_eligible" });
+      const nowSeconds = Math.floor(now() / 1000);
+      const existing = await store.getSweep(owner);
+      if (existing && existing.pidHash !== pidHash) return json(403, { error: "not_eligible" });
+      const signedAtRaw = Number.isFinite(body.signedAt) ? Math.floor(body.signedAt) : nowSeconds * 1000;
+      const signedAt = Math.min(signedAtRaw, now() + 5 * 60_000); // a client clock far ahead cannot pin the record
+      const base = { pidHash, lastSeen: nowSeconds, signedAt, returnedWei: existing?.returnedWei, txHash: existing?.txHash };
+      if (cancel === true) {
+        const signedBy = sweep.verifySweepSignature({ action: "cancel", address: owner, pidHash, ts: body.signedAt, sig: body.sig, nowMs: now() });
+        if (!signedBy) { event("sweep_rejected", { reason: "signature" }); return json(403, { error: "bad_signature" }); }
+        const saved = await store.putSweep(owner, { ...base, status: "none", value: "0" });
+        return json(saved ? 200 : 409, saved ? { status: "none" } : { error: "older" });
+      }
+      if (typeof rawTx !== "string" || !sweep.RAW_TX_PATTERN.test(rawTx)) return json(400, { error: "bad_request" });
+      const checked = sweep.validateSweepTx({ rawTx, address: owner, sweepAddress: await sweepAddressOf(), chainId: config.chainId });
+      if (!checked.ok) { event("sweep_rejected", { reason: checked.reason }); return json(422, { error: "invalid_tx", reason: checked.reason }); }
+      const [balance, nonce] = await Promise.all([chain.getBalance(owner), chain.getNonce(owner)]);
+      if (balance < checked.maxCost) { event("sweep_rejected", { reason: "balance" }); return json(422, { error: "invalid_tx", reason: "balance" }); }
+      if (BigInt(nonce) !== BigInt(checked.tx.nonce)) { event("sweep_rejected", { reason: "nonce" }); return json(409, { error: "nonce_mismatch" }); }
+      const saved = await store.putSweep(owner, { ...base, rawTx, nonce: Number(checked.tx.nonce), value: checked.tx.value.toString(), status: "armed" });
+      if (!saved) return json(409, { error: "older" });
+      event("sweep_armed", { pid: pidHash.slice(0, 8) });
+      return json(200, { status: "armed" });
+    } catch {
+      event("error", { code: "sweep_arm" });
+      return json(500, { error: "internal" });
+    }
+  };
+
+  // POST /sweep/heartbeat { pidHash, address, ts, sig } (sig: wallet signature of the heartbeat message): the participant is still here. Answers the stored status.
+  const sweepHeartbeat = async (request) => {
+    try {
+      const raw = readBody(request);
+      if (Buffer.byteLength(raw) > MAX_BODY_BYTES) return json(413, { error: "too_large" });
+      if (await sweepLimited(request)) return rateLimited();
+      const { pidHash, address, ts, sig } = parseBody(raw);
+      if (typeof pidHash !== "string" || !sweep.PID_HASH_PATTERN.test(pidHash) || typeof address !== "string" || !isAddress(address)) return json(400, { error: "bad_request" });
+      if (!sweep.verifySweepSignature({ action: "heartbeat", address, pidHash, ts, sig, nowMs: now() })) return json(403, { error: "bad_signature" });
+      const status = await store.touchSweep(getAddress(address).toLowerCase(), pidHash, Math.floor(now() / 1000));
+      return json(200, { status: status || "none" });
+    } catch {
+      event("error", { code: "sweep_heartbeat" });
+      return json(500, { error: "internal" });
+    }
+  };
+
+  // GET /admin/sweeps (x-admin-password): every record, for the participants gas card.
+  const adminSweeps = async (request) => {
+    try {
+      const denied = await adminGuard(request, headerValue(request, "x-admin-password"));
+      if (denied) return denied;
+      const entries = await store.listSweeps();
+      return json(200, { idleMinutes: await sweepIdle(), sweeps: entries.map(sweep.publicSweep) });
+    } catch {
+      event("error", { code: "admin_sweeps" });
+      return json(500, { error: "internal" });
+    }
+  };
+
+  // POST /admin/sweep-settings { idleMinutes, password }: 5..1440 whole minutes.
+  const adminSweepSettings = async (request) => {
+    try {
+      const raw = readBody(request);
+      if (Buffer.byteLength(raw) > MAX_BODY_BYTES) return json(413, { error: "too_large" });
+      const body = parseBody(raw);
+      const denied = await adminGuard(request, headerValue(request, "x-admin-password") ?? body.password);
+      if (denied) return denied;
+      const idleMinutes = sweep.parseIdleMinutes(body.idleMinutes);
+      if (idleMinutes === null) return json(400, { error: "bad_request" });
+      await store.setSweepSettings(idleMinutes, Math.floor(now() / 1000));
+      event("admin_sweep_settings_changed", { idleMinutes });
+      return json(200, { idleMinutes });
+    } catch {
+      event("error", { code: "admin" });
+      return json(500, { error: "internal" });
+    }
+  };
+
   const claimFunds = async (request) => {
     const started = now();
     let pidHash = "";
@@ -498,6 +613,12 @@ const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, getAdminSecret
       if (path === "/admin/state") return method === "POST" ? await adminState(request) : json(405, { error: "method_not_allowed" });
       if (path === "/admin/status") return method === "GET" ? await adminStatus(request) : json(405, { error: "method_not_allowed" });
       if (path === "/admin/max-payouts") return method === "POST" ? await adminSetMaxPayouts(request) : json(405, { error: "method_not_allowed" });
+      const methodOnly = (wanted, run) => (method === wanted ? run(request) : json(405, { error: "method_not_allowed" }));
+      if (path === "/sweep/config") return await methodOnly("GET", sweepConfig);
+      if (path === "/sweep/arm") return await methodOnly("POST", sweepArm);
+      if (path === "/sweep/heartbeat") return await methodOnly("POST", sweepHeartbeat);
+      if (path === "/admin/sweeps") return await methodOnly("GET", adminSweeps);
+      if (path === "/admin/sweep-settings") return await methodOnly("POST", adminSweepSettings);
       if (path !== "/claim") return json(404, { error: "not_found" });
       if (method !== "POST") return json(405, { error: "method_not_allowed" });
       return await claimFunds(request);
@@ -555,4 +676,19 @@ const handler = async (request) => {
   return cachedHandler(request);
 };
 
-module.exports = { createFaucetHandler, createEthersChain, handler, loadConfig, scrub, sha256, PID_PATTERN, PROLIFIC_PID_PATTERN, OPEN_PID_PATTERN, normalizeIp };
+// Scheduled job entry point (EventBridge, every 5 minutes): broadcasts due sweep transactions. No secrets needed.
+let cachedJob = null;
+const sweepJob = async () => {
+  if (!cachedJob) {
+    const { JsonRpcProvider } = require("ethers");
+    const config = loadConfig({ ...process.env, FAUCET_AMOUNT_WEI: process.env.FAUCET_AMOUNT_WEI || "1" });
+    const provider = new JsonRpcProvider(process.env.RPC_URL, config.chainId, { staticNetwork: true, batchMaxCount: 1 });
+    const { createDynamoStore } = require("./store");
+    cachedJob = { config, chain: createEthersChain(provider), store: createDynamoStore({ table: process.env.FAUCET_TABLE }) };
+  }
+  const result = await sweep.runSweepJob({ ...cachedJob, log: (entry) => console.log(JSON.stringify(entry)) });
+  console.log(JSON.stringify({ event: "sweep_job", ...result }));
+  return result;
+};
+
+module.exports = { sweepJob, createFaucetHandler, createEthersChain, handler, loadConfig, scrub, sha256, PID_PATTERN, PROLIFIC_PID_PATTERN, OPEN_PID_PATTERN, normalizeIp };

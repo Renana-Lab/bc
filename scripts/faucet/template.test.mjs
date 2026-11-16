@@ -37,7 +37,7 @@ test("IAM is least privilege: rate table update only, one secret, monitor has no
   const rate = faucet.find((s) => JSON.stringify(s.Resource).includes("RateTable"));
   assert.deepEqual(rate.Action, "dynamodb:UpdateItem");
   const codes = faucet.find((s) => JSON.stringify(s.Resource).includes("FaucetTable"));
-  assert.deepEqual([...codes.Action].sort(), ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"]);
+  assert.deepEqual([...codes.Action].sort(), ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Scan", "dynamodb:UpdateItem"]);
   const secret = faucet.find((s) => s.Action === "secretsmanager:GetSecretValue");
   assert.equal(secret.Resource, ARN);
   for (const statement of faucet) assert.notEqual(statement.Resource, "*", "no wildcard resources for the faucet role");
@@ -47,6 +47,28 @@ test("IAM is least privilege: rate table update only, one secret, monitor has no
   assert.deepEqual(monitor[0].Condition, { StringEquals: { "cloudwatch:namespace": "BcFaucet" } });
   assert.equal(JSON.stringify(template.Resources.MonitorFunction).includes("secretsmanager"), false);
   assert.equal(template.Resources.MonitorFunction.Properties.Environment.Variables.FAUCET_SECRET_ID, undefined);
+});
+
+test("auto-return job: EventBridge every 5 minutes, own role without secrets, same bundle, scan-only extras", () => {
+  const { SweepJobFunction, SweepJobRole, SweepSchedule, SweepSchedulePermission } = template.Resources;
+  assert.equal(SweepJobFunction.Properties.Handler, "index.sweepJob");
+  assert.equal(SweepJobFunction.Properties.Code, template.Resources.FaucetFunction.Properties.Code, "same bundle as the faucet handler");
+  assert.equal(SweepSchedule.Properties.ScheduleExpression, "rate(5 minutes)");
+  assert.equal(SweepSchedulePermission.Properties.Principal, "events.amazonaws.com");
+  const job = statements("SweepJobRole");
+  assert.equal(job.length, 1);
+  assert.deepEqual([...job[0].Action].sort(), ["dynamodb:GetItem", "dynamodb:Scan", "dynamodb:UpdateItem"]);
+  assert.equal(JSON.stringify(SweepJobRole).includes("secretsmanager"), false, "the job never touches a key or the admin secret");
+  assert.equal(SweepJobFunction.Properties.Environment.Variables.SWEEP_ADDRESS, "0x0000000000000000000000000000000000000001", "defaults to the faucet address");
+  assert.equal(SweepJobFunction.Properties.Environment.Variables.SWEEP_IDLE_MINUTES, "30");
+  assert.equal(SweepJobFunction.Properties.ReservedConcurrentExecutions, 1);
+  const env = template.Resources.FaucetFunction.Properties.Environment.Variables;
+  assert.equal(env.SWEEP_ADDRESS, "0x0000000000000000000000000000000000000001");
+  assert.equal(env.SWEEP_RATE_LIMIT_PER_WINDOW, "600", "a whole lab shares one NAT address");
+  assert.equal(env.SWEEP_GLOBAL_RATE_LIMIT_PER_WINDOW, "6000");
+  const custom = buildTemplate({ origins: "x", rpcUrl: "u", chainId: 23295, amountWei: "1", lowBalance: 1, faucetCodeDir: "a", monitorCodeDir: "b", sweepAddress: "0x00000000000000000000000000000000000000aa", sweepIdleMinutes: 60 });
+  assert.equal(custom.Resources.SweepJobFunction.Properties.Environment.Variables.SWEEP_ADDRESS, "0x00000000000000000000000000000000000000aa");
+  assert.equal(custom.Resources.SweepJobFunction.Properties.Environment.Variables.SWEEP_IDLE_MINUTES, "60");
 });
 
 test("globalRateLimit is wired into GLOBAL_RATE_LIMIT_PER_WINDOW (default 600) next to the per-caller limit", () => {

@@ -13,6 +13,36 @@ const conditionFailed = () => Object.assign(new Error("The conditional request f
 const str = (value) => value?.S;
 const num = (value) => (value?.N !== undefined ? Number(value.N) : undefined);
 
+// Evaluates exactly the sweep expressions store.js sends (touch, claim, finish).
+const sweepUpdate = (items, key, item, input, values) => {
+  const condition = input.ConditionExpression || "";
+  if (!item) throw conditionFailed();
+  const status = str(item.status);
+  if (condition === "pidHash = :pid") { // touchSweep
+    if (str(item.pidHash) !== str(values[":pid"])) throw conditionFailed();
+    items.set(key, { ...item, lastSeen: values[":seen"], expiresAt: values[":exp"] });
+    return { Attributes: structuredClone(items.get(key)) };
+  }
+  if (condition.includes("lastSeen < :idleBefore")) { // claimSweep
+    const ok = num(item.signedAt) === Number(values[":signed"].N) && num(item.lastSeen) < Number(values[":idleBefore"].N)
+      && (status === "armed" || (status === "sending" && num(item.sendingAt) < Number(values[":before"].N)));
+    if (!ok) throw conditionFailed();
+    items.set(key, { ...item, status: { S: "sending" }, sendingAt: values[":now"] });
+    return {};
+  }
+  if (condition === "signedAt = :signed") { // finishSweep: SET #f0 = :v0, ... REMOVE #f1
+    if (num(item.signedAt) !== Number(values[":signed"].N)) throw conditionFailed();
+    const next = { ...item };
+    const names = input.ExpressionAttributeNames;
+    const [setPart, removePart] = input.UpdateExpression.split("REMOVE");
+    for (const match of (setPart.replace(/^\s*SET/, "").match(/#f\d+ = :v\d+/g) || [])) { const [n, v] = match.split(" = "); next[names[n]] = values[v]; }
+    for (const n of (removePart || "").match(/#f\d+/g) || []) delete next[names[n]];
+    items.set(key, next);
+    return {};
+  }
+  throw new Error(`unexpected sweep update ${input.UpdateExpression}`);
+};
+
 const fakeDynamo = () => {
   const tables = new Map();
   const tableOf = (name) => {
@@ -30,6 +60,15 @@ const fakeDynamo = () => {
       const key = input.Key?.pk?.S ?? input.Item?.pk?.S;
       const item = items.get(key);
       const values = input.ExpressionAttributeValues || {};
+      if (name === "ScanCommand") { // sweep listing: begins_with(pk, :prefix)
+        return { Items: [...items.entries()].filter(([k]) => k.startsWith(values[":prefix"].S)).map(([, v]) => structuredClone(v)) };
+      }
+      if (key?.startsWith("sweep#") && name === "PutItemCommand") { // putSweep: attribute_not_exists(pk) OR signedAt <= :signedAt
+        if (item && !(num(item.signedAt) <= Number(values[":signedAt"].N))) throw conditionFailed();
+        items.set(key, structuredClone(input.Item));
+        return {};
+      }
+      if (key?.startsWith("sweep#") && name === "UpdateItemCommand") return sweepUpdate(items, key, item, input, values);
       if (name === "GetItemCommand") return { Item: item ? structuredClone(item) : undefined };
       if (name === "PutItemCommand") {
         if (input.ConditionExpression === "attribute_not_exists(pk)" && item) throw conditionFailed();
@@ -272,4 +311,34 @@ test("dynamo store: the rollback is conditional - a concurrent write by someone 
   const rollback = client.commands.filter((c) => c.name === "UpdateItemCommand" && c.input.Key.pk.S === "config#maxPayouts").at(-1);
   assert.equal(rollback.input.ConditionExpression, "#v = :value", "rollback only applies while the value is still ours");
   assert.equal(rollback.input.ExpressionAttributeValues[":value"].N, "4");
+});
+
+test("dynamo store: sweep records - replace-if-newer, heartbeat, claim needs idleness, finish is conditional", async () => {
+  const client = fakeDynamo();
+  const store = createDynamoStore({ table: "codes", rateTable: "rates", client });
+  const address = "0x00000000000000000000000000000000000000AA";
+  const record = (signedAt, extra = {}) => ({ pidHash: "p1", rawTx: "0xraw", nonce: 0, value: "5", status: "armed", signedAt, lastSeen: NOW, ...extra });
+  assert.equal(await store.putSweep(address, record(100)), true);
+  assert.equal(await store.putSweep(address, record(90)), false, "an older signature never replaces a newer one");
+  assert.equal(await store.putSweep(address, record(110, { value: "7" })), true);
+  assert.equal((await store.getSweep(address)).value, "7");
+  assert.equal((await store.listSweeps()).length, 1);
+
+  assert.equal(await store.touchSweep(address, "wrong", NOW + 50), null, "needs the matching pid hash");
+  assert.equal(await store.touchSweep(address, "p1", NOW + 50), "armed");
+  assert.equal((await store.getSweep(address)).lastSeen, NOW + 50);
+
+  const claim = (idleBefore) => store.claimSweep(address, 110, NOW + 5000, NOW + 4400, idleBefore);
+  assert.equal(await claim(NOW + 50), false, "lastSeen is not older than idleBefore: a heartbeat cancels the claim");
+  assert.equal(await store.claimSweep(address, 999, NOW + 5000, NOW + 4400, NOW + 4000), false, "a re-arm (other signedAt) cancels the claim");
+  assert.equal(await claim(NOW + 4000), true);
+  assert.equal((await store.getSweep(address)).status, "sending");
+  assert.equal(await claim(NOW + 4000), false, "a second run cannot claim it again");
+
+  assert.equal(await store.finishSweep(address, 999, { status: "stale" }), false, "finish is conditional on signedAt");
+  assert.equal(await store.finishSweep(address, 110, { status: "sent", txHash: "0xh", sentAt: NOW + 5000, error: null, rawTx: null }), true);
+  const done = await store.getSweep(address);
+  assert.equal(done.status, "sent");
+  assert.equal(done.txHash, "0xh");
+  assert.equal(done.rawTx, undefined, "removed fields disappear");
 });

@@ -71,7 +71,7 @@ Each distinct pid is paid once (`already_paid` for the same wallet, `not_eligibl
 | `FAUCET_ADMIN_SECRET_ID` | `--admin-secret-arn` | Secrets Manager secret holding the admin password **hash** (scrypt + salt). Required to deploy; the Lambda role may read it. |
 | `FAUCET_AMOUNT_WEI` | `--amount-wei` | Default is now `1500000000000000000` (1.5 TEST). |
 
-Endpoints (Function URL): `POST /claim`, `GET /status` (public, returns only `{ open, updatedAt, pidMode }`; the browser uses `pidMode` to decide whether non-hex ids may be sent), `POST /admin/state`, `GET /admin/status` and `POST /admin/max-payouts` (both admin-password protected, see "Payout limit").
+Endpoints (Function URL; the auto-return endpoints are listed under "Auto-return of leftover TEST"): `POST /claim`, `GET /status` (public, returns only `{ open, updatedAt, pidMode }`; the browser uses `pidMode` to decide whether non-hex ids may be sent), `POST /admin/state`, `GET /admin/status` and `POST /admin/max-payouts` (both admin-password protected, see "Payout limit").
 The open/closed state is a DynamoDB item (`config#faucet`); a missing or unreadable item means **closed**. `/claim` answers
 `403 faucet_closed` for **new** reservations only; a pid that is already paid (same address) still gets `already_paid`, and an
 in-flight payment whose transaction was already signed can still finish while closed. Nothing new is written and no payout slot is taken.
@@ -142,11 +142,41 @@ and refuses changes (`400 not_applicable`).
 * The payout counter (`FAUCET_MAX_PAYOUTS`, prolific and open mode) is cumulative and cannot be reset: set it to the number of participants
   **plus** the rehearsal/test claims you expect, because those count too.
 
+### Auto-return of leftover TEST (sweep)
+
+Participants' leftover native TEST returns to the lab (faucet) wallet automatically once they have been inactive, with no button and no
+reliance on tab-close events. Nothing here gives the faucet access to a participant key.
+
+* **Browser** (invisible local wallet only; never MetaMask mode, the admin override, the admin key slot or an admin address): after every event
+  that can change the balance (bid, create, finalize, withdraw, refund, seller payment, faucet claim or admin top-up seen as a balance change, page
+  load; debounced ~5 s) it re-reads balance, pending nonce and gas price and **signs, without broadcasting**, a plain transfer of
+  `balance - 1.2 x gasLimit x gasPrice` to the sweep address (a `cancel` instead when nothing is left). It POSTs that to `/sweep/arm`, sends
+  a signed `/sweep/heartbeat` every **2 minutes** while the tab is visible, signs a fresh transfer every **10 minutes** while the tab is open (so a gas price change cannot leave a stale one), and a best-effort `navigator.sendBeacon` on `pagehide`. Failures are silent.
+  Closed auctions are also withdrawn automatically (refunds, deferred seller payments), one attempt per auction. **Before every sweep is signed, pending refunds / seller payments are withdrawn first** (the first signature waits up to 20 s for the first look at the auction list); if one cannot be withdrawn, a cancel is sent instead of a sweep, so a refund is never stranded without gas.
+  The signed gas limit is **60000**, not 21000: a plain transfer on Sapphire measures about 22k gas and a 21000 limit reverts (the faucet uses the same 60000).
+* **Endpoints** (Function URL): `GET /sweep/config` (public: `{ sweepAddress, chainId, pidMode }`), `POST /sweep/arm`, `POST /sweep/heartbeat`
+  (all three rate limited like `/claim` with their own counters, per 10-minute window: `SWEEP_RATE_LIMIT_PER_WINDOW` default **600** per caller and `SWEEP_GLOBAL_RATE_LIMIT_PER_WINDOW` default **6000**; a whole lab shares one NAT address and every participant heartbeats every 2 minutes. Override via the `sweepRateLimit` / `sweepGlobalRateLimit` template options),
+  `GET /admin/sweeps` (`x-admin-password` header: address, pidHash, lastSeen, armed value, status, txHash, returned amount, current idle minutes) and
+  `POST /admin/sweep-settings { idleMinutes, password }` (whole minutes, **15**..1440; heartbeats come every 2 minutes, so an active participant is never idle that long).
+* **Arm validation** (anything else is refused and nothing is stored): the pid hash belongs to a pid paid to that address, the transaction decodes
+  as a signed legacy transfer from that address, `to` is the sweep address (`SWEEP_ADDRESS`, default the faucet address), no data, the configured chain id, gas limit 21000..100000,
+  `value + gas <= current balance` and nonce equal to the pending nonce. **Cancel and heartbeat must carry a wallet signature** of `bc-sweep|<action>|<address>|<pidHash>|<ts>` (EIP-191, `ts` within 5 minutes of server time; cancel uses its `signedAt` as `ts`): knowing a pid hash is not enough to cancel or touch a record. A newer arm replaces an older one (an older `signedAt` is ignored).
+* **Job** (`SweepJobFunction`, handler `index.sweepJob`, EventBridge `rate(5 minutes)`): for `armed` entries whose `lastSeen` is older than the idle
+  minutes (DynamoDB item `config#sweep`, admin-editable; `SWEEP_IDLE_MINUTES`, default 30, until the admin saves one) it re-checks nonce and balance and broadcasts the stored
+  transaction **once**. The claim (armed -> sending) is conditional on `lastSeen < idleBefore`, so a heartbeat arriving between the scan and the claim cancels the broadcast. A used nonce or a changed balance marks the entry `stale` (the participant was active; the next arm replaces it). A transient RPC failure is retried
+  on the next run, three failures mark it `stale`. Entries become `sent` (with `txHash`), the next run confirms the receipt and adds the amount to `returnedWei`.
+  At most 50 broadcasts per run. Records expire by TTL two weeks after the last heartbeat.
+* The job role has **no Secrets Manager access** and only `dynamodb:GetItem/UpdateItem/Scan` on the codes table; the faucet role gains `dynamodb:Scan` (admin list).
+* Admin Zone: the "Participants gas" card has **Auto-return** (`armed` / `sent` / `stale` / `none`) and **Returned** columns, a faucet-admin-password field with *Load auto-return*, and the idle-minutes setting.
+* Build-time override for the browser: `REACT_APP_SWEEP_ADDRESS` (else `REACT_APP_FAUCET_ADDRESS`, else the address from `/sweep/config`).
+* Not verified against AWS: the DynamoDB expressions (`putSweep`, `touchSweep`, `claimSweep`, `finishSweep`, Scan) are covered by the memory store contract tests and by `dynamoStore.test.mjs` (a fake client that understands exactly these expressions), not by real DynamoDB.
+
 ## Files
 
 * `adminAuth.js` - scrypt hashing / constant-time checks for the admin password; `../../scripts/faucet/setAdminPassword.js` creates the hash
 * `handler.js` - Lambda logic (`createFaucetHandler` is dependency-injected; `handler` is the AWS entry point)
 * `store.js` - DynamoDB store (conditional writes). `memoryStore.js` - test double with the same semantics
+* `sweep.js` - auto-return validation and the scheduled job (`runSweepJob`)
 * `monitor.js` - balance metric publisher. `template.js` - the CloudFormation template (checked by `scripts/faucet/template.test.mjs`)
 * `../../scripts/faucet/pidTools.js`, `generatePids.js`, `createFaucetSecret.js`, `deployFaucet.js`
 * Tests: `npm run faucet:test` (unit, no network) and `REQUIRE_LOCALNET=1 npm run faucet:test:flow` (5 parallel participants on localnet)

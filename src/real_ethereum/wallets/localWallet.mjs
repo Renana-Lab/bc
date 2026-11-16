@@ -1,6 +1,7 @@
 import { JsonRpcProvider, Wallet, encryptKeystoreJson, getBytes, isHexString } from "ethers";
 import { createSilentVault } from "./silentVault.mjs";
 import { assertEnvelopedCalldata, assertRequestIsConfidential } from "./sapphireWrap.mjs";
+import { emitBalanceEvent } from "./balanceEvents.mjs";
 
 // Mode "local": a key generated in this browser, kept as an encrypted (scrypt + AES) keystore
 // in IndexedDB, unlocked with a passphrase. The decrypted key exists only inside this closure
@@ -171,7 +172,18 @@ export const createLocalWallet = ({ storage, silentStorage, scope = "default", s
     },
     async sendTransaction(request, rpc) {
       if (!signer) throw walletError(4100, "Unlock the local wallet first.");
-      return signer.connect(rpc).sendTransaction(request);
+      const response = await signer.connect(rpc).sendTransaction(request);
+      // Every transaction changes the native balance: tell the auto-return code now and again once it is mined.
+      emitBalanceEvent("tx-sent");
+      Promise.resolve(response?.wait?.(1, 120_000)).then(() => emitBalanceEvent("tx-mined"), () => {}).catch(() => {});
+      return response;
+    },
+    // Signs a fully specified plain transfer WITHOUT broadcasting it (used only by the auto-return code). It is not
+    // reachable through the EIP-1193 provider: eth_signTransaction stays refused there.
+    async signTransaction(request) {
+      if (!signer) throw walletError(4100, "Unlock the local wallet first.");
+      if (request?.data && request.data !== "0x") throw new Error("Only plain transfers can be pre-signed.");
+      return signer.signTransaction(request);
     },
   };
 };
