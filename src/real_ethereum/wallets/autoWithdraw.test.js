@@ -124,18 +124,21 @@ test("drain finishes queued withdrawals, retries a failed one, and reports wheth
   handle.stop();
 });
 
-test("drain waits (bounded, once) for the first look at the auctions", async () => {
-  const handle = createAutoWithdraw({ getAccount: () => ME, readState: async () => loser, withdrawRefund: async () => {}, withdrawSeller: async () => {} });
-  let release;
-  const wait = jest.fn(() => new Promise((resolve) => { release = resolve; }));
-  const draining = handle.drain({ waitForObservationMs: 20_000, wait });
-  observeAuctions([auction(2)], ME);
-  expect(await draining).toBe(true);
-  expect(wait).toHaveBeenCalledTimes(1);
-  const timedOut = createAutoWithdraw({ getAccount: () => ME, readState: async () => loser, withdrawRefund: async () => {}, withdrawSeller: async () => {} });
-  const quick = jest.fn(async () => {});
-  await timedOut.drain({ waitForObservationMs: 20_000, wait: quick });
-  await timedOut.drain({ waitForObservationMs: 20_000, wait: quick });
-  expect(quick).toHaveBeenCalledTimes(1); // no second wait after the timeout
-  handle.stop(); timedOut.stop();
+test("a failed read is not 'nothing due': drain says false (and the auction is looked at again), then the recovered read withdraws", async () => {
+  let failReads = 2; // the first look and drain's own retry
+  const sent = [];
+  const handle = createAutoWithdraw({
+    getAccount: () => ME,
+    readState: async () => { if (failReads > 0) { failReads -= 1; throw new Error("rpc down"); } return loser; },
+    withdrawSeller: async () => {}, withdrawRefund: async (address) => { sent.push(address); },
+  });
+  observeAuctions([auction(1)], ME);
+  expect(await handle.drain()).toBe(false);
+  expect(handle.blocked.has(auction(1).address)).toBe(true);
+  expect(handle.handled.has(auction(1).address.toLowerCase())).toBe(false); // so the next observation tries again
+  expect(sent).toEqual([]);
+  expect(await handle.drain()).toBe(true); // the read recovered
+  expect(sent).toEqual([auction(1).address]);
+  expect(handle.blocked.size).toBe(0);
+  handle.stop();
 });

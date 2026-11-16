@@ -3,6 +3,8 @@ import { Transaction, Wallet, verifyMessage } from "ethers";
 import { SWEEP_GAS_LIMIT, computeSweepValue, createSweepController, sweepFee, sweepMessage } from "./autoSweep.mjs";
 import { emitBalanceEvent } from "./balanceEvents.mjs";
 import { createLocalWallet, createMemoryStorage } from "./localWallet.mjs";
+import { createAutoWithdraw } from "./autoWithdraw.mjs";
+import { observeAuctions } from "../auctionObserver.mjs";
 
 const flush = async () => { for (let i = 0; i < 30; i += 1) await Promise.resolve(); };
 const GAS_PRICE = 100n * 10n ** 9n;
@@ -215,6 +217,114 @@ test("a pending refund is withdrawn before signing; while one is stuck a cancel 
   await flush();
   expect(t.arms()).toHaveLength(2);
   expect(t.arms()[1].payload.rawTx).toBeTruthy();
+  t.controller.dispose();
+});
+
+test("held back by a failed withdrawal: the 10-minute timer retries beforeSign and arms once it succeeds", async () => {
+  let safe = false;
+  const calls = [];
+  const t = setup({ beforeSign: async () => { calls.push(safe); return safe; }, heartbeatMs: 10 ** 9, pollMs: 10 ** 9 });
+  jest.advanceTimersByTime(5000);
+  await flush();
+  expect(t.arms().map((a) => Boolean(a.payload.cancel))).toEqual([true]);
+  // Still blocked after 10 minutes: asked again, but no new message (the cancel stays).
+  jest.advanceTimersByTime(600_000);
+  await flush();
+  expect(calls).toEqual([false, false]);
+  expect(t.arms()).toHaveLength(1);
+  // The withdrawal works now: the next 10-minute tick arms the sweep.
+  safe = true;
+  jest.advanceTimersByTime(600_000);
+  await flush();
+  expect(t.arms()).toHaveLength(2);
+  expect(t.arms()[1].payload.rawTx).toBeTruthy();
+  // And from then on it is an ordinary armed transfer that is refreshed.
+  jest.advanceTimersByTime(600_000);
+  await flush();
+  expect(t.arms()).toHaveLength(3);
+  t.controller.dispose();
+});
+
+test("returning to the tab retries a held-back sweep at once", async () => {
+  let safe = false;
+  const t = setup({ beforeSign: async () => safe, heartbeatMs: 10 ** 9, pollMs: 10 ** 9 });
+  jest.advanceTimersByTime(5000);
+  await flush();
+  expect(t.arms()).toHaveLength(1);
+  safe = true;
+  fakeDoc.dispatchEvent(new Event("visibilitychange"));
+  await flush();
+  expect(t.arms()).toHaveLength(2);
+  expect(t.arms()[1].payload.rawTx).toBeTruthy();
+  t.controller.dispose();
+});
+
+test("a beforeSign that throws is treated as unsafe (cancel), never as permission to sweep", async () => {
+  const t = setup({ beforeSign: async () => { throw new Error("rpc down"); } });
+  jest.advanceTimersByTime(5000);
+  await flush();
+  expect(t.arms()).toHaveLength(1);
+  expect(t.arms()[0].payload.cancel).toBe(true);
+  t.controller.dispose();
+});
+
+test("signature timestamps and signedAt come from the injected (server-offset) clock", async () => {
+  const t = setup({ now: () => Date.now() + 45 * 60_000 }); // the server's clock is 45 minutes ahead of the participant's
+  jest.advanceTimersByTime(5000);
+  await flush();
+  expect(Math.abs(t.arms()[0].payload.signedAt - (Date.now() + 45 * 60_000))).toBeLessThan(10_000);
+  t.controller.dispose();
+});
+
+test("a failed auction read holds the sweep back (cancel, no transfer); once the read recovers the refund is withdrawn and THEN the sweep is signed", async () => {
+  let failReads = 3;
+  const events = [];
+  const state = { closed: true, cancelled: false, manager: "0x9", participated: true, bid: 5n, isHighestBidder: false, sellerOwed: 0n };
+  const withdraw = createAutoWithdraw({
+    getAccount: () => ADDRESS,
+    readState: async () => { if (failReads > 0) { failReads -= 1; throw new Error("rpc down"); } return state; },
+    withdrawSeller: async () => {},
+    withdrawRefund: async () => { events.push("refund"); },
+  });
+  observeAuctions([{ address: "0xa1", closed: true, probe: true }], ADDRESS);
+  const post = async (path, payload) => { events.push(payload.cancel ? "cancel" : "sweep"); return { status: 200, body: {} }; };
+  const t = setup({ beforeSign: () => withdraw.drain(), post, heartbeatMs: 10 ** 9, pollMs: 10 ** 9 });
+  jest.advanceTimersByTime(5000);
+  await flush();
+  expect(events).toEqual(["cancel"]); // the read failed (first look + retry): no sweep
+  jest.advanceTimersByTime(600_000);
+  await flush();
+  expect(events).toEqual(["cancel"]); // still failing (third read) on the timer: nothing new is sent
+  jest.advanceTimersByTime(600_000);
+  await flush();
+  expect(events).toEqual(["cancel", "refund", "sweep"]); // recovered: refund first, then the sweep
+  t.controller.dispose();
+  withdraw.stop();
+});
+
+test("a cancel that was not delivered (403 or outage) stays pending: the 10-minute timer retries it while unsafe", async () => {
+  let safe = false;
+  let status = 403;
+  const posts = [];
+  const post = async (path, payload) => { posts.push(payload.cancel ? "cancel" : "sweep"); return { status, body: {} }; };
+  const t = setup({ beforeSign: async () => safe, post, heartbeatMs: 10 ** 9, pollMs: 10 ** 9 });
+  jest.advanceTimersByTime(5000);
+  await flush();
+  expect(posts).toEqual(["cancel"]);
+  jest.advanceTimersByTime(600_000); // still refused, still unsafe: sent again
+  await flush();
+  expect(posts).toEqual(["cancel", "cancel"]);
+  status = 200; // delivered this time
+  jest.advanceTimersByTime(600_000);
+  await flush();
+  expect(posts).toEqual(["cancel", "cancel", "cancel"]);
+  jest.advanceTimersByTime(600_000); // delivered and still blocked: nothing more to say
+  await flush();
+  expect(posts).toHaveLength(3);
+  safe = true;
+  jest.advanceTimersByTime(600_000);
+  await flush();
+  expect(posts).toEqual(["cancel", "cancel", "cancel", "sweep"]);
   t.controller.dispose();
 });
 

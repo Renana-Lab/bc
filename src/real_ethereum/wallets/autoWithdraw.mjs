@@ -17,19 +17,24 @@ export const createAutoWithdraw = ({ readState, withdrawRefund, withdrawSeller, 
   const handled = new Set(); // auction addresses attempted in this page load
   const blocked = new Set(); // auctions with something due that could not be withdrawn (yet)
   let queue = Promise.resolve();
-  let sawObservation = false;
-  let waited = false; // the bounded wait for the first observation happens once
-  let observed = null;
-  const observedPromise = new Promise((resolve) => { observed = resolve; });
 
   const process = async (address, account) => {
-    const state = await readState(address, account);
+    blocked.delete(address);
+    let state;
+    try {
+      state = await readState(address, account);
+    } catch (error) {
+      // Unknown is not "nothing due": hold the sweep back (drain() says false) and look at this auction again.
+      blocked.add(address);
+      handled.delete(address);
+      onError(error);
+      return;
+    }
     if (!state?.closed) { handled.delete(address); return; } // a stale list entry: look again at the next refresh
     // A cancelled auction refunds everyone, including the leader; otherwise the winner has nothing to withdraw.
     const refundDue = state.participated && state.bid > 0n && (state.cancelled || !state.isHighestBidder);
     const sellerDue = same(state.manager, account) && state.sellerOwed > 0n;
     // "Nothing to withdraw" and every other failure are ignored: the next page load looks again.
-    blocked.delete(address);
     if (sellerDue) await withdrawSeller(address, account).catch((error) => { blocked.add(address); onError(error); });
     if (refundDue) await withdrawRefund(address, account).catch((error) => { blocked.add(address); onError(error); });
   };
@@ -37,7 +42,6 @@ export const createAutoWithdraw = ({ readState, withdrawRefund, withdrawSeller, 
   const handle = (auctions, account) => {
     const me = getAccount?.() || account;
     if (!me) return;
-    if (!sawObservation) { sawObservation = true; observed(); }
     for (const auction of auctions) {
       if (!auction?.address || !auction.closed || auction.isReadPlaceholder) continue;
       if (auction.isRefunded && !same(auction.manager, me)) continue; // already refunded
@@ -49,13 +53,9 @@ export const createAutoWithdraw = ({ readState, withdrawRefund, withdrawSeller, 
     }
   };
 
-  // Before the participant's balance is swept: wait for the first look at the auctions (bounded), finish every queued
-  // withdrawal, retry the ones that failed once, and say whether anything is still waiting (false = do not sweep).
-  const drain = async ({ waitForObservationMs = 0, wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } = {}) => {
-    if (!sawObservation && !waited && waitForObservationMs > 0) {
-      waited = true;
-      await Promise.race([observedPromise, wait(waitForObservationMs)]);
-    }
+  // Before the participant's balance is swept: finish every queued withdrawal, retry the ones that failed once, and say
+  // whether anything is still waiting (false = do not sweep).
+  const drain = async () => {
     await queue;
     for (const address of [...blocked]) queue = queue.then(() => process(address, getAccount?.())).catch(onError);
     await queue;

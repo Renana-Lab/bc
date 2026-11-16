@@ -79,10 +79,11 @@ const setup = async ({ config = {} } = {}) => {
 const parse = (response) => JSON.parse(response.body);
 const MINUTE = 60_000;
 
-test("GET /sweep/config exposes only the sweep address, chain and pid mode", async () => {
-  const { send } = await setup();
+test("GET /sweep/config exposes only the sweep address, chain, pid mode and server time", async () => {
+  const t = await setup();
+  const { send } = t;
   const body = parse(await send("/sweep/config", "GET"));
-  assert.deepEqual(body, { sweepAddress: faucetWallet.address, chainId: CHAIN_ID, pidMode: "allowlist" });
+  assert.deepEqual(body, { sweepAddress: faucetWallet.address, chainId: CHAIN_ID, pidMode: "allowlist", serverTime: t.clock.ms });
   assert.equal((await send("/sweep/config", "POST")).statusCode, 405);
 });
 

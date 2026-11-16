@@ -35,6 +35,8 @@ export const createSweepController = ({
   let firstPokeAt = 0;
   let running = Promise.resolve();
   let retried = false;
+  let unsafeCancel = false; // a cancel is wanted because a withdrawal is still pending
+  let cancelPending = false; // the last cancel was not delivered (server refused or unreachable): try again
   const timers = [];
 
   const send = async (payload) => {
@@ -50,11 +52,14 @@ export const createSweepController = ({
   // periodic: only refreshes an armed transfer (a gas price change must not leave a stale one); never creates one.
   const resign = async ({ force = false, periodic = false } = {}) => {
     if (disposed) return;
-    if (periodic && lastKind !== "armed") return;
+    // The 10-minute timer (and a return to the tab) refreshes an armed transfer and also retries a sweep that was
+    // held back because a withdrawal failed; it never creates a transfer out of nothing.
+    if (periodic && lastKind !== "armed" && !unsafeCancel && !cancelPending) return;
     if (periodic) force = true;
     let safe = true;
-    try { safe = (await beforeSign()) !== false; } catch { safe = true; }
+    try { safe = (await beforeSign()) !== false; } catch { safe = false; }
     if (disposed) return;
+    if (periodic && unsafeCancel && !safe && !cancelPending) return; // still blocked and the cancel is in place
     let balance; let nonce; let gasPrice;
     try { [balance, nonce, gasPrice] = await Promise.all([readBalance(), readNonce(), readGasPrice()]); } catch { return; }
     balance = BigInt(balance);
@@ -62,7 +67,7 @@ export const createSweepController = ({
     const value = computeSweepValue({ balance, gasPrice });
     let payload;
     if (value <= 0n || !safe) {
-      if (lastKind === "cancel" && !force) { lastBalance = balance; return; }
+      if (lastKind === "cancel" && (!force || periodic)) { lastBalance = balance; if (safe) unsafeCancel = false; return; }
       try { payload = await cancelPayload(); } catch { return; }
     } else {
       if (!force && lastKind === "armed" && lastBalance === balance && lastNonce === nonce) return;
@@ -72,6 +77,14 @@ export const createSweepController = ({
       } catch { return; }
     }
     const result = await send(payload);
+    if (payload.cancel) {
+      // Stay in the unsafe state until the cancel has really been delivered (a 403 or an outage is retried by the timer).
+      unsafeCancel = !safe;
+      cancelPending = result.status !== 200;
+    } else if (result.status === 200) {
+      unsafeCancel = false;
+      cancelPending = false;
+    }
     if (result.status === 200) {
       lastKind = payload.cancel ? "cancel" : "armed";
       lastBalance = balance;
@@ -127,7 +140,7 @@ export const createSweepController = ({
   const onPageHide = () => {
     if (lastPayload) beacon("/sweep/arm", lastPayload.cancel ? lastPayload : { ...lastPayload, signedAt: now() });
   };
-  const onVisible = () => { if (doc && !doc.hidden) { heartbeat(); checkBalance(); } };
+  const onVisible = () => { if (doc && !doc.hidden) { heartbeat(); checkBalance(); if (unsafeCancel) enqueue({ periodic: true }); } };
 
   const unsubscribe = subscribe(() => poke("balance-event"));
   timers.push(setInterval(heartbeat, heartbeatMs));

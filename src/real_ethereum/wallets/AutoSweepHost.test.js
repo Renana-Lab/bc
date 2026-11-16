@@ -7,8 +7,10 @@ import { emitBalanceEvent } from "./balanceEvents.mjs";
 import { observeAuctions } from "../auctionObserver.mjs";
 import { WALLET_SCOPE_OVERRIDE_KEY } from "./walletMode.mjs";
 import { fetchSweepConfig, postSweep } from "./sweepClient.mjs";
+import { loadParticipantAuctions } from "./participantAuctions";
 
 jest.mock("../campaign", () => jest.fn());
+jest.mock("./participantAuctions", () => ({ loadParticipantAuctions: jest.fn() }));
 jest.mock("./sweepClient.mjs", () => ({
   ...jest.requireActual("./sweepClient.mjs"),
   fetchSweepConfig: jest.fn(), postSweep: jest.fn(), beaconSweep: jest.fn(),
@@ -47,6 +49,7 @@ beforeEach(() => {
   chain.balance = 10n ** 18n; chain.nonce = 0;
   refundSends = []; sellerSends = [];
   Campaign.mockImplementation(() => auctionStub({ closed: true }));
+  loadParticipantAuctions.mockResolvedValue([]);
   fetchSweepConfig.mockResolvedValue({ sweepAddress: SWEEP_TO, chainId: 23295, pidMode: "prolific" });
   postSweep.mockResolvedValue({ status: 200, body: { status: "armed" } });
   wallet = { signTransaction: jest.fn((request) => signer.signTransaction(request)), signMessage: jest.fn((message) => signer.signMessage(message)) };
@@ -70,12 +73,9 @@ test("participants see nothing: the host renders no markup and no wallet wording
 test("every balance-changing event re-signs once after the debounce; an auction close withdraws and re-signs", async () => {
   mount();
   await flush();
-  // No auction list has been seen yet: the first signature waits (bounded to 20 s) so pending refunds are withdrawn first.
   act(() => { jest.advanceTimersByTime(5000); });
   await flush();
-  expect(arms()).toHaveLength(0);
-  act(() => { jest.advanceTimersByTime(20_000); });
-  await flush();
+  expect(loadParticipantAuctions).toHaveBeenCalledWith({ account: signer.address }); // the host looks at the auctions itself
   expect(arms()).toHaveLength(1);
   expect(arms()[0].pidHash).toMatch(/^[0-9a-f]{64}$/);
   expect(wallet.signTransaction).toHaveBeenCalledTimes(1);
@@ -200,4 +200,84 @@ test("a refund that fails to withdraw (no gas) means a cancel, never a sweep", a
   expect(arms()).toHaveLength(1);
   expect(arms()[0].cancel).toBe(true);
   expect(arms()[0].rawTx).toBeUndefined();
+});
+
+test("the refund check does not need the auctions list: the host loads the auctions and withdraws before the first sign", async () => {
+  const closedLoss = { address: AUCTION, closed: true, manager: OTHER, highestBidder: OTHER, addresses: [signer.address], isRefunded: false };
+  loadParticipantAuctions.mockImplementation(async () => { observeAuctions([closedLoss], signer.address); return [closedLoss]; });
+  loadParticipantAuctions.mockImplementation(async () => [closedLoss]);
+  mount();
+  await flush();
+  act(() => { jest.advanceTimersByTime(5000); });
+  await flush();
+  expect(refundSends).toHaveLength(1); // no AuctionsListPage was ever opened in this test
+  expect(arms()).toHaveLength(1);
+  expect(arms()[0].rawTx).toBeTruthy();
+});
+
+test("an auction list that cannot be read blocks the sweep (cancel) and is retried on the 10-minute timer", async () => {
+  loadParticipantAuctions.mockRejectedValue(new Error("rpc down"));
+  mount();
+  await flush();
+  act(() => { jest.advanceTimersByTime(5000); });
+  await flush();
+  expect(arms()).toHaveLength(1);
+  expect(arms()[0].cancel).toBe(true);
+  loadParticipantAuctions.mockResolvedValue([]);
+  act(() => { jest.advanceTimersByTime(600_000); });
+  await flush();
+  expect(arms().length).toBeGreaterThanOrEqual(2);
+  expect(arms()[arms().length - 1].rawTx).toBeTruthy();
+});
+
+test("signature timestamps follow the server clock, not the participant's", async () => {
+  fetchSweepConfig.mockResolvedValue({ sweepAddress: SWEEP_TO, chainId: 23295, pidMode: "prolific", serverTime: Date.now() + 3 * 3600_000 });
+  mount();
+  await flush();
+  act(() => { jest.advanceTimersByTime(5000); });
+  await flush();
+  expect(Math.abs(arms()[0].signedAt - (Date.now() + 3 * 3600_000))).toBeLessThan(60_000);
+});
+
+test("the server's sweep address wins over the build-time one, with a console warning when they differ", async () => {
+  process.env.REACT_APP_FAUCET_ADDRESS = `0x${"d".repeat(40)}`;
+  const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    mount();
+    await flush();
+    act(() => { jest.advanceTimersByTime(5000); });
+    await flush();
+    const { Transaction } = jest.requireActual("ethers");
+    expect(Transaction.from(arms()[0].rawTx).to.toLowerCase()).toBe(SWEEP_TO);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("differs"));
+  } finally {
+    delete process.env.REACT_APP_FAUCET_ADDRESS;
+    warn.mockRestore();
+  }
+});
+
+test("no warning when the build-time address equals the server's; the build-time one is only a fallback", async () => {
+  process.env.REACT_APP_FAUCET_ADDRESS = SWEEP_TO.toUpperCase().replace("0X", "0x");
+  const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    mount();
+    await flush();
+    expect(warn).not.toHaveBeenCalled();
+  } finally { delete process.env.REACT_APP_FAUCET_ADDRESS; warn.mockRestore(); }
+});
+
+test("no sweep address anywhere: one console warning, auto-return stays off", async () => {
+  fetchSweepConfig.mockResolvedValue({ sweepAddress: null, chainId: 23295, pidMode: "prolific" });
+  const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const view = mount();
+    await flush();
+    view.unmount();
+    mount();
+    await flush();
+    act(() => { jest.advanceTimersByTime(10_000); });
+    await flush();
+    expect(warn.mock.calls.filter(([message]) => /No sweep address/.test(message))).toHaveLength(1);
+    expect(arms()).toHaveLength(0);
+  } finally { warn.mockRestore(); }
 });
