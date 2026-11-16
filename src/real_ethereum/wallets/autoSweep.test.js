@@ -218,6 +218,62 @@ test("a pending refund is withdrawn before signing; while one is stuck a cancel 
   t.controller.dispose();
 });
 
+test("held back by a failed withdrawal: the 10-minute timer retries beforeSign and arms once it succeeds", async () => {
+  let safe = false;
+  const calls = [];
+  const t = setup({ beforeSign: async () => { calls.push(safe); return safe; }, heartbeatMs: 10 ** 9, pollMs: 10 ** 9 });
+  jest.advanceTimersByTime(5000);
+  await flush();
+  expect(t.arms().map((a) => Boolean(a.payload.cancel))).toEqual([true]);
+  // Still blocked after 10 minutes: asked again, but no new message (the cancel stays).
+  jest.advanceTimersByTime(600_000);
+  await flush();
+  expect(calls).toEqual([false, false]);
+  expect(t.arms()).toHaveLength(1);
+  // The withdrawal works now: the next 10-minute tick arms the sweep.
+  safe = true;
+  jest.advanceTimersByTime(600_000);
+  await flush();
+  expect(t.arms()).toHaveLength(2);
+  expect(t.arms()[1].payload.rawTx).toBeTruthy();
+  // And from then on it is an ordinary armed transfer that is refreshed.
+  jest.advanceTimersByTime(600_000);
+  await flush();
+  expect(t.arms()).toHaveLength(3);
+  t.controller.dispose();
+});
+
+test("returning to the tab retries a held-back sweep at once", async () => {
+  let safe = false;
+  const t = setup({ beforeSign: async () => safe, heartbeatMs: 10 ** 9, pollMs: 10 ** 9 });
+  jest.advanceTimersByTime(5000);
+  await flush();
+  expect(t.arms()).toHaveLength(1);
+  safe = true;
+  fakeDoc.dispatchEvent(new Event("visibilitychange"));
+  await flush();
+  expect(t.arms()).toHaveLength(2);
+  expect(t.arms()[1].payload.rawTx).toBeTruthy();
+  t.controller.dispose();
+});
+
+test("a beforeSign that throws is treated as unsafe (cancel), never as permission to sweep", async () => {
+  const t = setup({ beforeSign: async () => { throw new Error("rpc down"); } });
+  jest.advanceTimersByTime(5000);
+  await flush();
+  expect(t.arms()).toHaveLength(1);
+  expect(t.arms()[0].payload.cancel).toBe(true);
+  t.controller.dispose();
+});
+
+test("signature timestamps and signedAt come from the injected (server-offset) clock", async () => {
+  const t = setup({ now: () => Date.now() + 45 * 60_000 }); // the server's clock is 45 minutes ahead of the participant's
+  jest.advanceTimersByTime(5000);
+  await flush();
+  expect(Math.abs(t.arms()[0].payload.signedAt - (Date.now() + 45 * 60_000))).toBeLessThan(10_000);
+  t.controller.dispose();
+});
+
 test("disposing stops everything", async () => {
   const t = setup();
   t.controller.dispose();

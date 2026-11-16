@@ -403,13 +403,14 @@ const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, getAdminSecret
   const sweepLimited = (request) => overLimit(request, "sw:", "sw-global", config.sweepRateLimit ?? 600, config.sweepGlobalRateLimit ?? 6000);
   const sweepIdle = async () => sweep.parseIdleMinutes((await store.getSweepSettings().catch(() => null))?.idleMinutes) ?? sweep.parseIdleMinutes(config.sweepIdleMinutes) ?? sweep.DEFAULT_IDLE_MINUTES;
 
-  // GET /sweep/config: public. The address the browser signs its leftover transfer to, and the pid mode (to hash the id).
+  // GET /sweep/config: public. The server time, the address the browser signs its leftover transfer to, and the pid mode (to hash the id).
   const sweepConfig = async (request) => {
     try {
       if (await sweepLimited(request)) return rateLimited();
       let sweepAddress = null;
       try { sweepAddress = await sweepAddressOf(); } catch { sweepAddress = null; }
-      return json(200, { sweepAddress, chainId: config.chainId, pidMode: config.pidMode || "allowlist" });
+      // serverTime (ms) lets browsers with a wrong clock sign timestamps the server accepts (signatures are valid for 5 minutes).
+      return json(200, { sweepAddress, chainId: config.chainId, pidMode: config.pidMode || "allowlist", serverTime: now() });
     } catch {
       event("error", { code: "sweep_config" });
       return json(500, { error: "internal" });
