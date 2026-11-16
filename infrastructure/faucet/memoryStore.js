@@ -6,7 +6,7 @@ const tick = () => new Promise((resolve) => setImmediate(resolve));
 const createMemoryStore = () => {
   const pids = new Map();
   const counters = new Map(); // key -> { count, expiresAt }  (rate-limit records; no pid inside)
-  const shared = { state: null, budget: 0 }; // open/closed switch and the payout-slot counter
+  const shared = { state: null, budget: 0, maxPayouts: null }; // open/closed switch and the payout-slot counter
   return {
     pids,
     counters,
@@ -70,6 +70,18 @@ const createMemoryStore = () => {
     async setState(open, updatedAt) {
       await tick();
       shared.state = { open: Boolean(open), updatedAt };
+    },
+    async getPayoutCount() {
+      await tick();
+      return shared.budget;
+    },
+    async getMaxPayouts() {
+      await tick();
+      return shared.maxPayouts;
+    },
+    async setMaxPayouts(value) {
+      await tick();
+      shared.maxPayouts = value;
     },
     async hit(scope, windowId, expiresAt, by = 1) {
       await tick();

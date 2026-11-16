@@ -86,7 +86,7 @@ const policy = (statement) => ({ PolicyName: "inline", PolicyDocument: { Version
       Type: "AWS::Lambda::Url",
       Properties: {
         TargetFunctionArn: { "Fn::GetAtt": ["FaucetFunction", "Arn"] }, AuthType: "NONE", InvokeMode: "BUFFERED",
-        Cors: { AllowOrigins: { Ref: "AllowedOrigins" }, AllowMethods: ["GET", "POST"], AllowHeaders: ["content-type"], MaxAge: 86400 },
+        Cors: { AllowOrigins: { Ref: "AllowedOrigins" }, AllowMethods: ["GET", "POST"], AllowHeaders: ["content-type", "x-admin-password"], MaxAge: 86400 },
       },
     },
     FaucetUrlPermission: {

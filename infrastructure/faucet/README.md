@@ -62,7 +62,7 @@ Each distinct pid is paid once (`already_paid` for the same wallet, `not_eligibl
 | `FAUCET_ADMIN_SECRET_ID` | `--admin-secret-arn` | Secrets Manager secret holding the admin password **hash** (scrypt + salt). Required to deploy; the Lambda role may read it. |
 | `FAUCET_AMOUNT_WEI` | `--amount-wei` | Default is now `1500000000000000000` (1.5 TEST). |
 
-Endpoints (Function URL): `POST /claim`, `GET /status` (public, returns only `{ open, updatedAt, pidMode }`; the browser uses `pidMode` to decide whether non-hex ids may be sent), `POST /admin/state`.
+Endpoints (Function URL): `POST /claim`, `GET /status` (public, returns only `{ open, updatedAt, pidMode }`; the browser uses `pidMode` to decide whether non-hex ids may be sent), `POST /admin/state`, `GET /admin/status` and `POST /admin/max-payouts` (both admin-password protected, see "Payout limit").
 The open/closed state is a DynamoDB item (`config#faucet`); a missing or unreadable item means **closed**. `/claim` answers
 `403 faucet_closed` for **new** reservations only; a pid that is already paid (same address) still gets `already_paid`, and an
 in-flight payment whose transaction was already signed can still finish while closed. Nothing new is written and no payout slot is taken.
@@ -104,6 +104,24 @@ Server side: `POST /admin/state { open, password }` compares in constant time, c
 per 10 minutes (then 429; IPv6 callers are keyed on their /64) plus a global failure budget of 300, so guessing from many addresses
 cannot block the admin's correct password until that budget is gone (it resets with the 10-minute window). It answers `401` with no detail on a wrong password, and never logs the password or body.
 Participants see "Test funds are not available right now." while the faucet is closed.
+
+### Payout limit (admins)
+
+`FAUCET_MAX_PAYOUTS` is only the **deploy-time** value. Admins can raise (or lower, never below what was used) the limit at runtime without
+redeploying: the value is stored in the codes table (`config#maxPayouts`) and takes precedence; if the item is missing (or unreadable) the
+deploy-time value applies, so a DynamoDB hiccup never lifts the cap. Only prolific and open mode have a cap; allowlist mode reports `maxPayouts: null`
+and refuses changes (`400 not_applicable`).
+
+* `GET /admin/status` with the password in the **`x-admin-password` header** (never the URL) returns
+  `{ payoutsUsed, maxPayouts, faucetAddress, payoutAmount (wei string), open }`.
+* `POST /admin/max-payouts { value, password }`: `value` must be an integer, `>= payoutsUsed` (`400 below_used`) and `<= 1000`
+  (`400 bad_request`); the change is written to the existing JSON log as `admin_max_payouts_changed { from, to, payoutsUsed }` (never the password).
+* Both use the same password check and the same failed-attempt rate limit as `/admin/state` (`401` without detail, `429`).
+* The browser CORS `AllowHeaders` now include `x-admin-password` (template change: redeploy the stack once to get the status read).
+  The IAM policy already allows `GetItem`/`UpdateItem` on the codes table, so nothing else changes.
+* UI: the "Faucet funds" card on `/admin/faucet` (password) and in the Admin Zone (admin wallet) shows `X of Y payouts used, Z left`,
+  "+10 / +50 / custom" with a confirmation, the faucet wallet's live balance (needs `REACT_APP_FAUCET_ADDRESS` or the status call),
+  a warning below 5 TEST or when `left < 5` or `balance < left * payout amount`, and (Admin Zone only) a confirmed "Top up faucet" transfer.
 
 ### Upgrading an existing allowlist deployment
 

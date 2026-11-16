@@ -17,6 +17,7 @@ jest.mock("./localWallet.mjs", () => ({
 const originalMode = process.env.REACT_APP_WALLET_MODE;
 beforeEach(() => {
   process.env.REACT_APP_WALLET_MODE = "local";
+  process.env.REACT_APP_LOCAL_WALLET_PASSPHRASE = "required"; // this file covers the passphrase panel
   mockState.unsubscribe = jest.fn();
   mockState.provider = { request: async () => [] };
   mockState.wallet = {
@@ -24,7 +25,7 @@ beforeEach(() => {
     subscribe: () => mockState.unsubscribe, lock() {}, async create() {},
   };
 });
-afterEach(() => { process.env.REACT_APP_WALLET_MODE = originalMode; });
+afterEach(() => { process.env.REACT_APP_WALLET_MODE = originalMode; delete process.env.REACT_APP_LOCAL_WALLET_PASSPHRASE; });
 const flush = async () => { await act(async () => { for (let i = 0; i < 10; i += 1) await Promise.resolve(); }); };
 
 test("re-renders do not re-register the provider or clear it", async () => {

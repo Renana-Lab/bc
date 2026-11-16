@@ -36,12 +36,13 @@ const create = async () => {
 
 beforeEach(() => {
   process.env.REACT_APP_WALLET_MODE = "local";
+  process.env.REACT_APP_LOCAL_WALLET_PASSPHRASE = "required"; // the legacy passphrase panel
   window.URL.createObjectURL = () => "blob:test";
   window.URL.revokeObjectURL = () => {};
   jest.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
   jest.spyOn(window, "confirm").mockImplementation(() => true);
 });
-afterEach(() => { jest.restoreAllMocks(); delete process.env.REACT_APP_WALLET_MODE; });
+afterEach(() => { jest.restoreAllMocks(); delete process.env.REACT_APP_WALLET_MODE; delete process.env.REACT_APP_LOCAL_WALLET_PASSPHRASE; });
 
 test("step 2 is not marked done after Forget, and a new wallet starts un-backed-up", async () => {
   render(<WalletModePanel />);

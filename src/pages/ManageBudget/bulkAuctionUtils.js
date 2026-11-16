@@ -1,4 +1,6 @@
 /* eslint-env es2020 */
+import { isInvisibleWalletMode } from "../../real_ethereum/wallets/walletMode.mjs";
+import { isInsufficientFundsError, NEUTRAL_RETRY_MESSAGE } from "../../real_ethereum/wallets/participantCopy";
 export const BULK_DRAFT_KEY = "bulkAuctionDraft";
 export const BULK_MAX_AUCTIONS = 30;
 
@@ -148,6 +150,9 @@ export const getAuctionValidationError = (auction, label = "Auction") => {
 
 export const getTransactionErrorMessage = (err) => {
   const message = JSON.stringify(err?.message || err || "");
+
+  // Invisible-wallet participants only ever get the neutral retry line for a low native balance.
+  if (isInvisibleWalletMode() && isInsufficientFundsError(err)) return NEUTRAL_RETRY_MESSAGE;
 
   if (message.includes("replacement transaction underpriced")) {
     return "MetaMask has a pending transaction. Wait for it, or speed/cancel it in Activity.";

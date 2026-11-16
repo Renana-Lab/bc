@@ -75,6 +75,9 @@ Set on the **test** Amplify app (never the production app), then build:
 | `REACT_APP_FACTORY_ADDRESS` | address printed in step 2 |
 | `REACT_APP_WALLET_MODE` | `local` |
 | `REACT_APP_FAUCET_URL` | printed by the faucet deployment |
+| `REACT_APP_FAUCET_ADDRESS` | public address of the faucet wallet (optional; lets the Admin Zone show its live balance before the admin status is loaded) |
+| `REACT_APP_ADMIN_ADDRESSES` | admin wallet addresses (comma separated). They see the wallet panel, the "Participants gas" and "Faucet funds" cards |
+| `REACT_APP_LOCAL_WALLET_PASSPHRASE` | leave unset. `required` brings back the old passphrase wallet panel for everyone |
 
 Do not set any key in Amplify. (This repo's Amplify build is triggered by pushes; confirm which branch it builds before pushing.)
 
@@ -90,3 +93,22 @@ Do not set any key in Amplify. (This repo's Amplify build is triggered by pushes
 * Balance alarm: below `--low-balance` TEST (or no metric) emails the subscribed address. Top up the faucet address.
 * More codes: run `generatePids.js` again with a new `--out` file.
 * Costs and cleanup: `aws cloudformation delete-stack --stack-name test-bc-faucet` removes the stack (log group and secret are retained; delete the secret separately).
+
+
+## Invisible wallet for participants (`REACT_APP_WALLET_MODE=local`, default)
+
+* The first visit creates a wallet automatically, one per participant id per browser (`?pid=`). The private key is encrypted with a WebCrypto
+  AES-GCM key created with `extractable: false` and kept as a `CryptoKey` in IndexedDB (database `data-market-local-wallet`, store `silent`);
+  only IV + ciphertext are stored. Reloads decrypt silently. Nothing is typed, there is no lock screen. This protects against casual reads of storage, not
+  against script running on the origin: **testnet funds only**.
+* A browser that still holds an old passphrase keystore shows the unlock step once, then re-saves the key silently and deletes the keystore.
+* Participants never see the wallet, balance, address, backup or faucet button. With `REACT_APP_FAUCET_URL` and a pid, funds are claimed automatically
+  once per page load when the balance is below 0.05 TEST ("Preparing your session..." meanwhile; failures are silent). A failed action because of a low balance
+  only shows "Please wait a moment and try again." Admins watch **Admin Zone > Participants gas** and top up (never automatic).
+* Admins: wallet panel (address, TEST balance, passphrase-encrypted backup, request test funds) is shown only for addresses in `REACT_APP_ADMIN_ADDRESSES`.
+  Restore the admin key from a backup on `/admin/wallet`.
+* Admin sign-in with MetaMask in a `local` build: `/admin-login` (linked from the drawer under "Admin Zone"). Only an address on `REACT_APP_ADMIN_ADDRESSES`
+  sets the session override `sessionStorage.walletModeOverride = "metamask"` (only that value is accepted) and opens the Admin Zone. While it is active no wallet is
+  created, no faucet claim is made and the participant wallet in IndexedDB is untouched. **Switch back to participant wallet** (Admin Zone) clears it and reloads.
+  Fallback "Import admin key" (testnet keys only) seals a pasted key under the separate `admin` slot (`sessionStorage.walletScopeOverride = "admin"`).
+* The on-chain owner/admin check is not available on this branch (contracts untouched); the page accepts an `extraAdminCheck` hook for it.

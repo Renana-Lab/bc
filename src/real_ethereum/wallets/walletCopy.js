@@ -1,4 +1,4 @@
-import { getWalletMode, isEmbeddedWalletMode } from "./walletMode.mjs";
+import { getWalletMode, isEmbeddedWalletMode, isInvisibleWalletMode } from "./walletMode.mjs";
 
 // All wallet-facing wording for the active wallet mode. MetaMask-mode strings are the
 // original ones, byte for byte; local (embedded wallet) mode never mentions MetaMask.
@@ -72,7 +72,34 @@ const LOCAL = {
   },
 };
 
-export const getWalletCopy = (mode = getWalletMode()) =>
-  isEmbeddedWalletMode(mode) ? LOCAL : METAMASK;
+// Invisible-wallet participants never see "wallet" wording (the wallet is created and unlocked silently).
+const INVISIBLE = {
+  ...LOCAL,
+  walletName: "your session",
+  verifying: "Preparing your session...",
+  verifyingStatus: "Preparing your session",
+  disconnected: "Please wait a moment and try again.",
+  notDetected: "Please wait a moment and try again.",
+  timeout: "Please wait a moment and try again.",
+  cannotVerifyUnlock: "Please reload the page and try again.",
+  invalidAccounts: "Please reload the page and try again.",
+  reasons: {
+    locked: "Please wait a moment and try again.",
+    unauthorized: "Please wait a moment and try again.",
+    "verification-failed": "Please wait a moment and try again.",
+  },
+  verificationFailed: "Please wait a moment and try again.",
+  requireWallet: "Please wait a moment and try again.",
+  connectRejected: "Please wait a moment and try again.",
+  connectPending: "Please wait a moment and try again.",
+  connectFailed: "Please wait a moment and try again.",
+  txPending: "Please wait a moment and try again.",
+  txRejected: "The action was cancelled.",
+};
+
+export const getWalletCopy = (mode = getWalletMode()) => {
+  if (!isEmbeddedWalletMode(mode)) return METAMASK;
+  return isInvisibleWalletMode(mode) ? INVISIBLE : LOCAL;
+};
 
 export const isLocalWalletCopy = () => getWalletCopy().embedded;

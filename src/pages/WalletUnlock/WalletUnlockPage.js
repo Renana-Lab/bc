@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import Layout from "../../components/Layout.js";
 import { useMetaMask } from "../../Context/Context.js";
 import { getWalletCopy } from "../../real_ethereum/wallets/walletCopy";
+import { isInvisibleWalletMode } from "../../real_ethereum/wallets/walletMode.mjs";
 
 const requestedRoute = (location) =>
   typeof location.state?.from === "string" && location.state.from.startsWith("/")
@@ -21,6 +22,19 @@ function WalletUnlockPage() {
   useEffect(() => {
     if (status === "connected") navigate(requestedRoute(location), { replace: true });
   }, [status, location, navigate]);
+
+  // Invisible wallet: there is nothing to unlock. This screen only appears during the one-time passphrase step for
+  // old browsers, or if the session needs a moment to start.
+  if (isInvisibleWalletMode()) {
+    return (
+      <Layout>
+        <div style={{ maxWidth: "36rem", margin: "4rem auto", padding: "0 1.5rem", textAlign: "center" }}>
+          <h1>Preparing your session</h1>
+          <p role="status">{status === "checking" || !reason ? "Please wait a moment..." : reason}</p>
+        </div>
+      </Layout>
+    );
+  }
 
   return (
     <Layout>

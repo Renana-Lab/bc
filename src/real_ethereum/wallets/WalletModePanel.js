@@ -1,7 +1,12 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { getWalletMode } from "./walletMode.mjs";
+import { getWalletMode, getWalletScopeOverride, isPassphraseRequired } from "./walletMode.mjs";
 import { getParticipantContext, stripParticipantParams } from "./participantId.mjs";
 import { claimFunds, fetchFaucetStatus, FAUCET_MESSAGES } from "./faucetClient.mjs";
+import { autoClaim } from "./autoClaim.mjs";
+import { scopeIdFor } from "./silentVault.mjs";
+import { setActiveLocalWallet } from "./localWalletRegistry";
+import { useIsAdminWallet } from "./useIsAdminWallet";
+import AdminWalletPanel from "./AdminWalletPanel";
 import { setModeProvider } from "./modeProvider";
 import { createIndexedDbStorage, createLocalProvider, createLocalWallet } from "./localWallet.mjs";
 import { getTargetNetwork } from "../sapphireNetworks";
@@ -10,13 +15,16 @@ import styles from "./WalletModePanel.module.scss";
 
 // Embedded-wallet UI, mounted only when REACT_APP_WALLET_MODE is local.
 // MetaMask mode renders nothing and keeps the extension flow unchanged.
+//  * Default (invisible wallet): InvisibleWalletHost creates/opens the wallet silently, claims faucet funds once and
+//    draws nothing for participants. Admins (REACT_APP_ADMIN_ADDRESSES) get AdminWalletPanel.
+//  * REACT_APP_LOCAL_WALLET_PASSPHRASE=required: the original passphrase panel (PassphraseWalletPanel).
 
 const formatBalance = (wei) => {
   const unit = 10n ** 18n;
   return `${wei / unit}.${String((wei % unit) / 10n ** 14n).padStart(4, "0")}`;
 };
 
-const LocalWalletPanel = () => {
+const PassphraseWalletPanel = () => {
   const network = getTargetNetwork();
   const wallet = useMemo(() => createLocalWallet({ storage: createIndexedDbStorage() }), []);
   const provider = useMemo(() => createLocalProvider({ wallet, network }), [wallet, network]);
@@ -209,6 +217,114 @@ const LocalWalletPanel = () => {
   );
 };
 
-const WalletModePanel = () => (getWalletMode() === "local" ? <LocalWalletPanel /> : null);
+const readParticipant = () => {
+  let storage;
+  try { storage = window.sessionStorage; } catch { storage = undefined; }
+  const context = getParticipantContext({ search: window.location.search, storage });
+  stripParticipantParams(window); // keep the id (a faucet capability) out of the address bar, history and Referer headers
+  return context;
+};
+
+const bannerStyle = {
+  position: "fixed", top: 0, left: 0, right: 0, zIndex: 3000, padding: "6px 12px", textAlign: "center",
+  background: "#d8dcf0", color: "#1c2340", font: "0.85rem system-ui, sans-serif",
+};
+
+// One-time step for browsers that still hold an old passphrase keystore: the existing unlock flow, then the key is
+// re-saved silently and the passphrase is never asked again.
+const MigrationUnlock = ({ wallet, onDone }) => {
+  const [passphrase, setPassphrase] = useState("");
+  const [message, setMessage] = useState("");
+  const unlock = async () => {
+    setMessage("");
+    try {
+      await wallet.unlock(passphrase);
+      await wallet.migrateToSilent();
+      setPassphrase("");
+      onDone();
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+  return (
+    <div className={styles.panel} data-testid="wallet-migration">
+      <h2 className={styles.title}>Welcome back</h2>
+      <p className={styles.hint}>Enter your passphrase once to continue. You will not be asked again.</p>
+      <input className={styles.input} type="password" autoComplete="off" aria-label="Passphrase" value={passphrase}
+        onChange={(event) => setPassphrase(event.target.value)} placeholder="Passphrase" />
+      <button type="button" className={styles.button} onClick={unlock}>Unlock</button>
+      {message ? <p className={styles.error} role="alert">{message}</p> : null}
+    </div>
+  );
+};
+
+const InvisibleWalletHost = () => {
+  const network = getTargetNetwork();
+  const { pid: strictPid, openPid, studyId, experimentCode } = useMemo(readParticipant, []);
+  const faucetUrl = process.env.REACT_APP_FAUCET_URL;
+  // An admin who imported a key on /admin-login uses that separate slot, never auto-claims, and leaves the participant wallet alone.
+  const adminSlot = getWalletScopeOverride() === "admin";
+  const scope = adminSlot ? "admin" : scopeIdFor(strictPid || openPid);
+  const { wallet, provider } = useMemo(() => {
+    const created = createLocalWallet({
+      storage: createIndexedDbStorage(),
+      silentStorage: createIndexedDbStorage({ storeName: "silent" }),
+      scope,
+    });
+    return { wallet: created, provider: createLocalProvider({ wallet: created, network }) };
+  }, [scope, network]);
+  const [address, setAddress] = useState("");
+  const [needsMigration, setNeedsMigration] = useState(false);
+  const [preparing, setPreparing] = useState(false);
+  const { isAdmin } = useIsAdminWallet();
+
+  useEffect(() => {
+    let cancelled = false;
+    const opening = (async () => {
+      try {
+        const result = await wallet.openSilent();
+        if (!cancelled) setNeedsMigration(result === "needs-migration");
+      } catch {
+        // Storage or WebCrypto unavailable (private window, old browser): keep working with a session-only wallet.
+        if (!wallet.isUnlocked()) wallet.openEphemeral();
+      }
+    })();
+    // The session is "unlocked" as soon as the silent open finished; RequireWallet therefore never sees a lock screen.
+    setModeProvider(provider, async () => { await opening; return wallet.isUnlocked(); });
+    setActiveLocalWallet(wallet);
+    const sync = () => setAddress(wallet.address);
+    const off = wallet.subscribe(sync);
+    opening.then(sync);
+    return () => { cancelled = true; off(); setActiveLocalWallet(null); };
+  }, [wallet, provider]);
+
+  // Automatic faucet claim: once per page load, silent, never loops. Admins fund themselves from the panel.
+  useEffect(() => {
+    if (adminSlot || !address || !faucetUrl || !(strictPid || openPid)) return undefined;
+    let cancelled = false;
+    setPreparing(true);
+    autoClaim({
+      faucetUrl, address, strictPid, openPid, studyId, experimentCode,
+      readBalance: () => provider.request({ method: "eth_getBalance", params: [address, "latest"] }),
+    }).finally(() => { if (!cancelled) setPreparing(false); });
+    return () => { cancelled = true; };
+  }, [adminSlot, address, faucetUrl, strictPid, openPid, studyId, experimentCode, provider]);
+
+  return (
+    <>
+      {preparing ? <div style={bannerStyle} role="status" data-testid="preparing-session">Preparing your session...</div> : null}
+      {needsMigration ? <MigrationUnlock wallet={wallet} onDone={() => setNeedsMigration(false)} /> : null}
+      {isAdmin && address ? (
+        <AdminWalletPanel wallet={wallet} provider={provider} address={address} symbol={network.nativeCurrency?.symbol || "TEST"}
+          faucetUrl={faucetUrl} claimContext={{ pid: strictPid || openPid, studyId, experimentCode }} />
+      ) : null}
+    </>
+  );
+};
+
+const WalletModePanel = () => {
+  if (getWalletMode() !== "local") return null;
+  return isPassphraseRequired() ? <PassphraseWalletPanel /> : <InvisibleWalletHost />;
+};
 
 export default WalletModePanel;

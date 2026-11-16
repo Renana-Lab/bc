@@ -1,4 +1,5 @@
 /* eslint-env es2020 */
+import { participantMessage, isInsufficientFundsError } from "../real_ethereum/wallets/participantCopy";
 import { Component } from "react";
 import FormControl from "@mui/material/FormControl";
 import TextField from "@mui/material/TextField";
@@ -56,9 +57,9 @@ export function describeBidError(err, auctionClosed = false) {
   const message = String(err?.message || err?.data?.message || "");
   const code = err?.code ?? err?.cause?.code;
   if (code === 4001 || message.includes(USER_DENIED_PREFIX)) return ERROR_USER_DENIED_CONTRIBUTE;
-  if (code === 4100) return ERROR_WALLET_LOCKED;
-  if (/insufficient funds/i.test(message)) return ERROR_NO_GAS;
-  if (/verification (expired|failed|timed out)|verify your metamask connection|unlock your wallet with your passphrase before continuing/i.test(message)) return ERROR_VERIFICATION;
+  if (code === 4100) return participantMessage(ERROR_WALLET_LOCKED);
+  if (/insufficient funds/i.test(message) || isInsufficientFundsError(err)) return participantMessage(ERROR_NO_GAS);
+  if (/verification (expired|failed|timed out)|verify your metamask connection|unlock your wallet with your passphrase before continuing/i.test(message)) return participantMessage(ERROR_VERIFICATION);
   if (/Bid must exceed current highest/i.test(message)) return ERROR_OUTBID;
   if (/Auction ended/i.test(message) || auctionClosed) return ERROR_DEADLINE;
   return message || "Your bid could not be placed.";

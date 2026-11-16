@@ -80,3 +80,38 @@ export const setFaucetState = async ({ faucetUrl, open, password, fetchImpl = (.
   if (response.status === 429) throw new FaucetError("rate_limited", "Too many attempts. Wait ten minutes and try again.");
   throw new FaucetError("failed", "The change was not saved. Try again.");
 };
+
+// GET /admin/status. The password travels in the x-admin-password header (never the URL) and is not kept.
+// Resolves { payoutsUsed, maxPayouts (null in allowlist mode), faucetAddress, payoutAmount (wei string), open }.
+export const fetchFaucetAdminStatus = async ({ faucetUrl, password, fetchImpl = (...args) => fetch(...args) }) => {
+  let response;
+  try {
+    response = await fetchImpl(`${baseUrl(faucetUrl)}/admin/status`, { method: "GET", headers: { "x-admin-password": password } });
+  } catch {
+    throw new FaucetError("network", NETWORK_MESSAGE);
+  }
+  const body = await readJson(response);
+  if (response.status === 200 && typeof body.open === "boolean") return body;
+  if (response.status === 401) throw new FaucetError("unauthorized", "Wrong password.");
+  if (response.status === 429) throw new FaucetError("rate_limited", "Too many attempts. Wait ten minutes and try again.");
+  throw new FaucetError("failed", "The status could not be read. Try again.");
+};
+
+// POST /admin/max-payouts { value, password }. Resolves { payoutsUsed, maxPayouts }.
+export const setFaucetMaxPayouts = async ({ faucetUrl, value, password, fetchImpl = (...args) => fetch(...args) }) => {
+  let response;
+  try {
+    response = await fetchImpl(`${baseUrl(faucetUrl)}/admin/max-payouts`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ value, password }),
+    });
+  } catch {
+    throw new FaucetError("network", NETWORK_MESSAGE);
+  }
+  const body = await readJson(response);
+  if (response.status === 200 && Number.isInteger(body.maxPayouts)) return body;
+  if (response.status === 401) throw new FaucetError("unauthorized", "Wrong password.");
+  if (response.status === 429) throw new FaucetError("rate_limited", "Too many attempts. Wait ten minutes and try again.");
+  if (body.error === "below_used") throw new FaucetError("below_used", "The limit cannot be lower than the payouts already used.");
+  if (body.error === "not_applicable") throw new FaucetError("not_applicable", "This faucet has no payout limit (allowlist mode).");
+  throw new FaucetError("failed", "The limit was not saved. Use a whole number up to 1000.");
+};
