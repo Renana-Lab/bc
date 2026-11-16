@@ -6,11 +6,13 @@ const tick = () => new Promise((resolve) => setImmediate(resolve));
 const createMemoryStore = () => {
   const pids = new Map();
   const counters = new Map(); // key -> { count, expiresAt }  (rate-limit records; no pid inside)
-  const shared = { state: null, budget: 0, maxPayouts: null }; // open/closed switch and the payout-slot counter
+  const shared = { state: null, budget: 0, maxPayouts: null, sweepSettings: null }; // open/closed switch and the payout-slot counter
+  const sweeps = new Map(); // lowercase address -> sweep record (see sweep.js)
   return {
     pids,
     counters,
     shared,
+    sweeps,
     async get(pidHash) {
       await tick();
       const record = pids.get(pidHash);
@@ -84,6 +86,62 @@ const createMemoryStore = () => {
       if (shared.budget > value) return false; // never below the slots in use
       shared.maxPayouts = value;
       return true;
+    },
+    // ---- auto-return (sweep) records ----
+    async getSweep(address) {
+      await tick();
+      const record = sweeps.get(String(address).toLowerCase());
+      return record ? { ...record } : null;
+    },
+    // Replaces the record unless a NEWER one (larger signedAt) is stored. Returns false when ignored.
+    async putSweep(address, record) {
+      await tick();
+      const key = String(address).toLowerCase();
+      const existing = sweeps.get(key);
+      if (existing && existing.signedAt > record.signedAt) return false;
+      sweeps.set(key, { ...record, address: key });
+      return true;
+    },
+    // Heartbeat: refreshes lastSeen when the record exists for this pid. Returns the status or null.
+    async touchSweep(address, pidHash, lastSeen) {
+      await tick();
+      const record = sweeps.get(String(address).toLowerCase());
+      if (!record || record.pidHash !== pidHash) return null;
+      record.lastSeen = Math.max(record.lastSeen || 0, lastSeen);
+      return record.status;
+    },
+    async listSweeps() {
+      await tick();
+      return [...sweeps.values()].map((record) => ({ ...record }));
+    },
+    // armed (or a stale "sending") -> sending, only for this exact signature.
+    async claimSweep(address, signedAt, nowSeconds, sendingBefore) {
+      await tick();
+      const record = sweeps.get(String(address).toLowerCase());
+      if (!record || record.signedAt !== signedAt) return false;
+      if (!(record.status === "armed" || (record.status === "sending" && (record.sendingAt || 0) < sendingBefore))) return false;
+      record.status = "sending";
+      record.sendingAt = nowSeconds;
+      return true;
+    },
+    // Conditional on signedAt: a re-arm in the meantime wins. null values remove the field.
+    async finishSweep(address, signedAt, fields) {
+      await tick();
+      const record = sweeps.get(String(address).toLowerCase());
+      if (!record || record.signedAt !== signedAt) return false;
+      for (const [name, value] of Object.entries(fields)) {
+        if (value === null || value === undefined) delete record[name];
+        else record[name] = value;
+      }
+      return true;
+    },
+    async getSweepSettings() {
+      await tick();
+      return shared.sweepSettings ? { ...shared.sweepSettings } : null;
+    },
+    async setSweepSettings(idleMinutes, updatedAt) {
+      await tick();
+      shared.sweepSettings = { idleMinutes, updatedAt };
     },
     async hit(scope, windowId, expiresAt, by = 1) {
       await tick();

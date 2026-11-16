@@ -26,6 +26,26 @@ const fromItem = (item) => {
   };
 };
 
+const sweepKey = (address) => ({ pk: { S: `sweep#${String(address).toLowerCase()}` } });
+const SWEEP_SETTINGS_KEY = { pk: { S: "config#sweep" } }; // { idleMinutes, updatedAt }
+const SWEEP_TTL_SECONDS = 14 * 24 * 3600; // records vanish by DynamoDB TTL after two weeks without a heartbeat
+const SWEEP_STRINGS = ["address", "pidHash", "rawTx", "value", "status", "txHash", "returnedWei", "error"];
+const SWEEP_NUMBERS = ["nonce", "signedAt", "lastSeen", "sendingAt", "sentAt", "confirmedAt", "attempts"];
+const fromSweepItem = (item) => {
+  if (!item) return null;
+  const record = {};
+  for (const name of SWEEP_STRINGS) if (item[name]?.S !== undefined) record[name] = item[name].S;
+  for (const name of SWEEP_NUMBERS) if (item[name]?.N !== undefined) record[name] = Number(item[name].N);
+  return record;
+};
+const toSweepItem = (record) => {
+  const item = { ...sweepKey(record.address) };
+  for (const name of SWEEP_STRINGS) if (record[name] !== undefined && record[name] !== null) item[name] = { S: String(record[name]) };
+  for (const name of SWEEP_NUMBERS) if (record[name] !== undefined && record[name] !== null) item[name] = { N: String(record[name]) };
+  item.expiresAt = { N: String((record.lastSeen || Math.floor(Date.now() / 1000)) + SWEEP_TTL_SECONDS) };
+  return item;
+};
+
 const isConditionFailure = (error) => error?.name === "ConditionalCheckFailedException";
 
 const createDynamoStore = ({ table, rateTable, client } = {}) => {
@@ -197,6 +217,114 @@ const createDynamoStore = ({ table, rateTable, client } = {}) => {
         if (!isConditionFailure(error)) throw error; // someone else changed the cap meanwhile: leave theirs
       }
       return false;
+    },
+    // ---- auto-return (sweep) records: item sweep#<address> in the codes table ----
+    async getSweep(address) {
+      return fromSweepItem((await send(new sdk.GetItemCommand({ TableName: table, Key: sweepKey(address), ConsistentRead: true }))).Item);
+    },
+    // Replaces the record unless a NEWER one (larger signedAt) is stored. Returns false when ignored.
+    async putSweep(address, record) {
+      try {
+        await send(new sdk.PutItemCommand({
+          TableName: table, Item: toSweepItem({ ...record, address }),
+          ConditionExpression: "attribute_not_exists(pk) OR signedAt <= :signedAt",
+          ExpressionAttributeValues: { ":signedAt": { N: String(record.signedAt) } },
+        }));
+        return true;
+      } catch (error) {
+        if (isConditionFailure(error)) return false;
+        throw error;
+      }
+    },
+    // Heartbeat: refreshes lastSeen when the record exists for this pid. Returns the status or null.
+    async touchSweep(address, pidHash, lastSeen) {
+      try {
+        const result = await send(new sdk.UpdateItemCommand({
+          TableName: table, Key: sweepKey(address),
+          ConditionExpression: "pidHash = :pid",
+          UpdateExpression: "SET lastSeen = :seen, expiresAt = :exp",
+          ExpressionAttributeValues: { ":pid": { S: pidHash }, ":seen": { N: String(lastSeen) }, ":exp": { N: String(lastSeen + SWEEP_TTL_SECONDS) } },
+          ReturnValues: "ALL_NEW",
+        }));
+        return result.Attributes?.status?.S ?? "none";
+      } catch (error) {
+        if (isConditionFailure(error)) return null;
+        throw error;
+      }
+    },
+    // Scan of the sweep items only (the table is small: one item per participant plus the pid allowlist).
+    async listSweeps() {
+      const out = [];
+      let startKey;
+      do {
+        const page = await send(new sdk.ScanCommand({
+          TableName: table, ExclusiveStartKey: startKey,
+          FilterExpression: "begins_with(pk, :prefix)", ExpressionAttributeValues: { ":prefix": { S: "sweep#" } },
+        }));
+        for (const item of page.Items || []) out.push(fromSweepItem(item));
+        startKey = page.LastEvaluatedKey;
+      } while (startKey && out.length < 2000);
+      return out;
+    },
+    async claimSweep(address, signedAt, nowSeconds, sendingBefore) {
+      try {
+        await send(new sdk.UpdateItemCommand({
+          TableName: table, Key: sweepKey(address),
+          ConditionExpression: "signedAt = :signed AND (#s = :armed OR (#s = :sending AND sendingAt < :before))",
+          UpdateExpression: "SET #s = :sending, sendingAt = :now",
+          ExpressionAttributeNames: { "#s": "status" },
+          ExpressionAttributeValues: {
+            ":signed": { N: String(signedAt) }, ":armed": { S: "armed" }, ":sending": { S: "sending" },
+            ":before": { N: String(sendingBefore) }, ":now": { N: String(nowSeconds) },
+          },
+        }));
+        return true;
+      } catch (error) {
+        if (isConditionFailure(error)) return false;
+        throw error;
+      }
+    },
+    // Conditional on signedAt: a re-arm in the meantime wins. null values remove the field.
+    async finishSweep(address, signedAt, fields) {
+      const sets = [];
+      const removes = [];
+      const names = {};
+      const values = { ":signed": { N: String(signedAt) } };
+      let index = 0;
+      for (const [name, value] of Object.entries(fields)) {
+        if (![...SWEEP_STRINGS, ...SWEEP_NUMBERS].includes(name)) continue;
+        const placeholder = `#f${index}`;
+        names[placeholder] = name;
+        if (value === null || value === undefined) removes.push(placeholder);
+        else {
+          sets.push(`${placeholder} = :v${index}`);
+          values[`:v${index}`] = SWEEP_NUMBERS.includes(name) ? { N: String(value) } : { S: String(value) };
+        }
+        index += 1;
+      }
+      try {
+        await send(new sdk.UpdateItemCommand({
+          TableName: table, Key: sweepKey(address),
+          ConditionExpression: "signedAt = :signed",
+          UpdateExpression: [sets.length ? `SET ${sets.join(", ")}` : "", removes.length ? `REMOVE ${removes.join(", ")}` : ""].filter(Boolean).join(" "),
+          ExpressionAttributeNames: names, ExpressionAttributeValues: values,
+        }));
+        return true;
+      } catch (error) {
+        if (isConditionFailure(error)) return false;
+        throw error;
+      }
+    },
+    async getSweepSettings() {
+      const item = (await send(new sdk.GetItemCommand({ TableName: table, Key: SWEEP_SETTINGS_KEY, ConsistentRead: true }))).Item;
+      return item?.idleMinutes?.N !== undefined ? { idleMinutes: Number(item.idleMinutes.N), updatedAt: item.updatedAt?.N ? Number(item.updatedAt.N) : null } : null;
+    },
+    async setSweepSettings(idleMinutes, updatedAt) {
+      await send(new sdk.UpdateItemCommand({
+        TableName: table, Key: SWEEP_SETTINGS_KEY,
+        UpdateExpression: "SET idleMinutes = :m, updatedAt = :at",
+        ExpressionAttributeValues: { ":m": { N: String(idleMinutes) }, ":at": { N: String(updatedAt) } },
+      }));
     },
     // Atomic counter per (scope, window); the item expires by TTL.
     async hit(scope, windowId, expiresAt, by = 1) {

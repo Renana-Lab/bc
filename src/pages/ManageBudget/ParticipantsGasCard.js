@@ -11,6 +11,7 @@ import {
   planTopUp, runTopUps, saveManualAddresses, saveSetting, selectLowRows,
 } from "./participantsGasData";
 import { readBudgets, readNativeBalances, readParticipantSources } from "./participantsGasReaders";
+import { AutoReturnCells, AutoReturnControls, AutoReturnHeaders, useAutoReturn } from "./ParticipantsAutoReturn";
 import { explorerTxUrl, readAdminBalance, sendNativeFromAdmin, waitForReceipt } from "./adminTransfer";
 
 const cardSx = { width: "100%", mb: 3, p: { xs: 1.5, sm: 2 }, border: "1px solid #d9dff2", borderRadius: 3, background: "rgba(255,255,255,0.72)" };
@@ -45,6 +46,7 @@ export const ParticipantsGasCardBody = ({ adminAccount, deps: depsOverride, refr
   const [statuses, setStatuses] = useState({});
   const [confirm, setConfirm] = useState(null); // { targets, adminBalance, error }
   const [running, setRunning] = useState(false);
+  const autoReturn = useAutoReturn({ deps: depsOverride?.autoReturn });
   const requestRef = useRef(0);
   const manualRef = useRef(manual);
   manualRef.current = manual;
@@ -149,10 +151,12 @@ export const ParticipantsGasCardBody = ({ adminAccount, deps: depsOverride, refr
         </Button>
       </Box>
 
+      <AutoReturnControls state={autoReturn} />
+
       <Box sx={{ overflowX: "auto", mt: 2 }}>
         <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 13 }}>
           <thead>
-            <tr style={{ textAlign: "left" }}><th>Pid</th><th>Address</th><th>{symbol}</th><th>Budget</th><th>Last activity</th><th>Status</th><th /></tr>
+            <tr style={{ textAlign: "left" }}><th>Pid</th><th>Address</th><th>{symbol}</th><th>Budget</th><th>Last activity</th><th>Status</th><AutoReturnHeaders /><th /></tr>
           </thead>
           <tbody>
             {rows.map((row) => (
@@ -171,6 +175,7 @@ export const ParticipantsGasCardBody = ({ adminAccount, deps: depsOverride, refr
                   {statusText(statuses[row.address])}
                   {statuses[row.address]?.hash ? <> <a href={explorerTxUrl(statuses[row.address].hash)} target="_blank" rel="noopener noreferrer">tx</a></> : null}
                 </td>
+                <AutoReturnCells sweep={autoReturn.sweeps[row.address]} symbol={symbol} />
                 <td><Button size="small" variant="outlined" disabled={!amountWei || running} onClick={() => openConfirm([row.address])}>Top up</Button></td>
               </tr>
             ))}

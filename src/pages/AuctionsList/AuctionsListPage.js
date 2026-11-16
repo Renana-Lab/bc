@@ -43,6 +43,7 @@ import { getWalletSessionAccount, subscribeToWalletSession } from "../../telemet
 import Layout from "../../components/Layout";
 import { preserveAuctionUserState } from "./auctionVisualState";
 import { finalizeAuctionIfReady } from "../../real_ethereum/autoFinalize";
+import { observeAuctions } from "../../real_ethereum/auctionObserver.mjs";
 import { MAX_FINALIZE_ATTEMPTS } from "../../real_ethereum/finalizeRetry";
 import { pickAuctionToFinalize, resolveFinalizeOutcome } from "./listFinalize";
 import { auctionBadges, filterHiddenAuctions, useAuctionAdminFlags } from "./auctionAdminFlags";
@@ -1310,6 +1311,11 @@ function AuctionsListPage() {
     },
     [currentUserAddress, keepNormalAuctionOrder],
   );
+
+  // Closed auctions of this participant are looked at by the invisible auto-withdraw (no-op without a listener).
+  useEffect(() => {
+    observeAuctions(auctionsList, currentUserAddress);
+  }, [auctionsList, currentUserAddress]);
 
   useEffect(() => {
     if (!auctionsList.length || !activeFactoryAddress) return;
