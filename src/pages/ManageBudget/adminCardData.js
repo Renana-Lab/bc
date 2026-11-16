@@ -26,6 +26,9 @@ export const FACTORY_AUDIT_EVENTS = AUDIT_EVENT_TYPES.filter(
 );
 export const CAMPAIGN_AUDIT_EVENTS = ["SellerPaid", "SellerPaymentDeferred", "RefundProcessed"];
 
+// Campaign events the audit/record views understand but the Audit events card does not list.
+const CAMPAIGN_ADDRESS_EVENTS = ["SellerPaid", "SellerPaymentDeferred", "RefundProcessed", "BidRecorded"];
+
 const lower = (value) => String(value ?? "").toLowerCase();
 const num = (value) => {
   const n = Number(value);
@@ -95,6 +98,8 @@ const summarizeEvent = (name, args) => {
       return `${args.seller} paid ${args.amount}`;
     case "RefundProcessed":
       return `${args.contributor} refunded ${args.amount}`;
+    case "BidRecorded":
+      return `${args.bidder} bid ${args.amount} (total ${args.cumulativeBid}, budget ${args.budgetBefore} -> ${args.budgetAfter})`;
     default:
       return "";
   }
@@ -115,9 +120,9 @@ export const normalizeAuditEvent = (raw = {}, source = "") => {
     auction: lower(
       args.campaignAddress ||
         args.campaign ||
-        (["SellerPaid", "SellerPaymentDeferred", "RefundProcessed"].includes(name) ? raw.address : "")
+        (CAMPAIGN_ADDRESS_EVENTS.includes(name) ? raw.address : "")
     ),
-    actor: lower(args.user || args.seller || args.contributor || args.admin || args.by || ""),
+    actor: lower(args.user || args.seller || args.contributor || args.bidder || args.admin || args.by || ""),
     summary: summarizeEvent(name, args),
     args,
   };
@@ -227,21 +232,27 @@ export const mapAuctionAdminRow = ({ address, summary = [], cancelled = false, h
   hidden: Boolean(hidden),
 });
 
+// Status vocabulary shared with the marketplace admin: active, ended, sold, unsold, cancelled.
+//   sold      = finalized with a winner;   unsold = finalized, or ended, without bids
+//   ended     = bidding closed with bids but not finalized yet
+// "cancelled" is the contract's own word (the marketplace calls it "deleted"). "hidden" is a separate flag.
 export const getAuctionAdminStatus = (row, nowSec) => {
   if (row.cancelled) return "cancelled";
-  if (row.closed) return "finalized";
-  return row.endTime <= nowSec ? "ended" : "live";
+  if (row.closed) return row.hasBids ? "sold" : "unsold";
+  if (row.endTime > nowSec) return "active";
+  return row.hasBids ? "ended" : "unsold";
 };
 
 // Mirrors the contract preconditions so the UI only offers actions that can succeed.
 export const getAdminActionAvailability = (row, nowSec) => {
   const status = getAuctionAdminStatus(row, nowSec);
+  const finalized = Boolean(row.closed) && status !== "cancelled";
   return {
     status,
-    editMinimum: status === "live" && !row.hasBids,
-    closeNow: status === "live",
+    editMinimum: status === "active" && !row.hasBids,
+    closeNow: status === "active",
     cancel: status !== "cancelled",
-    cancelHidesOnly: status === "finalized",
+    cancelHidesOnly: finalized,
     toggleHidden: true,
   };
 };
@@ -272,3 +283,25 @@ export const toServiceRow = (name, result) => {
 };
 
 export const joinUrl = (base, path) => `${String(base || "").replace(/\/+$/, "")}${path}`;
+
+// Newest-first paging with search over description and address. `rows` is ordered newest first.
+export const AUCTION_ADMIN_PAGE_SIZE = 30;
+export const pageAuctionRows = ({ rows = [], query = "", visible = AUCTION_ADMIN_PAGE_SIZE } = {}) => {
+  const needle = lower(query).trim();
+  const matches = needle
+    ? rows.filter((row) => lower(row.description).includes(needle) || lower(row.address).includes(needle))
+    : rows;
+  return { rows: matches.slice(0, visible), total: matches.length, hasMore: matches.length > visible };
+};
+
+// Two-second-resolution countdown text; "ended" once the end time has passed.
+export const formatCountdown = (endTimeSec, nowSec) => {
+  const left = Math.floor(Number(endTimeSec) - Number(nowSec));
+  if (!Number.isFinite(left) || left <= 0) return "ended";
+  const days = Math.floor(left / 86400);
+  const hours = Math.floor((left % 86400) / 3600);
+  const minutes = Math.floor((left % 3600) / 60);
+  const seconds = left % 60;
+  const pad = (value) => String(value).padStart(2, "0");
+  return days ? `${days}d ${pad(hours)}:${pad(minutes)}:${pad(seconds)}` : `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
+};

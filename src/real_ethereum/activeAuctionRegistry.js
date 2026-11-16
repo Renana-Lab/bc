@@ -112,6 +112,7 @@ const normalizeAuction = (auction = {}) => ({
   manager: String(auction.manager || ""),
   highestBid: String(auction.highestBid || "0"),
   highestBidder: String(auction.highestBidder || ""),
+  description: String(auction.description || auction.dataDescription || ""),
   endTimeSec: Math.floor(
     Number(
       auction.endTimeSec ||
@@ -733,6 +734,7 @@ const readAuctionSummaries = async (addresses, factoryAddress) => {
           manager: details[3],
           highestBid: details[4],
           highestBidder: details[6],
+          description: details[5],
           endTimeSec: details[7],
           closed: details[8],
         }),

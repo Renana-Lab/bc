@@ -26,7 +26,6 @@ import { getConfiguredRpcUrls } from "../../real_ethereum/rpcConfig";
 import { canUseLiveEvents, factorySocket } from "../../real_ethereum/socketFactory";
 import { notifyBudgetChanged, subscribeToBudgetChanges } from "../../real_ethereum/budget";
 import { readCancelledSet, readFactoryOwner, readHiddenSet } from "../../real_ethereum/adminChain";
-import { chainNowMs } from "../../real_ethereum/chainClock";
 import { createAdminActions } from "./adminActions";
 import { subscribeActiveAuctionRegistry } from "../../real_ethereum/activeAuctionRegistry";
 import { getLivePresence, isPresenceConfigured } from "../../telemetry/presenceClient";
@@ -49,8 +48,13 @@ import {
   joinUrl,
   mapBotConfig,
   mapUserRows,
+  pageAuctionRows,
   toServiceRow,
+  AUCTION_ADMIN_PAGE_SIZE,
 } from "./adminCardData";
+import StatusLabel from "./AuctionStatusLabel";
+import { Countdown, useChainNowSec } from "./AdminCountdown";
+import useAuctionAdminDialogs from "./useAuctionAdminDialogs";
 
 const READ_OPTIONS = { preferInjected: false, allowInjectedFallback: false };
 const PROBE_TIMEOUT_MS = 6000;
@@ -63,7 +67,6 @@ const LIVE_FACTORY_EVENTS = [
   "AuctionCancelled",
   "AuctionHiddenChanged",
 ];
-const AUCTION_ADMIN_LIMIT = 30;
 
 const readLocalBots = () => {
   try {
@@ -614,91 +617,146 @@ export const FaucetCard = () => {
 
 // ---- Auction controls ---------------------------------------------------------------------------
 
-const STATUS_COLOR = { live: "success", ended: "warning", finalized: "default", cancelled: "error" };
+const lowerKey = (address) => String(address ?? "").toLowerCase();
 
 export const AuctionControlsCard = ({ canWrite = false, actions: actionsOverride, reader }) => {
   const actions = useMemo(() => actionsOverride || createAdminActions(), [actionsOverride]);
   const [open, toggle] = useCardState(false);
-  const [state, setState] = useState({ rows: [], loading: false, error: "" });
-  const [pending, setPending] = useState(null); // { type: "minimum" | "cancel", address, value }
+  const [state, setState] = useState({ addresses: [], loading: false, error: "", tick: 0, progress: "" });
+  const [query, setQuery] = useState("");
+  const [appliedQuery, setAppliedQuery] = useState("");
+  const [visible, setVisible] = useState(AUCTION_ADMIN_PAGE_SIZE);
+  const [pending, setPending] = useState(null); // { address, value } for the minimum editor
+  const cacheRef = useRef(new Map());
+  const addressesRef = useRef([]);
   const requestRef = useRef(0);
+  const queryRef = useRef("");
+  const visibleRef = useRef(AUCTION_ADMIN_PAGE_SIZE);
+  queryRef.current = appliedQuery;
+  visibleRef.current = visible;
+  const nowSec = useChainNowSec(open);
 
-  const load = useCallback(async () => {
-    const requestId = ++requestRef.current;
-    setState((current) => ({ ...current, loading: true, error: "" }));
-    try {
-      const options = { ...READ_OPTIONS, factoryAddress: getActiveFactoryAddress() };
-      const rows = reader
-        ? await reader()
-        : await (async () => {
-            const all = await readOnlyCall(({ factory }) => factory.methods.getDeployedCampaigns(), 1, options);
-            const recent = [...all].slice(-AUCTION_ADMIN_LIMIT).reverse();
-            const summaries = await mapWithConcurrency(recent, 4, async (address) => {
-              try {
-                return await readOnlyCall(({ campaign }) => campaign(address).methods.getListSummary(), 1, options);
-              } catch (_) {
-                return null;
-              }
-            });
-            const hidden = await readHiddenSet(recent, { options }).catch(() => new Set());
-            const closed = recent.filter((_, index) => summaries[index]?.[8]);
-            const cancelled = await readCancelledSet(closed, { options });
-            return recent
-              .map((address, index) =>
-                summaries[index]
-                  ? mapAuctionAdminRow({
-                      address,
-                      summary: summaries[index],
-                      cancelled: cancelled.has(address.toLowerCase()),
-                      hidden: hidden.has(address.toLowerCase()),
-                    })
-                  : null
-              )
-              .filter(Boolean);
-          })();
-      if (requestId === requestRef.current) setState({ rows, loading: false, error: "" });
-    } catch (error) {
-      if (requestId === requestRef.current) {
-        setState((current) => ({ ...current, loading: false, error: error?.message || "Could not read auctions." }));
+  useEffect(() => {
+    const timer = window.setTimeout(() => setAppliedQuery(query), 300);
+    return () => window.clearTimeout(timer);
+  }, [query]);
+
+  const readBatch = useCallback(async (batch, options) => {
+    const summaries = await mapWithConcurrency(batch, 4, async (address) => {
+      try {
+        return await readOnlyCall(({ campaign }) => campaign(address).methods.getListSummary(), 1, options);
+      } catch (_) {
+        return null;
       }
-    }
-  }, [reader]);
+    });
+    const hidden = await readHiddenSet(batch, { options }).catch(() => new Set());
+    const closed = batch.filter((_, index) => summaries[index]?.[8]);
+    const cancelled = closed.length ? await readCancelledSet(closed, { options }).catch(() => new Set()) : new Set();
+    batch.forEach((address, index) => {
+      if (!summaries[index]) return;
+      cacheRef.current.set(
+        lowerKey(address),
+        mapAuctionAdminRow({
+          address,
+          summary: summaries[index],
+          cancelled: cancelled.has(lowerKey(address)),
+          hidden: hidden.has(lowerKey(address)),
+        })
+      );
+    });
+  }, []);
+
+  // Newest auctions first, loaded one page at a time. A search needs every description, so it loads the rest.
+  const load = useCallback(
+    async ({ force = false } = {}) => {
+      const requestId = ++requestRef.current;
+      setState((current) => ({ ...current, loading: true, error: "" }));
+      try {
+        if (reader) {
+          const rows = await reader();
+          cacheRef.current = new Map(rows.map((row) => [lowerKey(row.address), row]));
+          addressesRef.current = rows.map((row) => row.address);
+          if (requestId === requestRef.current) {
+            setState((current) => ({ ...current, addresses: addressesRef.current, loading: false, tick: current.tick + 1 }));
+          }
+          return;
+        }
+        const options = { ...READ_OPTIONS, factoryAddress: getActiveFactoryAddress() };
+        if (force || !addressesRef.current.length) {
+          const all = await readOnlyCall(({ factory }) => factory.methods.getDeployedCampaigns(), 1, options);
+          addressesRef.current = [...all].reverse();
+        }
+        if (force) cacheRef.current = new Map();
+        const addresses = addressesRef.current;
+        const wanted = queryRef.current.trim() ? addresses : addresses.slice(0, visibleRef.current);
+        const missing = wanted.filter((address) => !cacheRef.current.has(lowerKey(address)));
+        for (let start = 0; start < missing.length; start += AUCTION_ADMIN_PAGE_SIZE) {
+          if (requestId !== requestRef.current) return;
+          const batch = missing.slice(start, start + AUCTION_ADMIN_PAGE_SIZE);
+          await readBatch(batch, options);
+          if (requestId === requestRef.current) {
+            setState((current) => ({
+              ...current,
+              addresses,
+              tick: current.tick + 1,
+              progress: missing.length > AUCTION_ADMIN_PAGE_SIZE ? `Loaded ${Math.min(start + batch.length, missing.length)} of ${missing.length}...` : "",
+            }));
+          }
+        }
+        if (requestId === requestRef.current) {
+          setState((current) => ({ ...current, addresses, loading: false, progress: "", tick: current.tick + 1 }));
+        }
+      } catch (error) {
+        if (requestId === requestRef.current) {
+          setState((current) => ({ ...current, loading: false, error: error?.message || "Could not read auctions." }));
+        }
+      }
+    },
+    [reader, readBatch]
+  );
 
   useEffect(() => {
     if (open) load();
-  }, [open, load]);
-  useAdminLiveRefresh(() => open && load());
-  const { busy, message, run } = useAdminActionRunner(load);
+  }, [open, load, appliedQuery, visible]);
+  useAdminLiveRefresh(() => open && load({ force: true }));
+  const refresh = useCallback(() => load({ force: true }), [load]);
+  const { busy, message, run } = useAdminActionRunner(refresh);
+  const dialogs = useAuctionAdminDialogs({ actions, canWrite, onChanged: refresh });
 
-  const nowSec = Math.floor(chainNowMs() / 1000);
+  const loadedRows = state.addresses.map((address) => cacheRef.current.get(lowerKey(address))).filter(Boolean);
+  const page = pageAuctionRows({ rows: loadedRows, query: appliedQuery, visible });
+  const searching = Boolean(appliedQuery.trim());
+  const hasMore = searching ? page.hasMore : state.addresses.length > visible;
 
   return (
-    <AdminCard
-      title="Auction controls"
-      open={open}
-      onToggle={toggle}
-      onRefresh={load}
-      loading={state.loading}
-    >
+    <AdminCard title="Auction controls" open={open} onToggle={toggle} onRefresh={refresh} loading={state.loading}>
       <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
-        Edit the minimum bid, close early, cancel (refunds the leader, seller not paid) or hide an auction. Hidden auctions are only hidden in the UI.
+        Edit the minimum bid, close early, cancel (refunds the leader, seller not paid) or hide an auction. Hiding only affects this app's UI; it is not enforced on chain.
       </Typography>
       <WriteNotice canWrite={canWrite} />
       <ErrorLine error={state.error} />
-      <Typography variant="caption" color="text.secondary">
-        Newest {AUCTION_ADMIN_LIMIT} auctions. Auction payloads are never shown here.
+      <TextField
+        size="small"
+        label="Search description or address"
+        value={query}
+        onChange={(event) => setQuery(event.target.value)}
+        sx={{ minWidth: 280, mb: 1 }}
+      />
+      <Typography variant="caption" color="text.secondary" display="block">
+        Newest first. {searching ? `${page.total} match${page.total === 1 ? "" : "es"}. ` : `${state.addresses.length} auctions. `}
+        {state.progress} Auction payloads are never shown here.
       </Typography>
       <div className="tableScrollWrap">
         <Table size="small">
           <TableHead>
             <TableRow>
-              {["Auction", "Status", "Min", "Highest", "Actions"].map((name) => (
+              {["Auction", "Status", "Min", "Highest", "Countdown", "Actions"].map((name) => (
                 <TableCell key={name} sx={adminHeadCellSx}>{name}</TableCell>
               ))}
             </TableRow>
           </TableHead>
           <TableBody>
-            {state.rows.map((row) => {
+            {page.rows.map((row) => {
               const can = getAdminActionAvailability(row, nowSec);
               const disabled = !canWrite || Boolean(busy);
               return (
@@ -707,19 +765,25 @@ export const AuctionControlsCard = ({ canWrite = false, actions: actionsOverride
                     <span style={monoSx} title={row.address}>
                       {shortAddress(row.address)}
                     </span>{" "}
-                    {row.description}
+                    {row.description}{" "}
+                    <Button component={RouterLink} to={`/auction/${row.address}`} size="small">View</Button>
                   </TableCell>
                   <TableCell>
-                    <Chip size="small" label={can.status} color={STATUS_COLOR[can.status]} />{" "}
-                    {row.hidden ? <Chip size="small" label="hidden" variant="outlined" /> : null}
+                    <StatusLabel status={can.status} hidden={row.hidden} />
                   </TableCell>
                   <TableCell sx={monoSx}>{row.minimum}</TableCell>
                   <TableCell sx={monoSx}>{row.highestBid}</TableCell>
                   <TableCell sx={{ whiteSpace: "nowrap" }}>
+                    {can.status === "active" ? <Countdown endTime={row.endTime} nowSec={nowSec} /> : "-"}
+                  </TableCell>
+                  <TableCell sx={{ whiteSpace: "nowrap" }}>
+                    <Button size="small" onClick={() => dialogs.openRecord(row.address)}>
+                      Record
+                    </Button>
                     <Button
                       size="small"
                       disabled={disabled || !can.editMinimum}
-                      onClick={() => setPending({ type: "minimum", address: row.address, value: row.minimum })}
+                      onClick={() => setPending({ address: row.address, value: row.minimum })}
                     >
                       Edit minimum
                     </Button>
@@ -734,7 +798,7 @@ export const AuctionControlsCard = ({ canWrite = false, actions: actionsOverride
                       size="small"
                       color="error"
                       disabled={disabled || !can.cancel}
-                      onClick={() => setPending({ type: "cancel", address: row.address, value: "" })}
+                      onClick={() => dialogs.openCancel(row)}
                     >
                       {can.cancelHidesOnly ? "Cancel (hide only)" : "Cancel"}
                     </Button>
@@ -751,36 +815,41 @@ export const AuctionControlsCard = ({ canWrite = false, actions: actionsOverride
                 </TableRow>
               );
             })}
+            {!page.rows.length && !state.loading ? (
+              <TableRow><TableCell colSpan={6}>{searching ? "No auctions match your search." : "No auctions found."}</TableCell></TableRow>
+            ) : null}
           </TableBody>
         </Table>
       </div>
+      {hasMore ? (
+        <Button size="small" variant="outlined" sx={{ mt: 1, borderRadius: "20px" }} onClick={() => setVisible((value) => value + AUCTION_ADMIN_PAGE_SIZE)}>
+          Load more
+        </Button>
+      ) : null}
       {canWrite && pending ? (
         <Box sx={{ display: "flex", gap: 1, alignItems: "center", mt: 1.5, flexWrap: "wrap" }}>
           <Typography variant="body2">
-            {pending.type === "minimum" ? "New minimum bid" : "Cancellation note (optional, max 500 bytes)"} for{" "}
-            <span style={monoSx}>{shortAddress(pending.address)}</span>:
+            New minimum bid for <span style={monoSx}>{shortAddress(pending.address)}</span>:
           </Typography>
           <TextField
             size="small"
-            label={pending.type === "minimum" ? "Minimum" : "Note"}
+            label="Minimum"
             value={pending.value}
             onChange={(event) => setPending((current) => ({ ...current, value: event.target.value }))}
           />
           <Button
             size="small"
             variant="contained"
-            sx={pending.type === "cancel" ? { borderRadius: "20px" } : adminPrimaryButtonSx}
-            color={pending.type === "cancel" ? "error" : "primary"}
+            sx={adminPrimaryButtonSx}
             disabled={Boolean(busy)}
             onClick={() =>
-              run(pending.type === "minimum" ? "Edit minimum" : "Cancel auction", async () => {
-                if (pending.type === "minimum") await actions.setMinimum(pending.address, pending.value);
-                else await actions.cancelAuction(pending.address, pending.value);
+              run("Edit minimum", async () => {
+                await actions.setMinimum(pending.address, pending.value);
                 setPending(null);
               })
             }
           >
-            {pending.type === "minimum" ? "Save" : "Confirm cancel"}
+            Save
           </Button>
           <Button size="small" onClick={() => setPending(null)}>
             Back
@@ -788,6 +857,7 @@ export const AuctionControlsCard = ({ canWrite = false, actions: actionsOverride
         </Box>
       ) : null}
       <ActionMessage message={message} />
+      {dialogs.dialogs}
     </AdminCard>
   );
 };

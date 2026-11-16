@@ -28,6 +28,7 @@ jest.mock("../../telemetry/presenceClient", () => ({ getLivePresence: jest.fn(),
 
 // eslint-disable-next-line import/first
 import { MemoryRouter } from "react-router-dom";
+// eslint-disable-next-line import/first
 import { AdminOpsCards, AdminsCard, AuctionControlsCard, MarketSettingsCard } from "./AdminOpsCards";
 
 const A1 = "0x1111111111111111111111111111111111111111";
@@ -42,16 +43,21 @@ const summary = ({ min = 10, bidder = ZERO, end = NOW + 600, closed = false } = 
 describe("pure admin row logic", () => {
   test("status and available actions mirror the contract preconditions", () => {
     const live = mapAuctionAdminRow({ address: A1, summary: summary() });
-    expect(getAdminActionAvailability(live, NOW)).toMatchObject({ status: "live", editMinimum: true, closeNow: true, cancel: true });
+    expect(getAdminActionAvailability(live, NOW)).toMatchObject({ status: "active", editMinimum: true, closeNow: true, cancel: true });
 
     const bid = mapAuctionAdminRow({ address: A1, summary: summary({ bidder: A2 }) });
     expect(getAdminActionAvailability(bid, NOW)).toMatchObject({ editMinimum: false, closeNow: true });
 
     const ended = mapAuctionAdminRow({ address: A1, summary: summary({ end: NOW - 1 }) });
-    expect(getAdminActionAvailability(ended, NOW)).toMatchObject({ status: "ended", editMinimum: false, closeNow: false, cancel: true });
+    // ended without bids counts as unsold; ended with bids waits for finalization
+    expect(getAdminActionAvailability(ended, NOW)).toMatchObject({ status: "unsold", editMinimum: false, closeNow: false, cancel: true });
+    const endedWithBid = mapAuctionAdminRow({ address: A1, summary: summary({ end: NOW - 1, bidder: A2 }) });
+    expect(getAdminActionAvailability(endedWithBid, NOW)).toMatchObject({ status: "ended", closeNow: false, cancel: true });
 
-    const finalized = mapAuctionAdminRow({ address: A1, summary: summary({ end: NOW - 1, closed: true }) });
-    expect(getAdminActionAvailability(finalized, NOW)).toMatchObject({ status: "finalized", cancel: true, cancelHidesOnly: true });
+    const sold = mapAuctionAdminRow({ address: A1, summary: summary({ end: NOW - 1, closed: true, bidder: A2 }) });
+    expect(getAdminActionAvailability(sold, NOW)).toMatchObject({ status: "sold", cancel: true, cancelHidesOnly: true });
+    const unsold = mapAuctionAdminRow({ address: A1, summary: summary({ end: NOW - 1, closed: true }) });
+    expect(getAdminActionAvailability(unsold, NOW)).toMatchObject({ status: "unsold", cancelHidesOnly: true });
 
     const cancelled = mapAuctionAdminRow({ address: A1, summary: summary({ closed: true }), cancelled: true });
     expect(getAuctionAdminStatus(cancelled, NOW)).toBe("cancelled");
@@ -131,22 +137,30 @@ const openCard = async (title) => {
   fireEvent.click(screen.getByRole("button", { name: new RegExp(`Expand ${title}`, "i") }));
 };
 
+const renderControls = ({ canWrite, actions }) =>
+  render(
+    <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <AuctionControlsCard canWrite={canWrite} actions={actions} reader={rowsReader()} />
+    </MemoryRouter>
+  );
+
 describe("Auction controls card", () => {
   test("non-admin: every write button is disabled and a read-only notice shows", async () => {
     const actions = makeActions();
-    render(<AuctionControlsCard canWrite={false} actions={actions} reader={rowsReader()} />);
+    renderControls({ canWrite: false, actions });
     await openCard("Auction controls");
     await waitFor(() => expect(screen.getByTestId(`auction-row-${A1}`)).toBeInTheDocument());
     expect(screen.getByTestId("admin-write-disabled")).toBeInTheDocument();
     within(screen.getByTestId(`auction-row-${A1}`))
       .getAllByRole("button")
+      .filter((button) => button.textContent !== "Record") // viewing the record is read-only
       .forEach((button) => expect(button).toBeDisabled());
     expect(actions.closeNow).not.toHaveBeenCalled();
   });
 
   test("admin: edit minimum, close now, hide/unhide and cancel with a note call the contract actions", async () => {
     const actions = makeActions();
-    render(<AuctionControlsCard canWrite actions={actions} reader={rowsReader()} />);
+    renderControls({ canWrite: true, actions });
     await openCard("Auction controls");
     const row1 = await screen.findByTestId(`auction-row-${A1}`);
 
@@ -172,15 +186,16 @@ describe("Auction controls card", () => {
     await screen.findByText("Unhide: done");
 
     fireEvent.click(within(row2).getByRole("button", { name: "Cancel" }));
-    fireEvent.change(screen.getByLabelText("Note"), { target: { value: "wrong data" } });
-    fireEvent.click(screen.getByRole("button", { name: "Confirm cancel" }));
+    expect(await screen.findByText("Cancel auction?")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Note (optional)"), { target: { value: "wrong data" } });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel auction" }));
     await waitFor(() => expect(actions.cancelAuction).toHaveBeenCalledWith(A2, "wrong data"));
   });
 
   test("a failed transaction is reported, not swallowed", async () => {
     const actions = makeActions();
     actions.closeNow.mockRejectedValueOnce(new Error("Only admin"));
-    render(<AuctionControlsCard canWrite actions={actions} reader={rowsReader()} />);
+    renderControls({ canWrite: true, actions });
     await openCard("Auction controls");
     const row1 = await screen.findByTestId(`auction-row-${A1}`);
     fireEvent.click(within(row1).getByRole("button", { name: "Close now" }));

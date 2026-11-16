@@ -44,6 +44,7 @@ import {
 import { ADMIN_GATE_NOTE } from "./adminGate";
 import { AdminGatePrompt, useAdminAccess } from "./useAdminAccess";
 import AdminCard, { AdminRefreshButton } from "./AdminCard";
+import ActiveAuctionListCard from "./ActiveAuctionListCard";
 import {
   AdminsCard,
   ArchitectureCard,
@@ -2224,7 +2225,7 @@ const ManageBudgetPage = () => {
               )}
             </AdminCard>
 
-            {/*SLOT:active-list*/}
+            <ActiveAuctionListCard canWrite={Boolean(adminAccess.canWrite)} />
             {/*SLOT:history*/}
             <AdminCard
               title="Auction Reports"

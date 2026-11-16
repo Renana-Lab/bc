@@ -49,6 +49,13 @@ import { pickAuctionToFinalize, resolveFinalizeOutcome } from "./listFinalize";
 import { auctionBadges, filterHiddenAuctions, useAuctionAdminFlags } from "./auctionAdminFlags";
 import { chainNowMs, useChainClockSync } from "../../real_ethereum/chainClock";
 import { AuctionCountdown, LastUpdatedLabel } from "./AuctionLiveValues";
+import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
+import StopIcon from "@mui/icons-material/Stop";
+import StorageOutlinedIcon from "@mui/icons-material/StorageOutlined";
+import AdminIconAction from "../ManageBudget/AdminIconAction";
+import StatusLabel from "../ManageBudget/AuctionStatusLabel";
+import { getAdminActionAvailability } from "../ManageBudget/adminCardData";
+import useAuctionAdminDialogs from "../ManageBudget/useAuctionAdminDialogs";
 import styles from "./auctions.module.scss";
 import picSrc from "./Illustration_Start.png";
 
@@ -367,6 +374,7 @@ export const AuctionTableRow = React.memo(function AuctionTableRow({
   onOpen,
   hidden = false,
   cancelled = false,
+  adminTools = null,
 }) {
   const auctionOpen = !cancelled && Number(auction.endTime) > boundaryClock;
   const userWon = !cancelled && !auctionOpen && addressMatches(auction.highestBidder, currentUserAddress);
@@ -398,6 +406,23 @@ export const AuctionTableRow = React.memo(function AuctionTableRow({
     }
   }
 
+  // On-chain admins get the marketplace admin icons; participants never see them.
+  const adminRow = adminTools && !auction.isReadPlaceholder
+    ? {
+        closed: Boolean(auction.closed),
+        endTime: Number(auction.endTime) / 1000,
+        hasBids: Number(auction.approversCount) > 0,
+        cancelled,
+        hidden,
+      }
+    : null;
+  const adminCan = adminRow ? getAdminActionAvailability(adminRow, boundaryClock / 1000) : null;
+  const adminStatus = adminCan?.status;
+  const stop = (handler) => (event) => {
+    event.stopPropagation();
+    handler();
+  };
+
   const backgroundColor = userWon
     ? "#90EE90"
     : auctionOpen
@@ -426,11 +451,15 @@ export const AuctionTableRow = React.memo(function AuctionTableRow({
     >
       <TableCell sx={fontSx} align="center">
         {auction.isReadPlaceholder ? <LoadingAuctionLabel /> : auction.dataDescription}
-        {auctionBadges({ hidden, cancelled }).map((badge) => (
-          <strong key={badge} data-testid={`auction-badge-${badge.toLowerCase()}`} style={{ marginLeft: 8, fontSize: 11 }}>
-            [{badge}]
-          </strong>
-        ))}
+        {adminTools && !auction.isReadPlaceholder ? (
+          <StatusLabel status={adminStatus} hidden={hidden} />
+        ) : (
+          auctionBadges({ hidden, cancelled }).map((badge) => (
+            <strong key={badge} data-testid={`auction-badge-${badge.toLowerCase()}`} style={{ marginLeft: 8, fontSize: 11 }}>
+              [{badge}]
+            </strong>
+          ))
+        )}
       </TableCell>
       <TableCell align="center" sx={fontSx}>
         <span className={styles.dateCell}>
@@ -477,6 +506,27 @@ export const AuctionTableRow = React.memo(function AuctionTableRow({
           {userWon ? "View Data" : "View Auction"}
         </Button>
         </Tooltip>
+        {adminCan ? (
+          <span style={{ whiteSpace: "nowrap" }} data-testid="auction-admin-actions">
+            <AdminIconAction title={`Manage record: ${auction.dataDescription}`} onClick={stop(() => adminTools.openRecord(auction.address))}>
+              <StorageOutlinedIcon fontSize="small" />
+            </AdminIconAction>
+            <AdminIconAction
+              title={`Cancel auction: ${auction.dataDescription}`}
+              disabled={!adminTools.canWrite || !adminCan.cancel}
+              onClick={stop(() => adminTools.openCancel({ address: auction.address, description: auction.dataDescription }))}
+            >
+              <DeleteOutlineIcon color={adminTools.canWrite && adminCan.cancel ? "error" : "disabled"} />
+            </AdminIconAction>
+            <AdminIconAction
+              title="Close auction early"
+              disabled={!adminTools.canWrite || !adminCan.closeNow}
+              onClick={stop(() => adminTools.closeEarly(auction.address))}
+            >
+              <StopIcon color={adminTools.canWrite && adminCan.closeNow ? "error" : "disabled"} />
+            </AdminIconAction>
+          </span>
+        ) : null}
       </TableCell>
     </TableRow>
   );
@@ -1264,6 +1314,13 @@ function AuctionsListPage() {
   );
   const currentUserAddress = connectedAccount;
   const adminFlags = useAuctionAdminFlags(auctionsList);
+  const refreshAfterAdminChange = useCallback(() => fetchAuctionsListRef.current?.(), []);
+  const adminDialogs = useAuctionAdminDialogs({ canWrite: adminFlags.isAdmin, onChanged: refreshAfterAdminChange });
+  const { openRecord, openCancel, closeEarly } = adminDialogs;
+  const adminTools = useMemo(
+    () => (adminFlags.isAdmin ? { canWrite: true, openRecord, openCancel, closeEarly } : null),
+    [adminFlags.isAdmin, openRecord, openCancel, closeEarly],
+  );
   // Hidden auctions are removed from every derived view below for non-admins.
   const viewableAuctions = useMemo(
     () => filterHiddenAuctions(auctionsList, adminFlags.hidden, adminFlags.isAdmin),
@@ -2084,6 +2141,7 @@ function AuctionsListPage() {
                     onOpen={handleOpenAuction}
                     hidden={adminFlags.hidden.has(String(auction.address).toLowerCase())}
                     cancelled={adminFlags.cancelled.has(String(auction.address).toLowerCase())}
+                    adminTools={adminTools}
                   />
                 ))}
               </TableBody>
@@ -2119,6 +2177,7 @@ function AuctionsListPage() {
           </TableContainer>
         )}
       </div>
+      {adminDialogs.dialogs}
     </Layout>
   );
 }
