@@ -1,4 +1,4 @@
-import { pickAuctionToFinalize } from "./listFinalize";
+import { pickAuctionToFinalize, resolveFinalizeOutcome } from "./listFinalize";
 
 const me = "0x00000000000000000000000000000000000000bb";
 const other = "0x00000000000000000000000000000000000000cc";
@@ -43,4 +43,44 @@ test("a not-ended retry is picked only once due and below 3 attempts", () => {
   expect(pick(list, { records: new Map([["0xa", { attempts: 1, retryAtMs: NOW + 1 }]]) })).toBeNull();
   expect(pick(list, { records: new Map([["0xa", { attempts: 1, retryAtMs: NOW }]]) }).address).toBe("0xa");
   expect(pick(list, { records: new Map([["0xa", { attempts: 3, retryAtMs: NOW - 1 }]]) })).toBeNull();
+});
+
+describe("resolveFinalizeOutcome (list not-ended retry)", () => {
+  const endTimeMs = 1_000_000;
+  test("a not-ended result schedules a retry at endTime + 3 s per attempt", () => {
+    const out = resolveFinalizeOutcome({ result: { finalized: false, reason: "not-ended" }, attempts: 1, endTimeMs });
+    expect(out).toEqual({ record: { attempts: 1, retryAtMs: endTimeMs + 3000 }, refreshList: false });
+    expect(resolveFinalizeOutcome({ result: { finalized: false, reason: "not-ended" }, attempts: 2, endTimeMs }).record.retryAtMs)
+      .toBe(endTimeMs + 6000);
+  });
+
+  test("a not-ended revert is retried the same way", () => {
+    const out = resolveFinalizeOutcome({ error: new Error("execution reverted: Auction not ended yet"), attempts: 1, endTimeMs });
+    expect(out.record.retryAtMs).toBe(endTimeMs + 3000);
+    expect(out.refreshList).toBe(false);
+  });
+
+  test("after 3 attempts there is no further retry", () => {
+    const out = resolveFinalizeOutcome({ result: { finalized: false, reason: "not-ended" }, attempts: 3, endTimeMs });
+    expect(out.record).toEqual({ attempts: 3, retryAtMs: null });
+  });
+
+  test("success reloads the list; other results and errors are final and silent", () => {
+    expect(resolveFinalizeOutcome({ result: { finalized: true, reason: "finalized" }, attempts: 1, endTimeMs }))
+      .toEqual({ record: { attempts: 1, retryAtMs: null }, refreshList: true });
+    expect(resolveFinalizeOutcome({ result: { finalized: false, reason: "already-closed" }, attempts: 1, endTimeMs }).refreshList).toBe(false);
+    expect(resolveFinalizeOutcome({ error: new Error("insufficient funds"), attempts: 1, endTimeMs }))
+      .toEqual({ record: { attempts: 1, retryAtMs: null }, refreshList: false });
+  });
+
+  test("a due retry is picked again by pickAuctionToFinalize, a final record is not", () => {
+    const me = "0x00000000000000000000000000000000000000bb";
+    const list = [{ address: "0xa", endTime: endTimeMs - 1, closed: false, manager: me, addresses: [] }];
+    const { record } = resolveFinalizeOutcomeOnce();
+    function resolveFinalizeOutcomeOnce() { return resolveFinalizeOutcome({ result: { finalized: false, reason: "not-ended" }, attempts: 1, endTimeMs }); }
+    const records = new Map([["0xa", record]]);
+    const pick = (nowMs) => pickAuctionToFinalize({ auctions: list, account: me, nowMs, records, inFlight: false });
+    expect(pick(endTimeMs + 2999)).toBeNull();
+    expect(pick(endTimeMs + 3000).address).toBe("0xa");
+  });
 });

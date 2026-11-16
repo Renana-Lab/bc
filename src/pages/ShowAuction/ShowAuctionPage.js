@@ -262,7 +262,7 @@ const reducer = (state, action) => {
   }
 };
 
-function ShowAuctionPage() {
+function AuctionPageContent() {
   // Admin = wallet on the public allowlist that signed the Admin Zone gate this session (UI only).
   const { isAdmin: isAdminViewer } = useAdminAccess();
   const [exportingCsv, setExportingCsv] = useState(false);
@@ -667,13 +667,6 @@ function ShowAuctionPage() {
       setAutoFinalize({ status: "failed", error: describeFinalizeError(err) });
     }
   };
-
-  // Per-auction UI state must not leak when the route changes to another auction.
-  useEffect(() => {
-    setAutoFinalize({ status: "idle", error: "" });
-    setAutoRefund({ status: "idle", error: "" });
-    setWinnerData({ status: "idle", error: "" });
-  }, [address]);
 
   useEffect(() => {
     unmountedRef.current = false;
@@ -1307,6 +1300,13 @@ function ShowAuctionPage() {
       )}
     </Layout>
   );
+}
+
+// Keyed by address so every per-auction state (finalize, refund, winner data, reducer) is
+// discarded when the route moves to another auction.
+function ShowAuctionPage() {
+  const { address } = useParams();
+  return <AuctionPageContent key={address} />;
 }
 
 export default ShowAuctionPage;

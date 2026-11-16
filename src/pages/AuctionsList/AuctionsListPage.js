@@ -42,12 +42,8 @@ import { getWalletSessionAccount, subscribeToWalletSession } from "../../telemet
 import Layout from "../../components/Layout";
 import { preserveAuctionUserState } from "./auctionVisualState";
 import { finalizeAuctionIfReady } from "../../real_ethereum/autoFinalize";
-import {
-  MAX_FINALIZE_ATTEMPTS,
-  isNotEndedRevert,
-  nextFinalizeAttemptAtMs,
-} from "../../real_ethereum/finalizeRetry";
-import { pickAuctionToFinalize } from "./listFinalize";
+import { MAX_FINALIZE_ATTEMPTS } from "../../real_ethereum/finalizeRetry";
+import { pickAuctionToFinalize, resolveFinalizeOutcome } from "./listFinalize";
 import { chainNowMs, useChainClockSync } from "../../real_ethereum/chainClock";
 import { AuctionCountdown, LastUpdatedLabel } from "./AuctionLiveValues";
 import styles from "./auctions.module.scss";
@@ -1544,26 +1540,23 @@ function AuctionsListPage() {
     const attempts = (finalizeRecordsThisSession.get(key)?.attempts || 0) + 1;
     finalizeRecordsThisSession.set(key, { attempts, retryAtMs: null });
     finalizeInFlight = true;
-    const scheduleNotEndedRetry = () => {
-      if (attempts >= MAX_FINALIZE_ATTEMPTS) return;
-      finalizeRecordsThisSession.set(key, {
+    const settle = (outcome) => {
+      const { record, refreshList } = resolveFinalizeOutcome({
+        ...outcome,
         attempts,
-        retryAtMs: nextFinalizeAttemptAtMs(Number(candidate.endTime) / 1000, attempts),
+        endTimeMs: candidate.endTime,
       });
-    };
-    finalizeAuctionIfReady(candidate.address, connectedAccount)
-      .then((result) => {
-        // "not-ended": our chain clock ran ahead of the block; same retry path as the revert.
-        if (result?.reason === "not-ended") return scheduleNotEndedRetry();
-        if (!result?.finalized) return;
+      finalizeRecordsThisSession.set(key, record);
+      if (refreshList) {
         invalidateAuctionCaches();
         fetchAuctionsListRef.current?.();
-      })
-      .catch((error) => {
-        // Only "not ended yet" is retried (chain time, endTime + 3 s, max 3 attempts); other
-        // failures stay silent here and the auction page explains them.
-        if (isNotEndedRevert(error)) scheduleNotEndedRetry();
-      })
+      }
+    };
+    finalizeAuctionIfReady(candidate.address, connectedAccount)
+      // "not-ended" (clock ahead of the block) and a not-ended revert both retry; other failures
+      // stay silent here and the auction page explains them.
+      .then((result) => settle({ result }))
+      .catch((error) => settle({ error }))
       .finally(() => {
         finalizeInFlight = false;
         setFinalizeTick((n) => n + 1);

@@ -271,9 +271,19 @@ test("a non-retryable failure offers the Finalize button without retrying", asyn
   expect(screen.getByRole("button", { name: "Finalize" })).toBeTruthy();
 });
 
-test("finalize/refund/winner state does not leak to another auction when the address changes", async () => {
+test("per-auction state does not leak when the address changes (distinct banners per auction)", async () => {
   getEthereumAccounts.mockResolvedValue([loser]);
-  mockChain({ endOffsetSec: -60, userBid: "10" });
+  // 0xabc ended and its finalize fails; 0xdef is still running, so it must show no finalize banner at all.
+  const ends = { "0xabc": -60, "0xdef": 600 };
+  readOnlyCall.mockImplementation(async (fn) => {
+    let address;
+    const spec = fn({ campaign: (a) => { address = a; return { methods: new Proxy({}, { get: (_, method) => () => ({ method }) }) }; } });
+    const endTime = Math.floor(Date.now() / 1000) + ends[address];
+    if (spec.method === "getListSummary") return ["1", "0", "2", seller, "50", "desc", winner, String(endTime), false];
+    if (spec.method === "getTransactions") return [];
+    if (spec.method === "getUserAuctionStatus") return [true, "10", false];
+    return null;
+  });
   finalizeAuctionIfReady.mockRejectedValue(new Error("Transaction has been reverted by the EVM"));
   render(
     <MemoryRouter initialEntries={["/auction/0xabc"]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
@@ -282,11 +292,25 @@ test("finalize/refund/winner state does not leak to another auction when the add
     </MemoryRouter>,
   );
   await flush();
+  expect(screen.getByRole("alert").textContent).toMatch(/Could not finalize the auction automatically/);
   expect(screen.getByRole("button", { name: "Finalize" })).toBeTruthy();
-  finalizeAuctionIfReady.mockReturnValue(new Promise(() => {}));
   fireEvent.click(screen.getByRole("button", { name: "to-other" }));
   await flush();
-  // The old failure banner is gone; the new auction starts its own finalize ("pending").
+  expect(screen.getByText("Bid form")).toBeTruthy(); // the running auction 0xdef is shown
   expect(screen.queryByRole("alert")).toBeNull();
-  expect(screen.getByText("Finalizing auction...")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Finalize" })).toBeNull();
+  expect(finalizeAuctionIfReady).toHaveBeenCalledTimes(1); // 0xdef is not finalized
 });
+
+test.each([["winner", winner, "50"], ["seller", seller, "0"]])(
+  "the %s never triggers withdrawRefund",
+  async (_role, account, userBid) => {
+    getEthereumAccounts.mockResolvedValue([account]);
+    mockChain({ endOffsetSec: -60, closed: true, userBid });
+    readWinnerData.mockResolvedValue("data");
+    renderPage(); await flush();
+    await advance(60000);
+    expect(mockWithdraw).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Claim refund now" })).toBeNull();
+  },
+);

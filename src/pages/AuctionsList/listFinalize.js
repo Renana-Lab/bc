@@ -1,4 +1,8 @@
-import { MAX_FINALIZE_ATTEMPTS } from "../../real_ethereum/finalizeRetry";
+import {
+  MAX_FINALIZE_ATTEMPTS,
+  isNotEndedRevert,
+  nextFinalizeAttemptAtMs,
+} from "../../real_ethereum/finalizeRetry";
 
 const same = (left, right) =>
   Boolean(left && right) && String(left).toLowerCase() === String(right).toLowerCase();
@@ -28,4 +32,25 @@ export const pickAuctionToFinalize = ({ auctions, account, nowMs, records, inFli
       );
     }) || null
   );
+};
+
+// Turns the outcome of one list-page finalize attempt into what to remember and whether to reload.
+// Returns { record, refreshList }: record is the session record to store (retryAtMs set only for a
+// not-ended outcome with attempts left; chain time endTime + 3 s per attempt), refreshList says the
+// auction was finalized and the list must reload. Pass `result` on success or `error` on failure.
+export const resolveFinalizeOutcome = ({ result, error, attempts, endTimeMs }) => {
+  const notEnded = error ? isNotEndedRevert(error) : result?.reason === "not-ended";
+  if (notEnded) {
+    return {
+      record: {
+        attempts,
+        retryAtMs:
+          attempts < MAX_FINALIZE_ATTEMPTS
+            ? nextFinalizeAttemptAtMs(Number(endTimeMs) / 1000, attempts)
+            : null,
+      },
+      refreshList: false,
+    };
+  }
+  return { record: { attempts, retryAtMs: null }, refreshList: !error && Boolean(result?.finalized) };
 };
