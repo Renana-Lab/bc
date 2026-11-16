@@ -46,6 +46,7 @@ import { AdminGatePrompt, useAdminAccess } from "./useAdminAccess";
 import AdminCard, { AdminRefreshButton } from "./AdminCard";
 import ActiveAuctionListCard from "./ActiveAuctionListCard";
 import AuctionListHistoryCard from "./AuctionListHistoryCard";
+import { loadReportChainData } from "./reportChainData";
 import {
   AdminsCard,
   ArchitectureCard,
@@ -108,6 +109,16 @@ const REPORT_SECTION_OPTIONS = [
     key: "summary",
     label: "Auction Summary",
     description: "One clean row per auction contract.",
+  },
+  {
+    key: "users",
+    label: "Users and budget history",
+    description: "Every wallet with role, budget, held funds and last budget change.",
+  },
+  {
+    key: "audit",
+    label: "Audit events",
+    description: "Factory and campaign events: admin actions, budgets and payments.",
   },
   {
     key: "bids",
@@ -1361,8 +1372,19 @@ const ManageBudgetPage = () => {
         listStateRows = toAuctionListStateRows(listHistory, listStateRange);
       }
 
+      const chainData = await loadReportChainData({
+        reports: cleanReports,
+        wantUsers: Boolean(reportSections.users),
+        wantAudit: Boolean(reportSections.audit),
+        wantStatus: Boolean(reportSections.summary),
+      });
+      chainData.warnings.forEach((warning) => toast(warning));
+
       const exportReportOptions = {
         ...reportOptions,
+        userHistoryRows: chainData.userHistoryRows,
+        auditRows: chainData.auditRows,
+        cancelledAddresses: chainData.cancelledAddresses,
         activityRows,
         activityRange,
         listStateRows,
