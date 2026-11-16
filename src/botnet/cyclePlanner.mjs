@@ -110,10 +110,6 @@ export const allocateCycleCandidates = ({
   random = Math.random,
 } = {}) => {
   const orderedAuctions = [...auctions];
-  for (let index = orderedAuctions.length - 1; index > 0; index -= 1) {
-    const swap = Math.floor(random() * (index + 1));
-    [orderedAuctions[index], orderedAuctions[swap]] = [orderedAuctions[swap], orderedAuctions[index]];
-  }
   const rankings = new Map();
   const rankFor = (strategy = {}) => {
     const key = String(strategy.outbidByWei || 0);
@@ -125,6 +121,30 @@ export const allocateCycleCandidates = ({
       }));
     }
     return rankings.get(key);
+  };
+  // Determine the minimum before excluding reservations. A busy cheapest
+  // auction is a reason to wait, never a reason to bid on a dearer one.
+  const cheapestByBot = new Map();
+  const cheapestFor = (bot) => {
+    if (cheapestByBot.has(bot.id)) return cheapestByBot.get(bot.id);
+    const tied = [];
+    let minimum = null;
+    for (const auction of rankFor(bot.strategy)) {
+      const price = getTargetBid(auction, bot.strategy);
+      if (minimum !== null && price > minimum) break;
+      if (!normalizeAddress(auction.address)) continue;
+      candidatesEvaluated += 1;
+      if (!isStaticallyEligible(auction, bot, nowSec)) continue;
+      minimum = price;
+      tied.push(auction);
+    }
+    // Shuffle only the eligible minimum-price group, not the whole market.
+    for (let index = tied.length - 1; index > 0; index -= 1) {
+      const swap = Math.floor(random() * (index + 1));
+      [tied[index], tied[swap]] = [tied[swap], tied[index]];
+    }
+    cheapestByBot.set(bot.id, tied);
+    return tied;
   };
   const orderedBots = rotate(bots, cursor);
   const reserved = new Set();
@@ -141,7 +161,7 @@ export const allocateCycleCandidates = ({
       if (kind === "primary" && slotIndex >= limit) continue;
       if (kind === "reserve" && slotIndex >= limit * Math.max(0, reservePerSlot)) continue;
 
-      const botAuctions = rankFor(bot.strategy);
+      const botAuctions = cheapestFor(bot);
       let candidate = null;
       for (const auction of botAuctions) {
         const key = normalizeAddress(auction.address);

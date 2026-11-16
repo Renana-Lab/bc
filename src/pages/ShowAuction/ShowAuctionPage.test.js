@@ -81,3 +81,25 @@ test("a non-participant sees a plain ended message once the auction is closed", 
   renderPage(); await flush();
   expect(screen.getByText("This auction has ended.")).toBeTruthy();
 });
+
+test("highest bidder and bidding history show configured bidder names", async () => {
+  const bot = "0x00000000000000000000000000000000000000cc";
+  process.env.REACT_APP_BIDDER_NAMES = JSON.stringify({ [bot]: "Bot Carol" });
+  readOnlyCall.mockImplementation(async (fn) => {
+    const spec = fn({ campaign: () => ({ methods: new Proxy({}, { get: (_, method) => () => ({ method }) }) }) });
+    const method = spec?.method;
+    if (method === "getListSummary") {
+      return ["1", "0", "1", manager, "5", "desc", bot, String(Math.floor(Date.now() / 1000) - 600), true];
+    }
+    if (method === "getTransactions") return [{ bidderAddress: bot, value: "5", time: "1" }];
+    if (method === "getUserAuctionStatus") return [false, "0", false];
+    return null;
+  });
+  getEthereumAccounts.mockResolvedValue([manager]);
+  renderPage(); await flush();
+  await act(async () => { screen.getByText("Display Bidding History").click(); });
+  expect(screen.getAllByText(/Bot Carol/).length).toBeGreaterThan(0);
+  expect(screen.queryByText(bot)).toBeNull();
+  expect(screen.getByText("Bidder Identifier")).toBeTruthy();
+  delete process.env.REACT_APP_BIDDER_NAMES;
+});
