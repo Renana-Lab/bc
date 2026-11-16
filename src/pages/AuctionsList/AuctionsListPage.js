@@ -1,3 +1,4 @@
+/* eslint-env es2020 */
 import React, {
   useState,
   useEffect,

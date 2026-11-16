@@ -45,6 +45,7 @@
     "start": "vite",
     "start:cra": "react-scripts start",
     "build": "react-scripts build",
+    "build:ci": "CI=true react-scripts build",
     "test": "react-scripts test",
     "auto-finalize": "node scripts/autoFinalizeAuctions.js --once",
     "auto-finalize:watch": "node scripts/autoFinalizeAuctions.js",
@@ -71,6 +72,9 @@
     "faucet:test:flow": "node --test scripts/faucet/faucetFlow.test.mjs"
   },
   "eslintConfig": {
+    "env": {
+      "es2020": true
+    },
     "extends": [
       "react-app",
       "react-app/jest"
