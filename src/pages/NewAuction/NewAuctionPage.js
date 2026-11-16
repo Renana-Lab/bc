@@ -13,7 +13,7 @@ import {
   getMarketOptions,
   subscribeToMarketChanges,
 } from "../../real_ethereum/marketConfig";
-import { registerCreatedAuctionReceipt } from "../../real_ethereum/activeAuctionRegistry";
+import { getCreatedAuctionAddress, registerCreatedAuctionReceipt } from "../../real_ethereum/activeAuctionRegistry";
 import styles from "./new.module.scss";
 import {
   Box,
@@ -27,44 +27,18 @@ import { faQuestionCircle } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import toast from "react-hot-toast";
 import picSrc from "./Illustration_Create.png";
+import { useAdminAccess } from "../ManageBudget/useAdminAccess";
+import {
+  DEFAULT_DURATION,
+  DESCRIPTION_MAX_CHARS,
+  DURATION_MAX,
+  MIN_BID_MAX,
+  PAYLOAD_MAX_BYTES,
+  utf8ByteLength,
+  validateAuctionForm,
+} from "./auctionLimits";
+import { getWalletCopy } from "../../real_ethereum/wallets/walletCopy";
 import "./new.module.scss";
-
-const isWholeNumber = (value) => /^\d+$/.test(String(value || ""));
-const isPositiveWholeNumber = (value) =>
-  isWholeNumber(value) && BigInt(value) > 0n;
-
-const getAuctionValidationError = (auction, label = "Auction") => {
-  if (!isPositiveWholeNumber(auction.minimumContribution)) {
-    return `${label}: minimum bid must be a positive whole number.`;
-  }
-
-  if (
-    !isWholeNumber(auction.auctionDuration) ||
-    Number(auction.auctionDuration) < 1 ||
-    Number(auction.auctionDuration) > 30
-  ) {
-    return `${label}: duration must be a whole number between 1 and 30.`;
-  }
-
-  if (!auction.dataForSell.trim()) {
-    return `${label}: data for sale cannot be empty.`;
-  }
-
-  if (!auction.dataDescription.trim()) {
-    return `${label}: description cannot be empty.`;
-  }
-
-  return "";
-};
-
-const validateAuctionInput = (auction, label = "Auction") => {
-  const error = getAuctionValidationError(auction, label);
-  if (error) {
-    toast.error(error);
-    return false;
-  }
-  return true;
-};
 
 const requestConnectedAccount = async () => {
   let accounts = await requestEthereumAccounts();
@@ -84,25 +58,28 @@ const getTransactionErrorMessage = (err) => {
   const message = JSON.stringify(err?.message || err || "");
 
   if (message.includes("replacement transaction underpriced")) {
-    return "MetaMask has a pending transaction. Wait for it, or speed/cancel it in Activity.";
+    return getWalletCopy().txPending;
   }
   if (
     message.includes("User denied") ||
     message.includes("User rejected") ||
     message.includes("4001")
   ) {
-    return "Transaction rejected in MetaMask.";
+    return getWalletCopy().txRejected;
   }
   return "Transaction failed. Please try again.";
 };
 
 function NewAuctionPage() {
   const [formData, setFormData] = useState({
-    minimumContribution: "",
-    auctionDuration: "",
-    dataForSell: "",
     dataDescription: "",
+    dataForSell: "",
+    minimumContribution: "",
+    auctionDuration: DEFAULT_DURATION,
   });
+  const [errors, setErrors] = useState({});
+  // The factory-address panel is an operator detail: admins only (UI gate).
+  const { isAdmin } = useAdminAccess();
   const [explanation, setExplanation] = useState(null);
   const [loading, setLoading] = useState(false);
   const [activeMarket, setActiveMarketState] = useState(getActiveMarket());
@@ -115,7 +92,7 @@ function NewAuctionPage() {
 
     waitForEthereumProvider().then((provider) => {
       if (!cancelled && !provider) {
-        navigate("/"); // Redirect away if no MetaMask
+        navigate("/"); // Redirect away if no wallet is available
       }
     });
 
@@ -141,6 +118,7 @@ function NewAuctionPage() {
     }
 
     setFormData((prev) => ({ ...prev, [name]: value }));
+    setErrors((prev) => (prev[name] ? { ...prev, [name]: "" } : prev));
   };
 
   const handleTooltip = (field) => {
@@ -148,7 +126,9 @@ function NewAuctionPage() {
   };
 
   const validateForm = useCallback(() => {
-    return validateAuctionInput(formData, "Auction");
+    const found = validateAuctionForm(formData);
+    setErrors(found);
+    return Object.keys(found).length === 0;
   }, [formData]);
 
   const handleSubmit = useCallback(
@@ -167,7 +147,7 @@ function NewAuctionPage() {
           .createCampaign(
             formData.minimumContribution,
             formData.dataForSell,
-            formData.dataDescription,
+            formData.dataDescription.trim(),
             formData.auctionDuration
           )
           .send({ from: account });
@@ -186,7 +166,8 @@ function NewAuctionPage() {
         );
 
         toast.success("🎉 Auction created successfully!", { id: toastId });
-        navigate("/auctions-list");
+        const createdAddress = getCreatedAuctionAddress(receipt);
+        navigate(createdAddress ? `/auction/${createdAddress}` : "/auctions-list");
       } catch (err) {
         console.error("Auction creation failed:", err);
         toast.error(getTransactionErrorMessage(err), { id: toastId });
@@ -198,7 +179,7 @@ function NewAuctionPage() {
     [activeMarket.address, formData, navigate, validateForm]
   );
 
-  const renderTooltip = (field, text) => (
+  const renderTooltip = (field, text, help = text) => (
     <div className={styles.tooltip}>
       <label className={styles.tooltipLabel}>
         {text}
@@ -206,12 +187,14 @@ function NewAuctionPage() {
           type="button"
           onClick={() => handleTooltip(field)}
           className={styles.circleIcon}
+          aria-label={`Info about ${text}`}
+          aria-expanded={explanation === field}
         >
           <FontAwesomeIcon icon={faQuestionCircle} />
         </button>
       </label>
       {explanation === field && (
-        <div className={styles.description}>{text}</div>
+        <div className={styles.description}>{help}</div>
       )}
     </div>
   );
@@ -236,6 +219,7 @@ function NewAuctionPage() {
           onSubmit={handleSubmit}
         >
           <h1 className={styles.introductionTitle}>Create Auction</h1>
+          {isAdmin && (
           <Box
             sx={{
               width: "85%",
@@ -285,40 +269,74 @@ function NewAuctionPage() {
               {activeMarket.address || "No factory address configured"}
             </Typography>
           </Box>
-          {renderTooltip("minBid", "Minimum Bid (in Wei)")}
+          )}
+          {renderTooltip(
+            "dataDescription",
+            "Description of the Data",
+            "Describe the information in words (e.g., my shoe size); a number alone is not allowed. This description will be visible to all buyers and cannot be changed after you create the auction.",
+          )}
+          <TextField
+            sx={{ width: "85%" }}
+            name="dataDescription"
+            required
+            value={formData.dataDescription}
+            onChange={handleChange}
+            error={Boolean(errors.dataDescription)}
+            helperText={errors.dataDescription || undefined}
+            inputProps={{ maxLength: DESCRIPTION_MAX_CHARS, "aria-label": "Description of the Data" }}
+          />
+
+          {renderTooltip(
+            "dataForSale",
+            "Data For Sell",
+            "Enter the actual information you are selling (e.g., your shoe size). Only the winning buyer will receive this information after the auction ends. You cannot change it after creating the auction.",
+          )}
+          <TextField
+            sx={{ width: "85%" }}
+            name="dataForSell"
+            required
+            value={formData.dataForSell}
+            onChange={handleChange}
+            error={Boolean(errors.dataForSell)}
+            helperText={
+              errors.dataForSell ||
+              `${utf8ByteLength(formData.dataForSell)} / ${PAYLOAD_MAX_BYTES} bytes`
+            }
+            inputProps={{ maxLength: PAYLOAD_MAX_BYTES, "aria-label": "Data for sale" }}
+          />
+
+          {renderTooltip(
+            "minBid",
+            "Minimum Bid",
+            "The lowest price you are willing to accept for selling your information (in wei).",
+          )}
           <TextField
             type="number"
             sx={{ width: "85%" }}
             name="minimumContribution"
+            required
             value={formData.minimumContribution}
             onChange={handleChange}
+            error={Boolean(errors.minimumContribution)}
+            helperText={errors.minimumContribution || undefined}
+            inputProps={{ min: 1, max: MIN_BID_MAX, "aria-label": "Minimum Bid" }}
           />
 
-          {renderTooltip("dataDescription", "Description of the Data")}
-          <TextField
-            sx={{ width: "85%" }}
-            name="dataDescription"
-            value={formData.dataDescription}
-            onChange={handleChange}
-          />
-
-          {renderTooltip("dataForSale", "Data For Sale")}
-          <TextField
-            sx={{ width: "85%" }}
-            name="dataForSell"
-            value={formData.dataForSell}
-            onChange={handleChange}
-          />
-
-          {renderTooltip("auctionTime", "Auction Duration (1-30 mins)")}
+          {renderTooltip(
+            "auctionTime",
+            "Auction Duration (1–30 minutes)",
+            "Enter how many minutes your auction will last. Bidding starts when you create the auction. You cannot change the duration afterward.",
+          )}
           <TextField
             sx={{ width: "85%" }}
             type="number"
             name="auctionDuration"
-            min="1"
-            max="30"
+            required
             value={formData.auctionDuration}
             onChange={handleChange}
+            error={Boolean(errors.auctionDuration)}
+            helperText={errors.auctionDuration || undefined}
+            inputProps={{ min: 1, max: DURATION_MAX, "aria-label": "Auction Duration (1–30 minutes)" }}
           />
 
           <div
@@ -336,12 +354,14 @@ function NewAuctionPage() {
                 borderRadius: "20px",
                 padding: "10px 20px",
                 width: "300px",
+                fontWeight: 700,
               }}
               type="submit"
               variant="contained"
+              aria-label="Create auction"
               disabled={loading}
             >
-              {loading ? <CircularProgress size={20} /> : "Create Auction"}
+              {loading ? <CircularProgress size={20} /> : "CREATE AUCTION"}
             </Button>
           </div>
         </FormControl>
@@ -366,7 +386,7 @@ function NewAuctionPage() {
           }}
           onClick={() => navigate("/auctions-list")}
         >
-          Return To Auctions Main Screen
+          RETURN TO AUCTIONS MAIN SCREEN
         </Button>
       </div>
     </Layout>

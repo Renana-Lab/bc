@@ -1,3 +1,5 @@
+import { getWalletCopy } from "./wallets/walletCopy";
+
 // Oasis Sapphire network definitions for the wallet and RPC layers.
 // Sapphire Mainnet (23294) is intentionally not configured here.
 export const SAPPHIRE_NETWORKS = {
@@ -49,7 +51,7 @@ export const ensureTargetChain = async (provider, network = getTargetNetwork()) 
     const code = error?.code ?? error?.data?.originalError?.code;
     if (code !== 4902) {
       if (code === 4001) {
-        throw new Error(`Switch MetaMask to ${network.chainName} to continue.`);
+        throw new Error(`Switch ${getWalletCopy().walletName} to ${network.chainName} to continue.`);
       }
       throw error;
     }
@@ -71,7 +73,7 @@ export const ensureTargetChain = async (provider, network = getTargetNetwork()) 
 
   const after = await provider.request({ method: "eth_chainId" });
   if (isChainMismatch(after, network)) {
-    throw new Error(`MetaMask is not on ${network.chainName}. Switch networks and retry.`);
+    throw new Error(`${getWalletCopy().walletName} is not on ${network.chainName}. Switch networks and retry.`);
   }
   return network;
 };

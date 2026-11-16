@@ -1,16 +1,16 @@
 import { useEffect } from "react";
 import { useLocation, useParams } from "react-router-dom";
+import { getWalletCopy } from "../real_ethereum/wallets/walletCopy";
 
 const SITE_NAME = "Blockchain Data Market";
 const DEFAULT_TITLE = "Blockchain Data Market | Web3 Research Data Auctions";
-const DEFAULT_DESCRIPTION =
-  "A Web3 research data auction platform where sellers open blockchain-backed data auctions and bidders participate through MetaMask on Ethereum Sepolia.";
+const getDefaultDescription = () => getWalletCopy().seo.description;
 const DEFAULT_IMAGE_PATH = "/logo512.png";
 
 const PAGE_SEO = {
   home: {
     title: DEFAULT_TITLE,
-    description: DEFAULT_DESCRIPTION,
+    description: "",
     robots: "index,follow",
     type: "website",
   },
@@ -51,6 +51,23 @@ const PAGE_SEO = {
       "Operational tools for contracts, budgets, automation health, batch auction creation, and reports.",
     robots: "noindex,nofollow",
   },
+};
+
+// Mode-aware copy: local wallet mode never mentions MetaMask or Sepolia.
+const localizeSeo = (page, seo) => {
+  const copy = getWalletCopy();
+  if (!copy.embedded) return seo;
+  if (page === "metamaskLogin") {
+    return { ...seo, title: copy.seo.loginTitle, description: copy.seo.loginDescription };
+  }
+  if (page === "metamaskGuide") {
+    return {
+      ...seo,
+      title: "Wallet Guide | Blockchain Data Market",
+      description: "Wallet guidance for participating in blockchain research data auctions on the Oasis Sapphire testnet.",
+    };
+  }
+  return seo;
 };
 
 const ensureMeta = (selector, createElement, contentKey, contentValue) => {
@@ -153,7 +170,7 @@ const makeJsonLd = ({ title, description, canonicalUrl, imageUrl, type }) => ({
       "@id": `${getAbsoluteUrl("/")}#website`,
       name: SITE_NAME,
       url: getAbsoluteUrl("/"),
-      description: DEFAULT_DESCRIPTION,
+      description: getDefaultDescription(),
       inLanguage: "en",
     },
     {
@@ -163,7 +180,7 @@ const makeJsonLd = ({ title, description, canonicalUrl, imageUrl, type }) => ({
       url: getAbsoluteUrl("/"),
       applicationCategory: "FinanceApplication",
       operatingSystem: "Desktop browser",
-      description: DEFAULT_DESCRIPTION,
+      description: getDefaultDescription(),
       inLanguage: "en",
     },
     {
@@ -198,7 +215,7 @@ const PageSeo = ({ page, children }) => {
   const params = useParams();
 
   useEffect(() => {
-    const baseSeo = PAGE_SEO[page] || PAGE_SEO.home;
+    const baseSeo = localizeSeo(page, PAGE_SEO[page] || PAGE_SEO.home);
     const pathname = location.pathname || "/";
     const canonicalPath = pathname === "/" ? "/" : stripTrailingSlash(pathname);
     const canonicalUrl = getAbsoluteUrl(canonicalPath);
@@ -207,7 +224,7 @@ const PageSeo = ({ page, children }) => {
         ? `Auction ${shortAddress(params.address)} | ${SITE_NAME}`
         : baseSeo.title;
     const title = addressTitle || DEFAULT_TITLE;
-    const description = baseSeo.description || DEFAULT_DESCRIPTION;
+    const description = baseSeo.description || getDefaultDescription();
     const robots = baseSeo.robots || "index,follow";
     const type = baseSeo.type || "website";
     const imageUrl = getSeoImage();

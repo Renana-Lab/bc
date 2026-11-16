@@ -9,9 +9,17 @@ import {
 } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import moment from "moment";
+import { chainNowMs, useChainClockSync } from "../../real_ethereum/chainClock";
 import Layout from "../../components/Layout";
 import Campaign from "../../real_ethereum/campaign";
-import { readWinnerData } from "../../real_ethereum/confidentialData";
+import { readWinnerData, clearWinnerDataCooldown } from "../../real_ethereum/confidentialData";
+import { finalizeAuctionIfReady } from "../../real_ethereum/autoFinalize";
+import {
+  MAX_FINALIZE_ATTEMPTS,
+  finalizeRetryDelayMs,
+  isNotEndedRevert,
+  notEndedError,
+} from "../../real_ethereum/finalizeRetry";
 import ContributeForm from "../../components/ContributeForm";
 import toast from "react-hot-toast";
 import { readOnlyCall } from "../../real_ethereum/readOnly";
@@ -65,6 +73,24 @@ const buttonStyle = {
   // border: "1px solid #002884",
 };
 
+const ERROR_NO_GAS =
+  "Not enough funds to pay the network fee (gas). Add test funds to your wallet and try again.";
+const ERROR_LOCKED = "Your wallet is locked. Unlock it to finalize this auction.";
+
+// Races (someone else finalized first) are expected and must stay silent.
+const isBenignFinalizeRace = (err) =>
+  /already finalized/i.test(String(err?.message || err?.data?.message || err?.cause?.message || ""));
+
+export const describeFinalizeError = (err) => {
+  const message = String(err?.message || err?.data?.message || "");
+  if (/insufficient funds|gas required exceeds|not enough funds/i.test(message)) return ERROR_NO_GAS;
+  if (err?.code === 4100 || /locked|unlock/i.test(message)) return ERROR_LOCKED;
+  return "Could not finalize the auction automatically. Please try again later.";
+};
+
+const hasRealBudget = (budget) => budget !== Infinity && budget !== null && budget !== undefined;
+const isBudgetExhausted = (budget) => hasRealBudget(budget) && Number(budget) === 0;
+
 const ACTIVE_AUCTION_POLL_INTERVAL_MS = 10000;
 const ENDED_AUCTION_POLL_INTERVAL_MS = 45000;
 
@@ -83,9 +109,22 @@ function formatCountdownTime(remainingMs) {
   return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
 }
 
+function WeiHelp() {
+  return (
+    <span
+      title="Amounts are in wei, the smallest unit of the network currency."
+      aria-label="Amounts are in wei, the smallest unit of the network currency."
+      style={{ cursor: "help", marginLeft: "0.35rem", fontSize: "0.8em", opacity: 0.7 }}
+    >
+      (?)
+    </span>
+  );
+}
+
 function LiveCountdown({ endTime }) {
   const endTimeMs = Number(endTime) * 1000;
-  const [now, setNow] = useState(Date.now());
+  useChainClockSync();
+  const [now, setNow] = useState(() => chainNowMs());
 
   useEffect(() => {
     if (!Number.isFinite(endTimeMs) || endTimeMs <= 0) return undefined;
@@ -93,10 +132,10 @@ function LiveCountdown({ endTime }) {
     let timeoutId;
     let intervalId;
 
-    const tick = () => setNow(Date.now());
+    const tick = () => setNow(chainNowMs());
     const startAlignedTick = () => {
       tick();
-      const delay = 1000 - (Date.now() % 1000);
+      const delay = 1000 - (chainNowMs() % 1000);
       timeoutId = window.setTimeout(() => {
         tick();
         intervalId = window.setInterval(tick, 1000);
@@ -223,19 +262,27 @@ const reducer = (state, action) => {
   }
 };
 
-function ShowAuctionPage() {
+function AuctionPageContent() {
   // Admin = wallet on the public allowlist that signed the Admin Zone gate this session (UI only).
   const { isAdmin: isAdminViewer } = useAdminAccess();
   const [exportingCsv, setExportingCsv] = useState(false);
   const [finalizingPayment, setFinalizingPayment] = useState(false);
   const [state, dispatch] = useReducer(reducer, initialState);
   const fetchInFlightRef = useRef(false);
+  const refetchRequestedRef = useRef(false);
+  const finalizeRecordsRef = useRef(new Map());
+  const runFinalizeRef = useRef(null);
+  const unmountedRef = useRef(false);
+  const refundAttemptedRef = useRef(new Set());
+  const [autoFinalize, setAutoFinalize] = useState({ status: "idle", error: "" });
+  const [autoRefund, setAutoRefund] = useState({ status: "idle", error: "" });
+  const [winnerData, setWinnerData] = useState({ status: "idle", error: "" });
   const eventRefreshTimerRef = useRef(null);
   const { address } = useParams();
   const navigate = useNavigate();
   const { state: navState } = useLocation();
   const [remainingBudget, setRemainingBudget] = useState(
-    navState?.remainingBudget || 0,
+    navState?.remainingBudget ?? Infinity,
   );
 
   useEffect(() => {
@@ -253,17 +300,18 @@ function ShowAuctionPage() {
   };
 
   // Time-based: flips at endTime even if no refetch happens while the page is open.
-  const [clock, setClock] = useState(() => Date.now());
+  const clockSyncTick = useChainClockSync();
+  const [clock, setClock] = useState(() => chainNowMs());
   useEffect(() => {
     const endMs = Number(state.endTime) * 1000;
-    const wait = endMs - Date.now();
+    const wait = endMs - chainNowMs();
     if (!Number.isFinite(endMs) || endMs <= 0 || wait <= 0) return undefined;
     // setTimeout is capped at ~24.8 days; auctions last at most 30 minutes.
-    const id = window.setTimeout(() => setClock(Date.now()), wait + 50);
+    const id = window.setTimeout(() => setClock(chainNowMs()), wait + 50);
     return () => window.clearTimeout(id);
-  }, [state.endTime]);
+  }, [state.endTime, clockSyncTick]);
   const isAuctionActive = useMemo(
-    () => Number(state.endTime) * 1000 > Math.max(clock, Date.now()),
+    () => Number(state.endTime) * 1000 > Math.max(clock, chainNowMs()),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [state.endTime, clock],
   );
@@ -287,7 +335,10 @@ function ShowAuctionPage() {
   );
 
   const fetchAuctionData = useCallback(async () => {
-    if (fetchInFlightRef.current) return;
+    if (fetchInFlightRef.current) {
+      refetchRequestedRef.current = true;
+      return;
+    }
 
     fetchInFlightRef.current = true;
 
@@ -336,7 +387,7 @@ function ShowAuctionPage() {
       const addresses = summaryIsLight ? [] : summary[7];
       const endTime = summaryIsLight ? summary[7] : summary[8];
       const closedFromSummary = summaryIsLight ? Boolean(summary[8]) : null;
-      const auctionEnded = Number(endTime) * 1000 < Date.now();
+      const auctionEnded = Number(endTime) * 1000 < chainNowMs();
       const accountKey = account.toLowerCase();
       const highestBidderKey = (highestBidder || "").toLowerCase();
       const userIsHighestBidder =
@@ -387,7 +438,29 @@ function ShowAuctionPage() {
 
       if (auctionEnded && closed && userIsHighestBidder && !dataForSell) {
         // Signs one SIWE message per session, then reads with a bearer token.
-        dataForSell = await readWinnerData(address, account).catch(() => "");
+        setWinnerData((prev) =>
+          prev.status === "ready" || prev.status === "error"
+            ? prev
+            : { status: "loading", error: "" },
+        );
+        try {
+          dataForSell = await readWinnerData(address, account);
+          if (dataForSell) {
+            setWinnerData({ status: "ready", error: "" });
+          } else {
+            // Empty result (e.g. paused after a rejected signature): surface it, do not hide it.
+            setWinnerData((prev) => ({
+              status: "error",
+              error: prev.error || "We could not read your data yet.",
+            }));
+          }
+        } catch (err) {
+          console.warn("Reading winner data failed:", err);
+          setWinnerData({
+            status: "error",
+            error: err?.message || "We could not read your data.",
+          });
+        }
       }
 
       // rawTransactions: [{ bidderAddress, value, time }, ...]   // time in SECONDS (string/number)
@@ -478,14 +551,25 @@ function ShowAuctionPage() {
         };
         loadBudget(); // הפעלה בפועל
       }
+      return Boolean(closed);
     } catch (err) {
       console.error(err);
       dispatch({ type: "SET_ERROR", payload: "Error fetching auction data" });
       toast.error("Error fetching auction data");
     } finally {
       fetchInFlightRef.current = false;
+      if (refetchRequestedRef.current) {
+        refetchRequestedRef.current = false;
+        window.setTimeout(() => fetchAuctionData(), 0);
+      }
     }
   }, [address, navigate]);
+
+  const retryWinnerData = useCallback(() => {
+    clearWinnerDataCooldown(address, state.connectedAccount);
+    setWinnerData({ status: "loading", error: "" });
+    fetchAuctionData();
+  }, [address, state.connectedAccount, fetchAuctionData]);
 
   const finalizeAuction = useCallback(async () => {
     if (!state.auction || !state.connectedAccount) return;
@@ -525,6 +609,132 @@ function ShowAuctionPage() {
       toast.error("Refund is not available yet.");
     }
   }, [state.auction, state.connectedAccount, fetchAuctionData]);
+
+  const isParticipant = isManager || isHighestBidder || hasUserBid;
+
+  // Winner data only exists after finalize: any participant triggers it once per auction.
+  // A "not ended yet" revert (chain clock slightly ahead of the block) is retried at
+  // endTime + 3 s of chain time, at most MAX_FINALIZE_ATTEMPTS times in total.
+  // After a refetch the auction must read as closed; if it does not, offer the Finalize button.
+  const confirmClosedAfterRefetch = (closed) => {
+    if (unmountedRef.current || closed !== false) return;
+    setAutoFinalize({
+      status: "failed",
+      error: "We could not confirm that the auction is finalized yet. Press Finalize to try again.",
+    });
+  };
+
+  runFinalizeRef.current = async ({ manual = false } = {}) => {
+    const key = String(address).toLowerCase();
+    const record = finalizeRecordsRef.current.get(key) || { attempts: 0, timer: null };
+    finalizeRecordsRef.current.set(key, record);
+    window.clearTimeout(record.timer);
+    // A manual press is a single attempt: it never schedules further retries.
+    record.attempts = manual ? MAX_FINALIZE_ATTEMPTS : record.attempts + 1;
+    setAutoFinalize({ status: "pending", error: "" });
+    try {
+      const result = await finalizeAuctionIfReady(address, state.connectedAccount);
+      // Our chain clock can run ahead of the block: treat it exactly like a not-ended revert.
+      if (result?.reason === "not-ended") throw notEndedError();
+      if (result?.finalized) {
+        markAuctionClosed(getActiveFactoryAddress(), address, "auction-page-auto-finalized");
+      }
+      if (unmountedRef.current) return;
+      setAutoFinalize({ status: "idle", error: "" });
+      confirmClosedAfterRefetch(await fetchAuctionData());
+    } catch (err) {
+      if (unmountedRef.current) return;
+      if (isNotEndedRevert(err)) {
+        if (record.attempts < MAX_FINALIZE_ATTEMPTS) {
+          record.timer = window.setTimeout(
+            () => runFinalizeRef.current?.(),
+            finalizeRetryDelayMs(state.endTime, record.attempts),
+          );
+          return; // stays "Finalizing auction..." while waiting for the retry
+        }
+        setAutoFinalize({
+          status: "failed",
+          error: "The auction is not ready to be finalized yet. Press Finalize to try again.",
+        });
+        return;
+      }
+      if (isBenignFinalizeRace(err)) {
+        setAutoFinalize({ status: "idle", error: "" });
+        confirmClosedAfterRefetch(await fetchAuctionData());
+        return;
+      }
+      console.warn("Auto-finalize failed:", err);
+      setAutoFinalize({ status: "failed", error: describeFinalizeError(err) });
+    }
+  };
+
+  useEffect(() => {
+    unmountedRef.current = false;
+    const records = finalizeRecordsRef.current;
+    return () => {
+      unmountedRef.current = true;
+      records.forEach((record) => window.clearTimeout(record.timer));
+    };
+  }, []);
+
+  useEffect(() => {
+    if (state.loading || state.error || !state.auction) return;
+    if (isAuctionActive || state.closed) return;
+    if (!(Number(state.endTime) > 0)) return;
+    if (!state.connectedAccount || !isParticipant) return;
+    const key = String(address).toLowerCase();
+    if (finalizeRecordsRef.current.has(key)) return;
+    runFinalizeRef.current();
+  }, [
+    address,
+    isAuctionActive,
+    isParticipant,
+    state.auction,
+    state.closed,
+    state.connectedAccount,
+    state.endTime,
+    state.error,
+    state.loading,
+  ]);
+
+  // A losing bidder's refund is claimed once automatically after finalize.
+  useEffect(() => {
+    if (!state.closed || !state.auction || !state.connectedAccount) return;
+    if (isManager || isHighestBidder || !hasUserBid) return;
+    if (state.refundsProcessed || !(state.userBid > 0)) return;
+    const key = String(address).toLowerCase();
+    if (refundAttemptedRef.current.has(key)) return;
+    refundAttemptedRef.current.add(key);
+
+    setAutoRefund({ status: "pending", error: "" });
+    state.auction.methods
+      .withdrawRefund()
+      .send({ from: state.connectedAccount })
+      .then(() => {
+        setAutoRefund({ status: "done", error: "" });
+        return fetchAuctionData();
+      })
+      .catch((err) => {
+        console.warn("Auto-refund failed:", err);
+        setAutoRefund({
+          status: "error",
+          error: /insufficient funds/i.test(String(err?.message || ""))
+            ? ERROR_NO_GAS
+            : "We could not claim your refund automatically. Press Claim refund now.",
+        });
+      });
+  }, [
+    address,
+    fetchAuctionData,
+    hasUserBid,
+    isHighestBidder,
+    isManager,
+    state.auction,
+    state.closed,
+    state.connectedAccount,
+    state.refundsProcessed,
+    state.userBid,
+  ]);
 
   const scheduleEventRefresh = useCallback(() => {
     if (document.hidden) return;
@@ -684,12 +894,12 @@ function ShowAuctionPage() {
             />
           )}
           <InfoItem
-            label="Minimum bid (wei) required"
-            value={state.minimumContribution}
+            label="Minimum bid"
+            value={<>{state.minimumContribution}<WeiHelp /></>}
           />
           <InfoItem
-            label="Highest bid (wei) recorded"
-            value={state.highestBid}
+            label="Highest bid"
+            value={<>{state.highestBid}<WeiHelp /></>}
           />
           <InfoItem label="Number of bidders" value={state.approversCount} />
         </div>
@@ -814,6 +1024,28 @@ function ShowAuctionPage() {
     <Layout>
       <div className={showPageStyles.page}>
         {renderAuctionInfo()}
+        {!isAuctionActive && !state.closed && autoFinalize.status === "pending" && (
+          <Typography textAlign="center" role="status">
+            Finalizing auction...
+          </Typography>
+        )}
+        {autoFinalize.status === "failed" && !state.closed && (
+          <Typography textAlign="center" color="error" role="alert">
+            {autoFinalize.error}
+          </Typography>
+        )}
+        {autoFinalize.status === "failed" &&
+          !state.closed &&
+          isParticipant &&
+          (!isManager || state.transactions.length === 0) && (
+            <Button
+              variant="contained"
+              style={{ ...buttonStyle, margin: "0.7rem auto", display: "block" }}
+              onClick={() => runFinalizeRef.current({ manual: true })}
+            >
+              Finalize
+            </Button>
+          )}
         {isAuctionActive && !isManager && (
           <div className={showPageStyles.contributeForm}>
             <Typography
@@ -822,12 +1054,21 @@ function ShowAuctionPage() {
               sx={{ marginBottom: "1rem" }}
             >
               Remaining Budget:{" "}
-              {remainingBudget === Infinity
-                ? "Unlimited"
-                : `${remainingBudget} wei`}
+              {hasRealBudget(remainingBudget) ? String(remainingBudget) : "Unknown"}
+              <WeiHelp />
             </Typography>
+            {isBudgetExhausted(remainingBudget) && (
+              <Typography textAlign="center" color="error" role="status">
+                No budget left
+              </Typography>
+            )}
             <ContributeForm
               address={address}
+              endTime={state.endTime}
+              minimumContribution={state.minimumContribution}
+              highestBid={state.highestBid}
+              isLeader={isHighestBidder}
+              noBudget={isBudgetExhausted(remainingBudget)}
               remainingBudget={remainingBudget}
               onSuccessfulBid={handleSuccessfulBid}
               userBid={state.userBid}
@@ -840,27 +1081,60 @@ function ShowAuctionPage() {
               <img alt="Auction winner medal" width="80px" src={picSrc} />
               <div className={showPageStyles.winnerTitle}>Congrats!</div>
               <div className={showPageStyles.winnerLabel}>
-                You won the auction and have now access to the data
+                {state.closed
+                  ? "You won the auction and have now access to the data"
+                  : "You won the auction. Your data will be available once the auction is finalized."}
               </div>
-              {!state.displayBiddingDialog && (
-                <Button
-                  variant="contained"
-                  className={showPageStyles.viewDataButton}
-                  onClick={() => dispatch({ type: "TOGGLE_BIDDING_DIALOG" })}
-                >
-                  View Data
-                </Button>
-              )}
+              <Button
+                variant="contained"
+                className={showPageStyles.viewDataButton}
+                onClick={() => dispatch({ type: "TOGGLE_BIDDING_DIALOG" })}
+              >
+                View Data
+              </Button>
             </div>
-            {state.displayBiddingDialog && (
-              <div className={showPageStyles.revealedData}>
-                <InfoItem
-                  label="Data Description"
-                  value={state.dataDescription}
-                />
-                <InfoItem label="Data acquired" value={state.dataForSell} />
-              </div>
-            )}
+            <Dialog
+              open={state.displayBiddingDialog}
+              onClose={() => dispatch({ type: "TOGGLE_BIDDING_DIALOG" })}
+              fullWidth
+              maxWidth="sm"
+              aria-labelledby="acquired-data-title"
+            >
+              <DialogTitle id="acquired-data-title">Data acquired</DialogTitle>
+              <DialogContent>
+                <InfoItem label="Data Description" value={state.dataDescription} />
+                {winnerData.status === "error" && !state.dataForSell ? (
+                  <div role="alert">
+                    <Typography color="error">{winnerData.error}</Typography>
+                    <Button
+                      variant="contained"
+                      style={{ ...buttonStyle, marginTop: "0.7rem" }}
+                      onClick={retryWinnerData}
+                    >
+                      Try again
+                    </Button>
+                  </div>
+                ) : !state.closed || !state.dataForSell ? (
+                  <Typography role="status">Preparing your data...</Typography>
+                ) : (
+                  <pre
+                    style={{
+                      margin: "8px 0 0",
+                      whiteSpace: "pre-wrap",
+                      wordBreak: "break-all",
+                      fontFamily: "inherit",
+                    }}
+                  >
+                    {state.dataForSell}
+                  </pre>
+                )}
+              </DialogContent>
+              <DialogActions>
+                <Button onClick={() => dispatch({ type: "TOGGLE_BIDDING_DIALOG" })}>
+                  Close
+                </Button>
+              </DialogActions>
+            </Dialog>
           </div>
         )}
         {!isAuctionActive && !isManager && !hasUserBid && !isHighestBidder && (
@@ -882,9 +1156,21 @@ function ShowAuctionPage() {
               {state.refundsProcessed
                 ? "You did not win the auction. Your bid has been refunded."
                 : state.closed
-                  ? "You did not win the auction. Your refund is queued automatically."
+                  ? autoRefund.status === "pending"
+                    ? "You did not win the auction. Claiming your refund..."
+                    : state.userBid > 0
+                      ? "You did not win the auction. Your bid can be refunded. Press Claim refund now."
+                      : "You did not win the auction."
                   : "You did not win the auction. Awaiting auction finalization."}
             </Typography>
+            {autoRefund.status === "done" && state.refundsProcessed && (
+              <Typography textAlign="center" role="status">Refund claimed</Typography>
+            )}
+            {autoRefund.status === "error" && !state.refundsProcessed && (
+              <Typography textAlign="center" color="error" role="alert">
+                {autoRefund.error}
+              </Typography>
+            )}
             {state.closed && !state.refundsProcessed && state.userBid > 0 && (
               <Button
                 variant="contained"
@@ -925,7 +1211,7 @@ function ShowAuctionPage() {
             </Box>
             <p className={showPageStyles.subTitle}>Auction # {address}</p>
             <p className={showPageStyles.subTitle}>
-              Highest bid: {state.highestBid} wei
+              Highest bid: {state.highestBid}
             </p>
             <p
               className={showPageStyles.subTitle}
@@ -1014,6 +1300,13 @@ function ShowAuctionPage() {
       )}
     </Layout>
   );
+}
+
+// Keyed by address so every per-auction state (finalize, refund, winner data, reducer) is
+// discarded when the route moves to another auction.
+function ShowAuctionPage() {
+  const { address } = useParams();
+  return <AuctionPageContent key={address} />;
 }
 
 export default ShowAuctionPage;

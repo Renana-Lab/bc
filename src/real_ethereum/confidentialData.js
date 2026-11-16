@@ -72,6 +72,11 @@ subscribeWalletAccess(() => {
   if (["locked", "unauthorized", "unavailable"].includes(status)) clearConfidentialSessions();
 });
 
+// Explicit "Try again": lets the next readWinnerData call hit the network again.
+export const clearWinnerDataCooldown = (auctionAddress, account) => {
+  rejectedUntil.delete(`${auctionAddress}:${String(account).toLowerCase()}`.toLowerCase());
+};
+
 // Winner-only read of the confidential payload (auction must be finalized).
 export const readWinnerData = async (auctionAddress, account) => {
   const key = `${auctionAddress}:${String(account).toLowerCase()}`.toLowerCase();
