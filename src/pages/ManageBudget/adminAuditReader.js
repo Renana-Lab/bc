@@ -221,6 +221,9 @@ export const createChainLogReader = (factoryAddress) => {
   const abiFor = (kind) => (kind === "campaign" ? Campaign.abi : CampaignFactory.abi);
   return {
     getLatestBlock: async () => Number(await readOnlyExecute(({ web3 }) => web3.eth.getBlockNumber(), undefined, options)),
+    // Block time in seconds, used to map a chosen date to a block number.
+    getBlockTimestamp: async (blockNumber) =>
+      Number((await readOnlyExecute(({ web3 }) => web3.eth.getBlock(blockNumber), undefined, options))?.timestamp),
     readLogs: ({ address, kind, names, from, to }) =>
       readOnlyExecute(
         async ({ web3 }) => {
