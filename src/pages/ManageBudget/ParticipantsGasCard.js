@@ -126,6 +126,21 @@ export const ParticipantsGasCardBody = ({ adminAccount, deps: depsOverride, refr
     load({ force: true });
   };
 
+  // "Send message" is always available. The pid hash comes from the auto-return list: when it is not loaded yet it
+  // is loaded silently with the session password, or the dialog asks for the password once and resolves it itself.
+  const [resolving, setResolving] = useState("");
+  const openMessage = async (row) => {
+    const label = row.label || row.pid || row.address;
+    const findPid = (map) => map?.[row.address]?.pidHash;
+    let pidHash = findPid(autoReturn.sweeps);
+    if (!pidHash && autoReturn.hasPassword) {
+      setResolving(row.address);
+      pidHash = findPid(await autoReturn.load());
+      setResolving("");
+    }
+    setMessageTarget({ pidHash, label, resolvePidHash: async (password) => findPid(await autoReturn.load(password)) });
+  };
+
   const plan = confirm ? planTopUp({ rows: confirm.targets, amountText: amount }) : null;
   const enough = confirm?.adminBalance != null && plan?.amountWei ? confirm.adminBalance >= plan.totalWei + ADMIN_GAS_RESERVE_WEI : null;
   const symbol = getTargetNetwork().nativeCurrency?.symbol || "TEST";
@@ -186,9 +201,7 @@ export const ParticipantsGasCardBody = ({ adminAccount, deps: depsOverride, refr
                 <TableCell sx={{ whiteSpace: "nowrap" }}>
                   <Button size="small" variant="outlined" disabled={!amountWei || running} onClick={() => openConfirm([row.address])}>Top up</Button>{" "}
                   {autoReturn.enabled ? (
-                    // The pid hash comes from the auto-return list ("Load auto-return"): it is what the faucet keys messages on.
-                    <Button size="small" variant="outlined" disabled={!autoReturn.sweeps[row.address]?.pidHash} onClick={() => setMessageTarget({ pidHash: autoReturn.sweeps[row.address].pidHash, label: row.label || row.pid || row.address })}
-                      title={autoReturn.sweeps[row.address]?.pidHash ? "" : "Load auto-return first (enter the faucet password above)"}>Send message</Button>
+                    <Button size="small" variant="outlined" disabled={resolving === row.address} onClick={() => openMessage(row)}>Send message</Button>
                   ) : null}
                 </TableCell>
               </TableRow>

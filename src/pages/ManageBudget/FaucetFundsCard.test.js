@@ -2,6 +2,7 @@ import React from "react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { parseNative } from "../../real_ethereum/wallets/nativeBalance";
 import FaucetFundsCard, { FaucetFundsCardBody, payoutWarnings, remainingPayouts } from "./FaucetFundsCard";
+import { clearSessionPassword, getSessionPassword } from "./faucetSessionPassword";
 
 const mockAccess = { account: "" };
 jest.mock("../../real_ethereum/walletAccess", () => ({
@@ -85,6 +86,8 @@ describe("balance", () => {
   });
 });
 
+beforeEach(() => clearSessionPassword());
+
 describe("payout limit", () => {
   const load = async (deps) => {
     body(deps);
@@ -93,30 +96,32 @@ describe("payout limit", () => {
     await screen.findByTestId("faucet-payouts");
   };
 
-  test("shows 'X of Y payouts used, Z left' and clears the password after the request", async () => {
+  test("shows 'X of Y payouts used, Z left' and remembers the password for the session instead of showing the field", async () => {
     const deps = makeDeps();
     await load(deps);
     expect(screen.getByTestId("faucet-payouts").textContent).toBe("40 of 50 payouts used, 10 left");
     expect(deps.fetchStatus).toHaveBeenCalledWith(expect.objectContaining({ password: "pw" }));
-    expect(screen.getByLabelText("Faucet admin password").value).toBe("");
+    expect(screen.queryByLabelText("Faucet admin password")).toBeNull();
+    expect(getSessionPassword()).toBe("pw");
+    expect(window.localStorage.length).toBe(0); // never localStorage
   });
 
-  test("+10 asks for a confirmation, then saves limit + 10 with the password", async () => {
+  test("+10 asks for a confirmation, then saves limit + 10 without asking for the password again", async () => {
     const deps = makeDeps();
     await load(deps);
     fireEvent.click(screen.getByRole("button", { name: "+10" }));
     expect((await screen.findByTestId("add-confirm-text")).textContent).toMatch(/from 50 to 60 \(\+10\)/);
     expect(deps.setMax).not.toHaveBeenCalled();
-    fireEvent.change(screen.getByLabelText("Confirm faucet admin password"), { target: { value: "pw2" } });
+    expect(screen.queryByLabelText("Confirm faucet admin password")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
-    await waitFor(() => expect(deps.setMax).toHaveBeenCalledWith(expect.objectContaining({ value: 60, password: "pw2" })));
+    await waitFor(() => expect(deps.setMax).toHaveBeenCalledWith(expect.objectContaining({ value: 60, password: "pw" })));
     await waitFor(() => expect(screen.getByTestId("faucet-payouts").textContent).toBe("40 of 60 payouts used, 20 left"));
   });
 
-  test("one pass: the password is typed INSIDE the Add payouts dialog, so it works even though loading the status already cleared the card field", async () => {
+  test("after Forget the Add payouts dialog asks for the password inside the dialog", async () => {
     const deps = makeDeps();
     await load(deps);
-    expect(screen.getByLabelText("Faucet admin password").value).toBe(""); // spent by "Load status"
+    fireEvent.click(screen.getByRole("button", { name: "Forget" }));
     fireEvent.click(screen.getByRole("button", { name: "+50" }));
     await screen.findByTestId("add-confirm-text");
     const confirm = screen.getByRole("button", { name: "Confirm" });
@@ -126,12 +131,12 @@ describe("payout limit", () => {
     fireEvent.click(confirm);
     await waitFor(() => expect(deps.setMax).toHaveBeenCalledWith(expect.objectContaining({ value: 100, password: "pw3" })));
     await waitFor(() => expect(screen.queryByTestId("add-confirm-text")).toBeNull());
-    expect(screen.getByLabelText("Faucet admin password").value).toBe("");
   });
 
   test("cancelling the dialog discards the typed password", async () => {
     const deps = makeDeps();
     await load(deps);
+    fireEvent.click(screen.getByRole("button", { name: "Forget" }));
     fireEvent.click(screen.getByRole("button", { name: "+10" }));
     fireEvent.change(await screen.findByLabelText("Confirm faucet admin password"), { target: { value: "secret" } });
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
@@ -168,6 +173,7 @@ describe("payout limit", () => {
     fireEvent.click(screen.getByRole("button", { name: "Load status" }));
     expect((await screen.findByRole("status")).textContent).toBe("Wrong password.");
     expect(screen.getByLabelText("Faucet admin password").value).toBe("");
+    expect(getSessionPassword()).toBe(""); // a refused password is not remembered
   });
 });
 

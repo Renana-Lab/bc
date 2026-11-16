@@ -5,12 +5,13 @@ import { fetchSweepConfig, pidHashFor } from "./sweepClient.mjs";
 import { ackInbox, fetchInbox } from "./inboxClient.mjs";
 
 // Messages from the administrator. Draws nothing until one arrives, then a blocking popup, one message at a time.
-//  * Polls the faucet server every 30 s while the tab is visible, and right away when the participant returns to the tab.
+//  * Polls the faucet server every 5 s while the tab is visible, and right away when the participant returns to the tab.
 //  * "Got it" tells the server (signed with the wallet) so the message is not shown again; ids are also remembered
 //    for this page load, so a message never opens twice even if the acknowledgement is still on its way.
 // Same gating as AutoSweepHost: only for the invisible local wallet of a participant, never in MetaMask mode,
 // never with the admin override or the admin key slot, never for an admin address.
-export const POLL_MS = 30_000;
+export const POLL_MS = 5_000;
+export const INBOX_POLL_SECONDS = POLL_MS / 1000; // quoted in the admin message dialog
 const CONFIG_RETRY_MS = 30_000;
 const CONFIG_ATTEMPTS = 4;
 
