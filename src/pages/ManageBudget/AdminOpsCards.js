@@ -28,6 +28,7 @@ import { createAdminActions } from "./adminActions";
 import { subscribeActiveAuctionRegistry } from "../../real_ethereum/activeAuctionRegistry";
 import { getLivePresence, isPresenceConfigured } from "../../telemetry/presenceClient";
 import { LOCAL_BOTS_KEY } from "../../telemetry/botPresence";
+import AdminGasCards from "./AdminGasCards";
 import { mapWithConcurrency, shortAddress } from "./reportUtils";
 import { describeRangeHealth } from "../../real_ethereum/chunkedLogs";
 import {
@@ -923,6 +924,7 @@ export const AdminOpsCards = ({ access } = {}) => {
       <AuditEventsCard />
       <ArchitectureCard />
       <FaucetCard />
+      <AdminGasCards />
     </>
   );
 };

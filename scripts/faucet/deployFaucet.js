@@ -35,6 +35,7 @@ const lowBalance = Number(read("--low-balance", "5")); // alarm when the faucet 
 const origins = read("--origins", "http://localhost:3000");
 if (/datamarketplaces\.net/.test(origins)) throw new Error("The test environment must not allow the production domain in --origins");
 const rateLimit = read("--rate-limit", "20");
+const globalRateLimit = read("--global-rate-limit", "600");
 const pidMode = read("--pid-mode", "allowlist");
 const maxPayouts = read("--max-payouts");
 const requiredStudyId = read("--required-study-id");
@@ -73,7 +74,7 @@ bundle("handler.js", "faucet");
 bundle("monitor.js", "monitor");
 
 const template = buildTemplate({
-  origins, alertEmail, secretArn, faucetAddress, rpcUrl, chainId, amountWei, lowBalance, rateLimit, reservedConcurrency,
+  origins, alertEmail, secretArn, faucetAddress, rpcUrl, chainId, amountWei, lowBalance, rateLimit, globalRateLimit, reservedConcurrency,
   pidMode, maxPayouts, requiredStudyId, adminSecretArn,
   faucetCodeDir: path.join(work, "faucet"), monitorCodeDir: path.join(work, "monitor"),
 });

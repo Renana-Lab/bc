@@ -24,6 +24,8 @@ const WalletUnlockPage = lazy(() => import("./pages/WalletUnlock/WalletUnlockPag
 const MetamaskGuidePage = lazy(() => import("./pages/MetamaskGuide/MetamaskGuidePage.js"));
 const ManageBudgetPage = lazy(() => import("./pages/ManageBudget/ManageBudgetPage.js"));
 const ShowAuctionPage = lazy(() => import("./pages/ShowAuction/ShowAuctionPage.js"));
+const AdminLoginPage = lazy(() => import("./pages/AdminWallet/AdminLoginPage.js")); // hidden route: MetaMask admin sign-in in local wallet mode
+const AdminWalletPage = lazy(() => import("./pages/AdminWallet/AdminWalletPage.js")); // hidden route: restore the admin key (local wallet mode)
 const FaucetAdminPage = lazy(() => import("./pages/FaucetAdmin/FaucetAdminPage.js")); // hidden route, not linked anywhere
 const AppLoadingFallback = ({
   copy = "Preparing the workspace",
@@ -387,6 +389,8 @@ function App() {
                   }
                 />
                 <Route path="/admin/faucet" element={<FaucetAdminPage />} />
+                <Route path="/admin/wallet" element={<AdminWalletPage />} />
+                <Route path="/admin-login" element={<AdminLoginPage />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>
             </div>

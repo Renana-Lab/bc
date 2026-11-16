@@ -41,7 +41,8 @@ describe("production typography assets", () => {
 
   test("the documented Amplify SPA rewrite lets .woff2 through to the file", () => {
     const doc = fs.readFileSync(path.join(projectRoot, "docs", "AMPLIFY_REWRITES.md"), "utf8");
-    const match = doc.match(/\n<\/(\^.+)\/>\n/);
+    // Tolerate CRLF checkouts (Windows autocrlf): the rewrite rule sits on its own line either way.
+    const match = doc.match(/\r?\n<\/(\^.+)\/>\r?\n/);
     expect(match).not.toBeNull();
     const rewrite = new RegExp(match[1]);
     expect(rewrite.test("/fonts/manrope-variable-latin.woff2")).toBe(false); // served as a file

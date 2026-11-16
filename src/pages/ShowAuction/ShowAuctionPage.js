@@ -1,4 +1,5 @@
 /* eslint-env es2020 */
+import { participantMessage, isInsufficientFundsError } from "../../real_ethereum/wallets/participantCopy";
 import {
   useReducer,
   useEffect,
@@ -84,8 +85,8 @@ const isBenignFinalizeRace = (err) =>
 
 export const describeFinalizeError = (err) => {
   const message = String(err?.message || err?.data?.message || "");
-  if (/insufficient funds|gas required exceeds|not enough funds/i.test(message)) return ERROR_NO_GAS;
-  if (err?.code === 4100 || /locked|unlock/i.test(message)) return ERROR_LOCKED;
+  if (/insufficient funds|gas required exceeds|not enough funds/i.test(message) || isInsufficientFundsError(err)) return participantMessage(ERROR_NO_GAS);
+  if (err?.code === 4100 || /locked|unlock/i.test(message)) return participantMessage(ERROR_LOCKED);
   return "Could not finalize the auction automatically. Please try again later.";
 };
 
@@ -734,8 +735,8 @@ function AuctionPageContent() {
         console.warn("Auto-refund failed:", err);
         setAutoRefund({
           status: "error",
-          error: /insufficient funds/i.test(String(err?.message || ""))
-            ? ERROR_NO_GAS
+          error: /insufficient funds/i.test(String(err?.message || "")) || isInsufficientFundsError(err)
+            ? participantMessage(ERROR_NO_GAS)
             : "We could not claim your refund automatically. Press Claim refund now.",
         });
       });

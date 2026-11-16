@@ -6,6 +6,7 @@
 //   pid#<sha256(pid)>   { status: unclaimed | pending | paid, address?, rawTx?, txHash?, leaseUntil?, paidAt?, amountWei? }
 //   config#faucet       { open, updatedAt }          (open/closed switch)
 //   counter#payouts     { count }                    (payout slots in use, prolific cap)
+//   config#maxPayouts   { value, updatedAt }         (admin-managed cap; falls back to FAUCET_MAX_PAYOUTS when missing)
 //   rl#<scope>#<window> { count, expiresAt }                     (RATE table; expires by TTL, ~11 minutes)
 // Every state change is a conditional write, so parallel requests cannot both win.
 // The same contract is implemented in memory by memoryStore.js for tests.
@@ -13,6 +14,7 @@ const stateKey = (pidHash) => ({ pk: { S: `pid#${pidHash}` } });
 // Shared items in the codes table (no pid, no caller inside): the open/closed switch and the payout-slot counter.
 const CONFIG_KEY = { pk: { S: "config#faucet" } };   // { open: BOOL, updatedAt: N }
 const BUDGET_KEY = { pk: { S: "counter#payouts" } }; // { count: N }
+const LIMIT_KEY = { pk: { S: "config#maxPayouts" } }; // { value: N }  admin-managed payout cap (overrides the deploy-time value)
 
 const fromItem = (item) => {
   if (!item) return null;
@@ -159,6 +161,42 @@ const createDynamoStore = ({ table, rateTable, client } = {}) => {
         UpdateExpression: "SET #o = :open, updatedAt = :at", ExpressionAttributeNames: { "#o": "open" },
         ExpressionAttributeValues: { ":open": { BOOL: Boolean(open) }, ":at": { N: String(updatedAt) } },
       }));
+    },
+    // Payout slots in use (the same counter takeSlot increments).
+    async getPayoutCount() {
+      const item = (await send(new sdk.GetItemCommand({ TableName: table, Key: BUDGET_KEY, ConsistentRead: true }))).Item;
+      return item?.count?.N !== undefined ? Number(item.count.N) : 0;
+    },
+    // Admin-managed payout cap. null = never set (the deploy-time FAUCET_MAX_PAYOUTS applies).
+    async getMaxPayouts() {
+      const item = (await send(new sdk.GetItemCommand({ TableName: table, Key: LIMIT_KEY, ConsistentRead: true }))).Item;
+      return item?.value?.N !== undefined ? Number(item.value.N) : null;
+    },
+    // Atomic against the payout counter without needing extra IAM actions (no transaction): write the cap, then
+    // re-read the counter. If slots in use already exceed the new cap (a claim took one in between), the write is rolled
+    // back (only while it is still our value) and false is returned. Resolves true when the cap was set.
+    async setMaxPayouts(value, updatedAt) {
+      const result = await send(new sdk.UpdateItemCommand({
+        TableName: table, Key: LIMIT_KEY,
+        UpdateExpression: "SET #v = :value, updatedAt = :at", ExpressionAttributeNames: { "#v": "value" },
+        ExpressionAttributeValues: { ":value": { N: String(value) }, ":at": { N: String(updatedAt) } },
+        ReturnValues: "ALL_OLD",
+      }));
+      if ((await store.getPayoutCount()) <= value) return true;
+      const before = result?.Attributes;
+      try {
+        await send(new sdk.UpdateItemCommand({
+          TableName: table, Key: LIMIT_KEY,
+          ConditionExpression: "#v = :value",
+          ...(before?.value
+            ? { UpdateExpression: "SET #v = :previous, updatedAt = :at", ExpressionAttributeValues: { ":value": { N: String(value) }, ":previous": before.value, ":at": before.updatedAt || { N: String(updatedAt) } } }
+            : { UpdateExpression: "REMOVE #v, updatedAt", ExpressionAttributeValues: { ":value": { N: String(value) } } }),
+          ExpressionAttributeNames: { "#v": "value" },
+        }));
+      } catch (error) {
+        if (!isConditionFailure(error)) throw error; // someone else changed the cap meanwhile: leave theirs
+      }
+      return false;
     },
     // Atomic counter per (scope, window); the item expires by TTL.
     async hit(scope, windowId, expiresAt, by = 1) {

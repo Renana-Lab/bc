@@ -19,13 +19,13 @@ const originalMode = process.env.REACT_APP_WALLET_MODE;
 beforeEach(() => {
   window.matchMedia = jest.fn(() => ({ matches: false, addEventListener: jest.fn(), removeEventListener: jest.fn() }));
 });
-afterEach(() => { process.env.REACT_APP_WALLET_MODE = originalMode; });
+afterEach(() => { process.env.REACT_APP_WALLET_MODE = originalMode; delete process.env.REACT_APP_LOCAL_WALLET_PASSPHRASE; });
 const open = (path, state) => render(
   <MemoryRouter initialEntries={[{ pathname: path, state }]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}><App /></MemoryRouter>,
 );
 
 describe("local wallet mode after a reload (locked wallet)", () => {
-  beforeEach(() => { process.env.REACT_APP_WALLET_MODE = "local"; });
+  beforeEach(() => { process.env.REACT_APP_WALLET_MODE = "local"; process.env.REACT_APP_LOCAL_WALLET_PASSPHRASE = "required"; }); // passphrase-flow copy
 
   test("the checking fallback has no MetaMask text", () => {
     mockSession = { status: "checking" };

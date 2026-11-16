@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useState } from "react";
+import { FaucetFundsCardBody } from "../ManageBudget/FaucetFundsCard";
 import { fetchFaucetStatus, setFaucetState } from "../../real_ethereum/wallets/faucetClient.mjs";
 
 // Hidden admin page (/admin/faucet, not linked anywhere): lets lab admins open and close the test-funds
 // faucet from the website. The password lives only in this component's state for the duration of one request;
 // it is never written to localStorage, sessionStorage, the URL or the console.
 
-const card = { maxWidth: 420, margin: "64px auto", padding: 20, border: "1px solid #ccc", borderRadius: 8, font: "14px/1.5 system-ui, sans-serif", background: "#fff", color: "#111" };
+const card = { maxWidth: 560, margin: "64px auto", padding: 20, border: "1px solid #ccc", borderRadius: 8, font: "14px/1.5 system-ui, sans-serif", background: "#fff", color: "#111" };
 
 const describe = (status) => {
   if (status.open === null) return "Unknown (could not read the status)";
@@ -63,6 +64,7 @@ const FaucetAdminPage = ({ faucetUrl = process.env.REACT_APP_FAUCET_URL, fetchIm
         <button type="submit" disabled={!faucetUrl || !password || busy}>{target ? "Open faucet" : "Close faucet"}</button>
       </form>
       {message ? <p role="status">{message}</p> : null}
+      {faucetUrl ? <FaucetFundsCardBody faucetUrl={faucetUrl} fetchImpl={fetchImpl} /> : null}
     </main>
   );
 };

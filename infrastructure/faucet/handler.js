@@ -196,7 +196,7 @@ const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, getAdminSecret
         // fell through: released, re-reserve below
         const again = await store.reserve(pidHash, address, Math.floor(now() / 1000), Math.floor(now() / 1000) + config.leaseSeconds);
         if (again.outcome !== "reserved") throw Object.assign(new Error("lost reservation"), { code: "PENDING" });
-        if (prolific && !(await store.takeSlot(pidHash, config.maxPayouts))) {
+        if (prolific && !(await store.takeSlot(pidHash, await effectiveMax()))) {
           await store.release(pidHash);
           throw Object.assign(new Error("payout cap reached"), { code: "BUDGET" });
         }
@@ -240,6 +240,21 @@ const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, getAdminSecret
     }
   };
   const publicState = (state) => ({ open: state.open, updatedAt: state.updatedAt ? new Date(state.updatedAt * 1000).toISOString() : null, pidMode: config.pidMode || "allowlist" });
+
+  // The payout cap in force: the admin-managed value (DynamoDB) when present, else the deploy-time value.
+  // The last value read is remembered in this container (the faucet runs with reserved concurrency 1), so an unreadable
+  // store keeps the cap the admin last set. Only a cold start during an outage falls back to the deploy-time value.
+  let lastEffectiveMax = null;
+  const effectiveMax = async () => {
+    try {
+      const stored = await store.getMaxPayouts?.();
+      if (Number.isInteger(stored) && stored > 0) { lastEffectiveMax = stored; return stored; }
+      lastEffectiveMax = config.maxPayouts; // item missing: the deploy-time value is the cap
+      return config.maxPayouts;
+    } catch {
+      return lastEffectiveMax ?? config.maxPayouts;
+    }
+  };
 
   // Counter scopes for one request: the current window, its TTL and the (salted, /64-normalised) caller key.
   const counters = async (request, callerScope, globalScope) => {
@@ -285,34 +300,92 @@ const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, getAdminSecret
     return json(200, publicState(await readState()));
   };
 
+  // Shared admin gate: rate limit + password check. Returns null when authorised, else the response to send.
+  // Only FAILED verifications count. Each attempt is counted up front (so parallel guesses cannot slip past the
+  // limit) and refunded when the password is right: an attacker burning failures from other IPs cannot block the
+  // admin's correct password, except by exhausting the modest global failure budget.
+  // The caller counter goes first; the global counter is only touched by callers still within their own limit,
+  // so a single address hammering the endpoint adds nothing to the global budget beyond its own limit.
+  const adminGuard = async (request, password) => {
+    const { hitCaller, hitGlobal } = await counters(request, "admf:", "admf-global");
+    const failures = await hitCaller(1);
+    if (failures > adminRateLimit) { event("admin_rate_limited"); return rateLimited(); }
+    const globalFailures = await hitGlobal(1);
+    if (globalFailures > adminGlobalRateLimit) { event("admin_rate_limited"); return rateLimited(); }
+    let record = null;
+    try { record = await adminRecord(); } catch { record = null; }
+    const ok = await verifyPassword(password, record);
+    if (!ok) { event("admin_denied"); return json(401, { error: "unauthorized" }); }
+    await Promise.all([hitCaller(-1), hitGlobal(-1)]).catch(() => {}); // a correct password is not a failure
+    return null;
+  };
+  const parseBody = (raw) => { try { return JSON.parse(raw || "{}") || {}; } catch { return {}; } };
+  const headerValue = (request, name) => {
+    const headers = request.headers || {};
+    const key = Object.keys(headers).find((candidate) => candidate.toLowerCase() === name);
+    return key ? headers[key] : undefined;
+  };
+
   // POST /admin/state { open, password }. Never logs the password or the body; 401 without detail on failure.
   const adminState = async (request) => {
     try {
       const raw = readBody(request);
       if (Buffer.byteLength(raw) > MAX_BODY_BYTES) return json(413, { error: "too_large" });
-      // Only FAILED verifications count. Each attempt is counted up front (so parallel guesses cannot slip past the
-      // limit) and refunded when the password is right: an attacker burning failures from other IPs cannot block the
-      // admin's correct password, except by exhausting the modest global failure budget.
-      // The caller counter goes first; the global counter is only touched by callers still within their own limit,
-      // so a single address hammering the endpoint adds nothing to the global budget beyond its own limit.
-      const { hitCaller, hitGlobal } = await counters(request, "admf:", "admf-global");
-      const failures = await hitCaller(1);
-      if (failures > adminRateLimit) { event("admin_rate_limited"); return rateLimited(); }
-      const globalFailures = await hitGlobal(1);
-      if (globalFailures > adminGlobalRateLimit) { event("admin_rate_limited"); return rateLimited(); }
-      const refund = () => Promise.all([hitCaller(-1), hitGlobal(-1)]);
-      let body;
-      try { body = JSON.parse(raw || "{}"); } catch { body = {}; }
-      let record = null;
-      try { record = await adminRecord(); } catch { record = null; }
-      const ok = await verifyPassword(body?.password, record);
-      if (!ok) { event("admin_denied"); return json(401, { error: "unauthorized" }); }
-      await refund().catch(() => {}); // a correct password is not a failure
+      const body = parseBody(raw);
+      const denied = await adminGuard(request, body.password);
+      if (denied) return denied;
       if (typeof body.open !== "boolean") return json(400, { error: "bad_request" });
       const updatedAt = Math.floor(now() / 1000);
       await store.setState(body.open, updatedAt);
       event("admin_state_changed", { open: body.open });
       return json(200, publicState({ open: body.open, updatedAt }));
+    } catch {
+      event("error", { code: "admin" });
+      return json(500, { error: "internal" });
+    }
+  };
+
+  const ADMIN_MAX_PAYOUTS_LIMIT = 1000;
+  // GET /admin/status (password in the x-admin-password header, never the URL): payout figures for the admin card.
+  // maxPayouts is null in allowlist mode (there is no counter cap there).
+  const adminStatus = async (request) => {
+    try {
+      const denied = await adminGuard(request, headerValue(request, "x-admin-password"));
+      if (denied) return denied;
+      const state = await readState();
+      const payoutsUsed = prolific ? await store.getPayoutCount() : 0;
+      return json(200, {
+        payoutsUsed,
+        maxPayouts: prolific ? await effectiveMax() : null,
+        faucetAddress: (await getWallet()).address,
+        payoutAmount: config.amountWei.toString(),
+        open: state.open,
+      });
+    } catch (error) {
+      event("error", { code: "admin_status", message: scrub(error?.code) });
+      return json(500, { error: "internal" });
+    }
+  };
+
+  // POST /admin/max-payouts { value, password }: integer, >= payoutsUsed, <= 1000. Audited in the existing log.
+  const adminSetMaxPayouts = async (request) => {
+    try {
+      const raw = readBody(request);
+      if (Buffer.byteLength(raw) > MAX_BODY_BYTES) return json(413, { error: "too_large" });
+      const body = parseBody(raw);
+      const denied = await adminGuard(request, body.password);
+      if (denied) return denied;
+      if (!prolific) return json(400, { error: "not_applicable" });
+      const { value } = body;
+      if (!Number.isInteger(value) || value < 1 || value > ADMIN_MAX_PAYOUTS_LIMIT) return json(400, { error: "bad_request" });
+      const payoutsUsed = await store.getPayoutCount();
+      if (value < payoutsUsed) return json(400, { error: "below_used", payoutsUsed });
+      const previous = await effectiveMax();
+      // The store re-checks the counter atomically, so a claim racing this request cannot leave used > cap.
+      if ((await store.setMaxPayouts(value, Math.floor(now() / 1000))) === false) return json(400, { error: "below_used", payoutsUsed: await store.getPayoutCount() });
+      lastEffectiveMax = value;
+      event("admin_max_payouts_changed", { from: previous, to: value, payoutsUsed });
+      return json(200, { payoutsUsed, maxPayouts: value });
     } catch {
       event("error", { code: "admin" });
       return json(500, { error: "internal" });
@@ -394,7 +467,7 @@ const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, getAdminSecret
       // 6. Payout cap (prolific): take one slot atomically before paying; a released reservation gives it back.
       if (prolific && !reservation.previous?.slot) {
         let granted = false;
-        try { granted = await store.takeSlot(pidHash, config.maxPayouts); } catch (error) { await store.release(pidHash).catch(() => {}); throw error; }
+        try { granted = await store.takeSlot(pidHash, await effectiveMax()); } catch (error) { await store.release(pidHash).catch(() => {}); throw error; }
         if (!granted) {
           await store.release(pidHash);
           event("claim_rejected", { pid: pidHash.slice(0, 8), reason: "budget" });
@@ -423,6 +496,8 @@ const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, getAdminSecret
       const path = String(request.rawPath || request.requestContext?.http?.path || "/claim").replace(/\/+$/, "") || "/claim";
       if (path === "/status") return method === "GET" ? await status(request) : json(405, { error: "method_not_allowed" });
       if (path === "/admin/state") return method === "POST" ? await adminState(request) : json(405, { error: "method_not_allowed" });
+      if (path === "/admin/status") return method === "GET" ? await adminStatus(request) : json(405, { error: "method_not_allowed" });
+      if (path === "/admin/max-payouts") return method === "POST" ? await adminSetMaxPayouts(request) : json(405, { error: "method_not_allowed" });
       if (path !== "/claim") return json(404, { error: "not_found" });
       if (method !== "POST") return json(405, { error: "method_not_allowed" });
       return await claimFunds(request);

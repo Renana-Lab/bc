@@ -4,6 +4,8 @@ import { makeStyles } from "@mui/styles";
 import styles1 from "./../styles/components.module.scss";
 import { useLocation, useNavigate } from "react-router-dom";
 import { getWalletCopy } from "../real_ethereum/wallets/walletCopy";
+import { clearWalletOverrides, hasWalletOverride } from "../real_ethereum/wallets/walletMode.mjs";
+import { useAdminAccess } from "../pages/ManageBudget/useAdminAccess";
 
 const useStyles = makeStyles({
   paper: {
@@ -144,6 +146,9 @@ const useStyles = makeStyles({
 
 const DrawerComponent = (props) => {
   const nav = useNavigate();
+  // Admin sign-in / wallet restore links are for admins only (participants can still type the URL).
+  const adminAccess = useAdminAccess();
+  const showAdminLinks = adminAccess.isAdmin || adminAccess.onAllowlist;
   const location = useLocation();
   const classes = useStyles();
 
@@ -214,6 +219,33 @@ const DrawerComponent = (props) => {
         >
           <ListItemText>-- Admin Zone --</ListItemText>
         </ListItemButton>
+        {showAdminLinks && getWalletCopy().embedded && !hasWalletOverride() && (
+          <ListItemButton
+            className={`${itemClassName("/admin-login")} ${classes.adminItem}`}
+            dense
+            onClick={() => nav("/admin-login")}
+          >
+            <ListItemText>Admin sign-in</ListItemText>
+          </ListItemButton>
+        )}
+        {hasWalletOverride() && (
+          <ListItemButton
+            className={`${itemClassName("")} ${classes.adminItem}`}
+            dense
+            onClick={() => { clearWalletOverrides(); window.location.reload(); }}
+          >
+            <ListItemText>Switch back to participant wallet</ListItemText>
+          </ListItemButton>
+        )}
+        {showAdminLinks && getWalletCopy().embedded && (
+          <ListItemButton
+            className={`${itemClassName("/admin/wallet")} ${classes.adminItem}`}
+            dense
+            onClick={() => nav("/admin/wallet")}
+          >
+            <ListItemText>Admin wallet</ListItemText>
+          </ListItemButton>
+        )}
       </div>
     </div>
   );

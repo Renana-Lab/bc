@@ -1,4 +1,5 @@
 import { JsonRpcProvider, Wallet, encryptKeystoreJson, getBytes, isHexString } from "ethers";
+import { createSilentVault } from "./silentVault.mjs";
 import { assertEnvelopedCalldata, assertRequestIsConfidential } from "./sapphireWrap.mjs";
 
 // Mode "local": a key generated in this browser, kept as an encrypted (scrypt + AES) keystore
@@ -11,14 +12,22 @@ export const createMemoryStorage = () => {
   return {
     async get(key) { return map.has(key) ? map.get(key) : null; },
     async set(key, value) { map.set(key, value); },
+    async putIfAbsent(key, value) { if (map.has(key)) return false; map.set(key, value); return true; },
     async delete(key) { map.delete(key); },
   };
 };
 
+// Store "keystore": the legacy passphrase keystore. Store "silent": CryptoKey + ciphertext of the invisible wallet.
+// Version 2 only adds the second store; existing keystore records are untouched.
+const STORES = ["keystore", "silent"];
 export const createIndexedDbStorage = ({ dbName = "data-market-local-wallet", storeName = "keystore" } = {}) => {
   const open = () => new Promise((resolve, reject) => {
-    const request = indexedDB.open(dbName, 1);
-    request.onupgradeneeded = () => request.result.createObjectStore(storeName);
+    const request = indexedDB.open(dbName, 2);
+    request.onupgradeneeded = () => {
+      for (const name of new Set([...STORES, storeName])) {
+        if (!request.result.objectStoreNames.contains(name)) request.result.createObjectStore(name);
+      }
+    };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
   });
@@ -38,14 +47,27 @@ export const createIndexedDbStorage = ({ dbName = "data-market-local-wallet", st
     get: (key) => run("readonly", (store) => store.get(key)),
     set: (key, value) => run("readwrite", (store) => store.put(value, key)),
     delete: (key) => run("readwrite", (store) => store.delete(key)),
+    // One readwrite transaction; add() fails with ConstraintError when the key exists, so the first writer wins.
+    putIfAbsent: async (key, value) => {
+      try {
+        await run("readwrite", (store) => store.add(value, key));
+        return true;
+      } catch (error) {
+        if (error?.name === "ConstraintError") return false;
+        throw error;
+      }
+    },
   };
 };
 
 const walletError = (code, message) => Object.assign(new Error(message), { code });
 
-export const createLocalWallet = ({ storage, scryptN = 2 ** 17 } = {}) => {
+// `storage` holds the legacy passphrase keystore; `silentStorage` (+ `scope`, one per participant id) holds the
+// invisible wallet. Without `silentStorage` only the passphrase flow exists.
+export const createLocalWallet = ({ storage, silentStorage, scope = "default", scryptN = 2 ** 17 } = {}) => {
   if (!storage) throw new Error("A storage adapter is required.");
   let signer = null;
+  let opening = null;
   const listeners = new Set();
   const emit = (event, payload) => listeners.forEach((listener) => listener(event, payload));
 
@@ -53,9 +75,60 @@ export const createLocalWallet = ({ storage, scryptN = 2 ** 17 } = {}) => {
   const encrypt = (wallet, passphrase) =>
     encryptKeystoreJson({ address: wallet.address, privateKey: wallet.privateKey }, passphrase, { scrypt: { N: scryptN } });
 
+  const vault = silentStorage ? createSilentVault({ storage: silentStorage, scope }) : null;
+  const requireVault = () => { if (!vault) throw new Error("Silent wallet storage is not configured."); return vault; };
+
   return {
     subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
     async exists() { return Boolean(await storage.get(KEY)); },
+    // --- invisible wallet ---
+    async silentExists() { return requireVault().exists(); },
+    // Opens (or, on the first visit, creates) the participant's wallet without any prompt.
+    // Resolves "opened" | "created" | "needs-migration" (an old passphrase keystore exists and has not been migrated yet).
+    // Concurrent callers (React Strict Mode) share one run, so two wallets can never be created at once.
+    openSilent() {
+      if (!opening) {
+        const run = async () => {
+          const sealed = requireVault();
+          const existing = await sealed.open();
+          if (existing) { unlockWith(new Wallet(existing)); return "opened"; }
+          if (await storage.get(KEY)) return "needs-migration";
+          const wallet = Wallet.createRandom();
+          const wrote = await sealed.sealIfAbsent(wallet.privateKey);
+          // Always re-open from storage: if another tab won the race, both tabs end up with the same wallet.
+          const stored = await sealed.open();
+          if (!stored) throw new Error("The new wallet could not be read back from storage.");
+          unlockWith(new Wallet(stored));
+          return wrote ? "created" : "opened";
+        };
+        // Across tabs, the Web Locks API serializes first visits for one scope (Strict Mode is covered by `opening`).
+        const locks = globalThis.navigator?.locks;
+        opening = locks?.request ? locks.request(`wallet:${scope}`, run) : run();
+        opening.catch(() => { opening = null; });
+      }
+      return opening;
+    },
+    // After the legacy passphrase unlock: re-save the same key with the invisible scheme and drop the keystore.
+    async migrateToSilent() {
+      if (!signer) throw walletError(4100, "Unlock the local wallet first.");
+      await requireVault().seal(signer.privateKey);
+      await storage.delete(KEY);
+    },
+    // Passphrase-encrypted backup of the CURRENT key (admin view only). Works for both schemes.
+    async exportBackup(passphrase) {
+      if (!signer) throw walletError(4100, "Unlock the local wallet first.");
+      if (!passphrase || passphrase.length < 12) throw new Error("Choose a passphrase of at least 12 characters.");
+      return encrypt(signer, passphrase);
+    },
+    // Replaces this scope's wallet with a restored backup (admin bootstrap).
+    async restoreBackupSilent(json, passphrase) {
+      const decrypted = await Wallet.fromEncryptedJson(json, passphrase).catch(() => {
+        throw new Error("Backup could not be decrypted with that passphrase.");
+      });
+      await requireVault().seal(decrypted.privateKey);
+      unlockWith(new Wallet(decrypted.privateKey));
+      return decrypted.address;
+    },
     isUnlocked() { return Boolean(signer); },
     get address() { return signer ? signer.address : ""; },
     async create(passphrase) {
@@ -76,7 +149,7 @@ export const createLocalWallet = ({ storage, scryptN = 2 ** 17 } = {}) => {
       return decrypted.address;
     },
     lock() { if (signer) { signer = null; emit("accountsChanged", []); } },
-    async forget() { signer = null; await storage.delete(KEY); emit("accountsChanged", []); },
+    async forget() { signer = null; opening = null; await storage.delete(KEY); await vault?.destroy(); emit("accountsChanged", []); },
     // Backup of the ENCRYPTED keystore (needs the same passphrase to restore).
     async exportEncryptedBackup() {
       const json = await storage.get(KEY);

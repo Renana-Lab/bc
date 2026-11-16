@@ -68,7 +68,7 @@
     "sapphire:test": "node --test src/real_ethereum/siwe.test.mjs scripts/sapphire/sapphireConfidential.test.mjs scripts/sapphire/admin.test.mjs",
     "sapphire:test:wallets": "node --test scripts/sapphire/walletModes.test.mjs",
     "sapphire:test:gasless": "node --test scripts/sapphire/gasless/gaslessFeasibility.test.mjs",
-    "faucet:test": "node --test scripts/faucet/faucetHandler.test.mjs scripts/faucet/dynamoStore.test.mjs scripts/faucet/template.test.mjs scripts/faucet/adminAuth.test.mjs",
+    "faucet:test": "node --test scripts/faucet/faucetHandler.test.mjs scripts/faucet/dynamoStore.test.mjs scripts/faucet/template.test.mjs scripts/faucet/adminAuth.test.mjs scripts/faucet/adminPayouts.test.mjs",
     "faucet:test:flow": "node --test scripts/faucet/faucetFlow.test.mjs"
   },
   "eslintConfig": {
@@ -97,6 +97,7 @@
     "@aws-sdk/client-secrets-manager": "3.1164.0",
     "@oasisprotocol/sapphire-ethers-v6": "^6.0.1",
     "@vitejs/plugin-react": "4.3.4",
+    "fake-indexeddb": "6.0.0",
     "oz-sapphire-compat": "npm:@openzeppelin/contracts@5.0.2",
     "source-map-loader": "^5.0.0",
     "vite": "5.4.14"

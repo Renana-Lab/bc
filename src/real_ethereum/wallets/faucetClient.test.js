@@ -57,3 +57,36 @@ describe("faucet client", () => {
     await expect(setFaucetState({ faucetUrl: "https://f.example", open: true, password: "x", fetchImpl: async () => { throw new TypeError("Failed to fetch"); } })).rejects.toThrow(NETWORK_MESSAGE);
   });
 });
+
+describe("faucet admin status and payout limit", () => {
+  const { fetchFaucetAdminStatus, setFaucetMaxPayouts } = require("./faucetClient.mjs");
+  const respond = (status, body) => jest.fn(async () => ({ status, ok: status < 300, json: async () => body }));
+
+  test("status sends the password in a header, never in the URL", async () => {
+    const fetchImpl = respond(200, { open: true, payoutsUsed: 1, maxPayouts: 5, faucetAddress: "0xabc", payoutAmount: "1" });
+    const result = await fetchFaucetAdminStatus({ faucetUrl: "https://f.example/", password: "secret pw", fetchImpl });
+    expect(result.maxPayouts).toBe(5);
+    const [url, init] = fetchImpl.mock.calls[0];
+    expect(url).toBe("https://f.example/admin/status");
+    expect(url).not.toContain("secret");
+    expect(init).toMatchObject({ method: "GET", headers: { "x-admin-password": "secret pw" } });
+  });
+
+  test("status maps 401, 429, network and other failures to friendly errors", async () => {
+    await expect(fetchFaucetAdminStatus({ faucetUrl: "https://f.example", password: "x", fetchImpl: respond(401, {}) })).rejects.toThrow("Wrong password.");
+    await expect(fetchFaucetAdminStatus({ faucetUrl: "https://f.example", password: "x", fetchImpl: respond(429, {}) })).rejects.toThrow(/Too many attempts/);
+    await expect(fetchFaucetAdminStatus({ faucetUrl: "https://f.example", password: "x", fetchImpl: respond(500, {}) })).rejects.toThrow(/could not be read/);
+    await expect(fetchFaucetAdminStatus({ faucetUrl: "https://f.example", password: "x", fetchImpl: jest.fn(async () => { throw new TypeError("Failed to fetch"); }) })).rejects.toThrow(/Could not reach/);
+  });
+
+  test("setting the limit posts { value, password } and maps the server's refusals", async () => {
+    const ok = respond(200, { payoutsUsed: 3, maxPayouts: 60 });
+    expect(await setFaucetMaxPayouts({ faucetUrl: "https://f.example", value: 60, password: "pw", fetchImpl: ok })).toEqual({ payoutsUsed: 3, maxPayouts: 60 });
+    expect(ok.mock.calls[0][0]).toBe("https://f.example/admin/max-payouts");
+    expect(JSON.parse(ok.mock.calls[0][1].body)).toEqual({ value: 60, password: "pw" });
+    await expect(setFaucetMaxPayouts({ faucetUrl: "https://f.example", value: 1, password: "pw", fetchImpl: respond(400, { error: "below_used" }) })).rejects.toThrow(/cannot be lower/);
+    await expect(setFaucetMaxPayouts({ faucetUrl: "https://f.example", value: 1, password: "pw", fetchImpl: respond(400, { error: "not_applicable" }) })).rejects.toThrow(/no payout limit/);
+    await expect(setFaucetMaxPayouts({ faucetUrl: "https://f.example", value: 5000, password: "pw", fetchImpl: respond(400, { error: "bad_request" }) })).rejects.toThrow(/up to 1000/);
+    await expect(setFaucetMaxPayouts({ faucetUrl: "https://f.example", value: 5, password: "bad", fetchImpl: respond(401, {}) })).rejects.toThrow("Wrong password.");
+  });
+});
