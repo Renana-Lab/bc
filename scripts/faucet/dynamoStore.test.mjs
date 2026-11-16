@@ -45,6 +45,13 @@ const fakeDynamo = () => {
         items.set(key, { pk: { S: key }, count: { N: String(next) } });
         return {};
       }
+      if (key === "config#maxPayouts") { // admin-managed cap: set, and conditional rollback
+        if (input.ConditionExpression && num(item?.value) !== Number(values[":value"].N)) throw conditionFailed();
+        const old = item ? structuredClone(item) : undefined;
+        if (update.startsWith("REMOVE")) items.delete(key);
+        else items.set(key, { pk: { S: key }, value: values[":previous"] || values[":value"], updatedAt: values[":at"] });
+        return input.ReturnValues === "ALL_OLD" ? { Attributes: old } : {};
+      }
       if (key === "config#faucet") { // open/closed switch
         items.set(key, { pk: { S: key }, open: values[":open"], updatedAt: values[":at"] });
         return {};
@@ -182,4 +189,66 @@ test("dynamo store: the open/closed switch defaults to closed and stores only op
   await store.setState(false, NOW + 5);
   assert.deepEqual(await store.getState(), { open: false, updatedAt: NOW + 5 });
   assert.deepEqual(Object.keys(client.tableOf("codes").get("config#faucet")).sort(), ["open", "pk", "updatedAt"]);
+});
+
+test("dynamo store: getPayoutCount reads the slot counter with a consistent read (0 when never used)", async () => {
+  const client = fakeDynamo();
+  const store = createDynamoStore({ table: "codes", rateTable: "rates", client });
+  assert.equal(await store.getPayoutCount(), 0);
+  assert.deepEqual(client.commands.at(-1).input.Key, { pk: { S: "counter#payouts" } });
+  assert.equal(client.commands.at(-1).input.ConsistentRead, true);
+  assert.equal(client.commands.at(-1).input.TableName, "codes");
+  const address = "0x00000000000000000000000000000000000000ee";
+  await store.putPid("c1", NOW); await store.reserve("c1", address, NOW, NOW + 60); await store.takeSlot("c1", 5);
+  assert.equal(await store.getPayoutCount(), 1);
+});
+
+test("dynamo store: getMaxPayouts is null until set, reads config#maxPayouts consistently, and returns a number", async () => {
+  const client = fakeDynamo();
+  const store = createDynamoStore({ table: "codes", rateTable: "rates", client });
+  assert.equal(await store.getMaxPayouts(), null);
+  assert.deepEqual(client.commands.at(-1).input.Key, { pk: { S: "config#maxPayouts" } });
+  assert.equal(client.commands.at(-1).input.ConsistentRead, true);
+  assert.equal(await store.setMaxPayouts(40, NOW), true);
+  assert.equal(await store.getMaxPayouts(), 40);
+});
+
+test("dynamo store: setMaxPayouts writes only config#maxPayouts { value, updatedAt } on the codes table", async () => {
+  const client = fakeDynamo();
+  const store = createDynamoStore({ table: "codes", rateTable: "rates", client });
+  assert.equal(await store.setMaxPayouts(25, NOW), true);
+  const write = client.commands.find((c) => c.name === "UpdateItemCommand" && c.input.Key.pk.S === "config#maxPayouts");
+  assert.equal(write.input.TableName, "codes");
+  assert.deepEqual(write.input.ExpressionAttributeValues, { ":value": { N: "25" }, ":at": { N: String(NOW) } });
+  assert.deepEqual(Object.keys(client.tableOf("codes").get("config#maxPayouts")).sort(), ["pk", "updatedAt", "value"]);
+  assert.equal(await store.setMaxPayouts(30, NOW + 5), true, "raising and lowering above the used count work");
+  assert.equal(await store.getMaxPayouts(), 30);
+});
+
+test("dynamo store: setMaxPayouts refuses a value below the slots in use and rolls the write back", async () => {
+  const client = fakeDynamo();
+  const store = createDynamoStore({ table: "codes", rateTable: "rates", client });
+  client.tableOf("codes").set("counter#payouts", { pk: { S: "counter#payouts" }, count: { N: "5" } });
+  assert.equal(await store.setMaxPayouts(3, NOW), false);
+  assert.equal(await store.getMaxPayouts(), null, "nothing stored when there was no previous cap");
+  assert.equal(await store.setMaxPayouts(8, NOW + 1), true);
+  assert.equal(await store.setMaxPayouts(4, NOW + 2), false);
+  assert.equal(await store.getMaxPayouts(), 8, "the previous cap is restored");
+  assert.equal(await store.setMaxPayouts(5, NOW + 3), true, "equal to the slots in use is allowed");
+});
+
+test("dynamo store: a claim that takes a slot while the cap is being lowered makes the lowering fail", async () => {
+  const client = fakeDynamo();
+  const store = createDynamoStore({ table: "codes", rateTable: "rates", client });
+  client.tableOf("codes").set("counter#payouts", { pk: { S: "counter#payouts" }, count: { N: "2" } });
+  const realSend = client.send.bind(client);
+  client.send = async (command) => {
+    const result = await realSend(command);
+    if (command.input.Key?.pk?.S === "config#maxPayouts" && command.input.ReturnValues === "ALL_OLD") {
+      client.tableOf("codes").set("counter#payouts", { pk: { S: "counter#payouts" }, count: { N: "3" } }); // a claim wins the race
+    }
+    return result;
+  };
+  assert.equal(await store.setMaxPayouts(2, NOW), false, "the counter is re-checked after the write");
+  assert.equal(await store.getMaxPayouts(), null);
 });

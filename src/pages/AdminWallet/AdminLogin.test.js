@@ -1,8 +1,10 @@
 import React from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { Wallet } from "ethers";
+import { Wallet, encryptKeystoreJson } from "ethers";
 import AdminLoginPage from "./AdminLoginPage";
-import { connectAdminWithMetaMask } from "./adminLogin";
+import { connectAdminWithMetaMask, importAdminKey, normalizePrivateKey, readOnChainAdminRole } from "./adminLogin";
+import { restoreAdminBackup } from "../../real_ethereum/wallets/adminSlot";
+import { AdminWalletRestore } from "../../real_ethereum/wallets/AdminWalletPanel";
 import { AdminSessionControls } from "../ManageBudget/AdminGasCards";
 import {
   WALLET_OVERRIDE_KEY, WALLET_SCOPE_OVERRIDE_KEY, clearWalletOverrides, getWalletMode, getWalletModeOverride, hasWalletOverride,
@@ -10,6 +12,11 @@ import {
 } from "../../real_ethereum/wallets/walletMode.mjs";
 import { getWalletCopy } from "../../real_ethereum/wallets/walletCopy";
 
+const mockChain = { admin: new Set(), owner: "" };
+jest.mock("../../real_ethereum/adminChain", () => ({
+  readIsFactoryAdmin: async (account) => mockChain.admin.has(String(account).toLowerCase()), // plain functions: CRA resets jest.fn implementations
+  readFactoryOwner: async () => mockChain.owner,
+}));
 const mockAccess = { account: "" };
 jest.mock("../../real_ethereum/walletAccess", () => ({
   ...jest.requireActual("../../real_ethereum/walletAccess"),
@@ -90,6 +97,31 @@ describe("MetaMask admin sign-in", () => {
     expect((await connectAdminWithMetaMask({ findProvider: async () => metaMask(`0x${"2".repeat(40)}`), extraAdminCheck })).ok).toBe(false);
   });
 
+  test("/admin-login wires the on-chain admin role (factory.isAdmin) and the owner by default", async () => {
+    mockChain.admin = new Set([OTHER]);
+    const redirect = jest.fn();
+    render(<AdminLoginPage findProvider={async () => metaMask(OTHER)} redirect={redirect} />);
+    fireEvent.click(screen.getByRole("button", { name: "Connect MetaMask" }));
+    await waitFor(() => expect(redirect).toHaveBeenCalledWith("/manage-budget"));
+    expect(window.sessionStorage.getItem(WALLET_OVERRIDE_KEY)).toBe("metamask");
+    clearWalletOverrides();
+    mockChain.admin = new Set();
+    mockChain.owner = OTHER;
+    const ownerRedirect = jest.fn();
+    render(<AdminLoginPage findProvider={async () => metaMask(OTHER)} redirect={ownerRedirect} />);
+    fireEvent.click(screen.getAllByRole("button", { name: "Connect MetaMask" })[1]);
+    await waitFor(() => expect(ownerRedirect).toHaveBeenCalled());
+    mockChain.owner = "";
+  });
+
+  test("a chain account that is neither admin nor owner, or a failing chain read, is rejected", async () => {
+    mockChain.admin = new Set(); mockChain.owner = `0x${"9".repeat(40)}`;
+    expect((await connectAdminWithMetaMask({ findProvider: async () => metaMask(OTHER), extraAdminCheck: readOnChainAdminRole })).ok).toBe(false);
+    expect(await readOnChainAdminRole(OTHER, { readIsAdmin: async () => { throw new Error("rpc"); }, readOwner: async () => { throw new Error("rpc"); } })).toBe(false);
+    expect(hasWalletOverride()).toBe(false);
+    mockChain.owner = "";
+  });
+
   test("no MetaMask, or a rejected connection, leaves the override unset", async () => {
     expect(await connectAdminWithMetaMask({ findProvider: async () => null })).toMatchObject({ ok: false, message: expect.stringMatching(/not detected/) });
     expect(await connectAdminWithMetaMask({ findProvider: async () => metaMask(ADMIN, { reject: true }) })).toMatchObject({ ok: false, message: expect.stringMatching(/rejected/) });
@@ -143,12 +175,95 @@ describe("Import admin key (fallback)", () => {
     fireEvent.change(screen.getByLabelText("Admin private key"), { target: { value: adminWallet.privateKey } });
     fireEvent.click(screen.getByRole("button", { name: "Import admin key" }));
     await waitFor(() => expect(redirect).toHaveBeenCalledWith("/manage-budget"));
-    expect([...storage.map.keys()].sort()).toEqual(["key:admin", "wallet:admin"]);
-    expect(storage.map.get("key:admin").extractable).toBe(false);
+    expect([...storage.map.keys()]).toEqual(["wallet:admin"]); // one record: key + iv + ciphertext
+    expect(storage.map.get("wallet:admin").key.extractable).toBe(false);
     expect(JSON.stringify(Array.from(storage.map.get("wallet:admin").ciphertext))).not.toContain(adminWallet.privateKey.slice(2));
     expect(window.sessionStorage.getItem(WALLET_SCOPE_OVERRIDE_KEY)).toBe("admin");
     expect(getWalletMode()).toBe("local"); // the mode itself is untouched; only the wallet slot changes
     expect(screen.getByLabelText("Admin private key").value).toBe("");
+  });
+});
+
+describe("private key format and /admin/wallet restore", () => {
+  const memoryStorage = () => {
+    const map = new Map();
+    return { map, get: async (k) => map.get(k) ?? null, set: async (k, v) => { map.set(k, v); }, delete: async (k) => { map.delete(k); } };
+  };
+  beforeAll(() => {
+    const { webcrypto } = require("crypto");
+    Object.defineProperty(globalThis, "crypto", { value: webcrypto, configurable: true });
+  });
+  const admin = new Wallet(`0x${"11".repeat(32)}`);
+
+  test("a private key without the 0x prefix (as exported by MetaMask) is accepted, with or without surrounding spaces", async () => {
+    expect(normalizePrivateKey(`  ${"11".repeat(32)} `)).toBe(`0x${"11".repeat(32)}`);
+    expect(normalizePrivateKey(`0x${"11".repeat(32)}`)).toBe(`0x${"11".repeat(32)}`);
+    expect(normalizePrivateKey("nonsense")).toBe("nonsense");
+    const storage = memoryStorage();
+    const result = await importAdminKey({ privateKey: "11".repeat(32), allowlist: [admin.address.toLowerCase()], silentStorage: storage });
+    expect(result).toEqual({ ok: true, account: admin.address });
+    expect(storage.map.has("wallet:admin")).toBe(true);
+    expect(window.sessionStorage.getItem(WALLET_SCOPE_OVERRIDE_KEY)).toBe("admin");
+  });
+  test("a malformed key is still rejected", async () => {
+    expect(await importAdminKey({ privateKey: "11".repeat(31), allowlist: [admin.address.toLowerCase()], silentStorage: memoryStorage() })).toEqual({ ok: false, message: "That is not a valid private key." });
+  });
+
+  const backupJson = () => encryptKeystoreJson({ address: admin.address, privateKey: admin.privateKey }, "a long passphrase!", { scrypt: { N: 2 ** 4 } });
+
+  test("restore goes into the 'admin' slot, sets walletScopeOverride=admin and never touches the participant slot", async () => {
+    const storage = memoryStorage();
+    storage.map.set("wallet:pid-participant", { v: 2, marker: "keep" });
+    const result = await restoreAdminBackup({ json: await backupJson(), passphrase: "a long passphrase!", silentStorage: storage });
+    expect(result).toEqual({ ok: true, account: admin.address });
+    expect([...storage.map.keys()].sort()).toEqual(["wallet:admin", "wallet:pid-participant"]);
+    expect(storage.map.get("wallet:pid-participant")).toEqual({ v: 2, marker: "keep" });
+    expect(window.sessionStorage.getItem(WALLET_SCOPE_OVERRIDE_KEY)).toBe("admin");
+  });
+  test("an existing admin wallet is replaced only after confirmation; declining keeps it and the override unset", async () => {
+    const storage = memoryStorage();
+    await restoreAdminBackup({ json: await backupJson(), passphrase: "a long passphrase!", silentStorage: storage });
+    const before = storage.map.get("wallet:admin");
+    window.sessionStorage.clear();
+    const confirmReplace = jest.fn(async () => false);
+    const declined = await restoreAdminBackup({ json: await backupJson(), passphrase: "a long passphrase!", silentStorage: storage, confirmReplace });
+    expect(confirmReplace).toHaveBeenCalledTimes(1);
+    expect(declined).toMatchObject({ ok: false, cancelled: true });
+    expect(storage.map.get("wallet:admin")).toBe(before);
+    expect(window.sessionStorage.getItem(WALLET_SCOPE_OVERRIDE_KEY)).toBeNull();
+    const accepted = await restoreAdminBackup({ json: await backupJson(), passphrase: "a long passphrase!", silentStorage: storage, confirmReplace: async () => true });
+    expect(accepted.ok).toBe(true);
+    expect(storage.map.get("wallet:admin")).not.toBe(before);
+  });
+  test("no confirmation is asked on a first restore; a wrong passphrase stores nothing", async () => {
+    const storage = memoryStorage();
+    const confirmReplace = jest.fn(async () => true);
+    await expect(restoreAdminBackup({ json: await backupJson(), passphrase: "wrong passphrase!!", silentStorage: storage, confirmReplace })).rejects.toThrow(/could not be decrypted/);
+    expect(storage.map.size).toBe(0);
+    await restoreAdminBackup({ json: await backupJson(), passphrase: "a long passphrase!", silentStorage: storage, confirmReplace });
+    expect(confirmReplace).not.toHaveBeenCalled();
+  });
+  test("the restore control asks window confirmation before replacing and reports the result", async () => {
+    const restore = jest.fn(async ({ confirmReplace }) => { await confirmReplace(); return { ok: true, account: admin.address }; });
+    const confirm = jest.fn(() => true);
+    const onRestored = jest.fn();
+    render(<AdminWalletRestore restore={restore} confirm={confirm} onRestored={onRestored} />);
+    fireEvent.change(screen.getByLabelText("Backup passphrase"), { target: { value: "a long passphrase!" } });
+    const file = new File(["{}"], "backup.json", { type: "application/json" });
+    file.text = async () => "{}";
+    fireEvent.change(screen.getByTestId("admin-wallet-restore-file"), { target: { files: [file] } });
+    await waitFor(() => expect(onRestored).toHaveBeenCalledWith(admin.address));
+    expect(confirm).toHaveBeenCalledWith(expect.stringMatching(/Replace/));
+    expect(screen.getByRole("status").textContent).toBe(`Restored ${admin.address}.`);
+    expect(screen.getByLabelText("Backup passphrase").value).toBe("");
+  });
+  test("a cancelled restore shows the message and does not report success", async () => {
+    const onRestored = jest.fn();
+    render(<AdminWalletRestore restore={async () => ({ ok: false, cancelled: true, message: "Restore cancelled. The current admin wallet was kept." })} onRestored={onRestored} />);
+    const file = new File(["{}"], "backup.json"); file.text = async () => "{}";
+    fireEvent.change(screen.getByTestId("admin-wallet-restore-file"), { target: { files: [file] } });
+    expect((await screen.findByRole("status")).textContent).toMatch(/cancelled/);
+    expect(onRestored).not.toHaveBeenCalled();
   });
 });
 

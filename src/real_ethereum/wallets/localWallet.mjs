@@ -12,6 +12,7 @@ export const createMemoryStorage = () => {
   return {
     async get(key) { return map.has(key) ? map.get(key) : null; },
     async set(key, value) { map.set(key, value); },
+    async putIfAbsent(key, value) { if (map.has(key)) return false; map.set(key, value); return true; },
     async delete(key) { map.delete(key); },
   };
 };
@@ -46,6 +47,16 @@ export const createIndexedDbStorage = ({ dbName = "data-market-local-wallet", st
     get: (key) => run("readonly", (store) => store.get(key)),
     set: (key, value) => run("readwrite", (store) => store.put(value, key)),
     delete: (key) => run("readwrite", (store) => store.delete(key)),
+    // One readwrite transaction; add() fails with ConstraintError when the key exists, so the first writer wins.
+    putIfAbsent: async (key, value) => {
+      try {
+        await run("readwrite", (store) => store.add(value, key));
+        return true;
+      } catch (error) {
+        if (error?.name === "ConstraintError") return false;
+        throw error;
+      }
+    },
   };
 };
 
@@ -77,17 +88,22 @@ export const createLocalWallet = ({ storage, silentStorage, scope = "default", s
     // Concurrent callers (React Strict Mode) share one run, so two wallets can never be created at once.
     openSilent() {
       if (!opening) {
-        opening = (async () => {
+        const run = async () => {
           const sealed = requireVault();
           const existing = await sealed.open();
           if (existing) { unlockWith(new Wallet(existing)); return "opened"; }
           if (await storage.get(KEY)) return "needs-migration";
           const wallet = Wallet.createRandom();
-          await sealed.seal(wallet.privateKey);
-          // Use what was actually stored: if another tab won the race, both tabs end up with the same wallet.
-          unlockWith(new Wallet((await sealed.open()) || wallet.privateKey));
-          return "created";
-        })();
+          const wrote = await sealed.sealIfAbsent(wallet.privateKey);
+          // Always re-open from storage: if another tab won the race, both tabs end up with the same wallet.
+          const stored = await sealed.open();
+          if (!stored) throw new Error("The new wallet could not be read back from storage.");
+          unlockWith(new Wallet(stored));
+          return wrote ? "created" : "opened";
+        };
+        // Across tabs, the Web Locks API serializes first visits for one scope (Strict Mode is covered by `opening`).
+        const locks = globalThis.navigator?.locks;
+        opening = locks?.request ? locks.request(`wallet:${scope}`, run) : run();
         opening.catch(() => { opening = null; });
       }
       return opening;

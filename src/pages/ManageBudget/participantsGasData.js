@@ -92,7 +92,7 @@ export const planTopUp = ({ rows, amountText }) => {
 
 // Sends one transaction per address, strictly in order. Before every send the admin balance is re-read; when it cannot
 // cover amount + gas reserve the run STOPS and the remaining rows are marked "skipped". A rejected signature stops the
-// run too. `send(address, amountWei)` resolves with a hash; `waitFor(hash)` with true/false (mined ok).
+// run too. `send(address, amountWei)` resolves with a hash; `waitFor(hash)` with true (mined ok), false (mined but reverted) or null (timed out: marked "unconfirmed").
 export const runTopUps = async ({
   targets, amountWei, send, waitFor, getAdminBalance, onStatus = () => {}, reserveWei = ADMIN_GAS_RESERVE_WEI,
 }) => {
@@ -112,14 +112,20 @@ export const runTopUps = async ({
       break;
     }
     onStatus(address, { state: "sending" });
+    let hash = "";
     try {
-      const hash = await send(address, amountWei);
+      hash = await send(address, amountWei);
       onStatus(address, { state: "sent", hash });
+      // Strictly sequential: the next send starts only after this wait settled.
       const ok = await waitFor(hash);
-      mark(address, ok ? { state: "confirmed", hash } : { state: "failed", hash, error: "Transaction failed" });
+      if (ok === true) mark(address, { state: "confirmed", hash });
+      else if (ok === null || ok === undefined) mark(address, { state: "unconfirmed", hash, error: "unconfirmed (check explorer)" }); // timed out: it may still land
+      else mark(address, { state: "failed", hash, error: "Transaction failed" });
     } catch (error) {
-      mark(address, { state: "failed", error: error?.message || "Transaction failed" });
-      if (error?.code === 4001) { // the admin rejected the signature: do not keep prompting
+      // A sent transaction whose confirmation could not be read is unknown, not failed.
+      if (hash) mark(address, { state: "unconfirmed", hash, error: "unconfirmed (check explorer)" });
+      else mark(address, { state: "failed", error: error?.message || "Transaction failed" });
+      if (!hash && error?.code === 4001) { // the admin rejected the signature: do not keep prompting
         targets.slice(index + 1).forEach((rest) => mark(rest, { state: "skipped", error: "Cancelled" }));
         break;
       }

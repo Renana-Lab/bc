@@ -9,6 +9,10 @@ const PROLIFIC_PATTERN = /^[a-fA-F0-9]{24}$/;
 // (an email address, say) which the stricter formats above rule out.
 const OPEN_PATTERN = /^[!-~]{1,128}$/;
 const OPEN_STORAGE_KEY = "data-market:participant-code-open";
+// Long-lived copy (localStorage) of the last valid id, used ONLY when this tab has none (new tab, bookmark without ?pid=),
+// so the same browser keeps reusing the same wallet.
+const LAST_PID_KEY = "data-market:last-participant-code";
+const LAST_OPEN_PID_KEY = "data-market:last-participant-code-open";
 const STUDY_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 const EXPERIMENT_PATTERN = /^[A-Za-z0-9_.~-]{1,64}$/;
 const STORAGE_KEY = "data-market:participant-code";
@@ -31,25 +35,32 @@ const firstParam = (params, names) => {
 };
 
 // Reads one value from the URL (when valid, remembering it for the tab session) or falls back to the stored one.
-const readValue = ({ fromUrl, isValid, key, storage }) => {
+// `lastKey` + `persistentStorage`: the last valid value also survives in the long-lived storage and is read only when
+// neither the URL nor the tab session has one.
+const readValue = ({ fromUrl, isValid, key, storage, lastKey, persistentStorage }) => {
   let value = fromUrl;
-  try {
-    if (isValid(value)) storage?.setItem(key, value);
-    else value = storage?.getItem(key) || "";
-  } catch {
-    // storage unavailable: use the URL value only
+  if (isValid(value)) {
+    try { storage?.setItem(key, value); } catch { /* storage unavailable: use the URL value only */ }
+    if (lastKey) { try { persistentStorage?.setItem(lastKey, value); } catch { /* ignore */ } }
+    return value;
+  }
+  value = "";
+  try { value = storage?.getItem(key) || ""; } catch { value = ""; }
+  if (!isValid(value) && lastKey) {
+    try { value = persistentStorage?.getItem(lastKey) || ""; } catch { value = ""; }
   }
   return isValid(value) ? value : "";
 };
 
 // Reads ?pid= / ?PROLIFIC_PID= (plus optional ?study= / ?STUDY_ID= and ?exp=) once and keeps them for the
-// browser tab session (sessionStorage), nothing else. Values are never logged.
-export const getParticipantContext = ({ search = "", storage } = {}) => {
+// browser tab session (sessionStorage). Only the participant id is also remembered in `persistentStorage`
+// (localStorage) as a fallback for tabs that have none. Values are never logged.
+export const getParticipantContext = ({ search = "", storage, persistentStorage } = {}) => {
   const params = new URLSearchParams(search);
   return {
     // Candidate for open-mode faucets. Never sent unless the faucet says it is in open mode.
-    openPid: readValue({ fromUrl: firstParam(params, ["pid", "PROLIFIC_PID"]).trim(), isValid: isValidOpenParticipantId, key: OPEN_STORAGE_KEY, storage }),
-    pid: readValue({ fromUrl: firstParam(params, ["pid", "PROLIFIC_PID"]), isValid: isValidParticipantId, key: STORAGE_KEY, storage }),
+    openPid: readValue({ fromUrl: firstParam(params, ["pid", "PROLIFIC_PID"]).trim(), isValid: isValidOpenParticipantId, key: OPEN_STORAGE_KEY, storage, lastKey: LAST_OPEN_PID_KEY, persistentStorage }),
+    pid: readValue({ fromUrl: firstParam(params, ["pid", "PROLIFIC_PID"]), isValid: isValidParticipantId, key: STORAGE_KEY, storage, lastKey: LAST_PID_KEY, persistentStorage }),
     studyId: readValue({ fromUrl: firstParam(params, ["study", "STUDY_ID"]), isValid: (v) => STUDY_PATTERN.test(v), key: STUDY_KEY, storage }),
     experimentCode: readValue({ fromUrl: firstParam(params, ["exp"]), isValid: (v) => EXPERIMENT_PATTERN.test(v), key: EXPERIMENT_KEY, storage }),
   };
@@ -71,3 +82,16 @@ export const stripParticipantParams = (win) => {
     return false; // not fatal
   }
 };
+
+// Asks the browser not to evict the wallet's IndexedDB under storage pressure. Once per page load; failures are ignored.
+let persistRequested = false;
+export const requestPersistentStorage = (nav = globalThis.navigator) => {
+  if (persistRequested) return Promise.resolve(false);
+  persistRequested = true;
+  try {
+    return Promise.resolve(nav?.storage?.persist?.()).then((granted) => Boolean(granted), () => false);
+  } catch {
+    return Promise.resolve(false);
+  }
+};
+export const __resetPersistForTests = () => { persistRequested = false; };

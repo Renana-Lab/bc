@@ -81,7 +81,9 @@ const createMemoryStore = () => {
     },
     async setMaxPayouts(value) {
       await tick();
+      if (shared.budget > value) return false; // never below the slots in use
       shared.maxPayouts = value;
+      return true;
     },
     async hit(scope, windowId, expiresAt, by = 1) {
       await tick();

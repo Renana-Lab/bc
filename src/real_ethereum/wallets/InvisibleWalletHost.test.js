@@ -1,6 +1,6 @@
 import React from "react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import WalletModePanel, { UNSUPPORTED_MESSAGE } from "./WalletModePanel";
+import WalletModePanel, { UNREADABLE_MESSAGE, UNSUPPORTED_MESSAGE } from "./WalletModePanel";
 import { __resetAutoClaimForTests } from "./autoClaim.mjs";
 import { WALLET_OVERRIDE_KEY, WALLET_SCOPE_OVERRIDE_KEY } from "./walletMode.mjs";
 import { getModeProvider, setModeProvider } from "./modeProvider";
@@ -26,6 +26,7 @@ jest.mock("./localWallet.mjs", () => ({
       subscribe: (listener) => { subscribers.add(listener); return () => subscribers.delete(listener); },
       openSilent: jest.fn(async () => {
         if (mockBehavior.open === "throw") throw new Error("IndexedDB is not available");
+        if (mockBehavior.open === "unreadable") throw Object.assign(new Error("The stored wallet could not be decrypted (OperationError)."), { code: "wallet-unreadable" });
         if (mockBehavior.open !== "needs-migration") { state.address = mockAddress; emit(); }
         return mockBehavior.open;
       }),
@@ -59,6 +60,7 @@ beforeEach(() => {
   mockWallets.length = 0;
   __resetAutoClaimForTests();
   window.sessionStorage.clear();
+  window.localStorage.clear();
   window.history.pushState({}, "", `/?pid=${PID}`);
   useFaucet();
   window.URL.createObjectURL = () => "blob:test";
@@ -68,6 +70,7 @@ afterEach(() => {
   delete process.env.REACT_APP_WALLET_MODE;
   delete process.env.REACT_APP_FAUCET_URL;
   window.sessionStorage.clear();
+  window.localStorage.clear();
   setModeProvider(null);
   jest.restoreAllMocks();
 });
@@ -171,6 +174,60 @@ describe("unsupported browser (no IndexedDB / WebCrypto)", () => {
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
     expect(claimCalls).toHaveLength(0);
     expect(screen.queryByTestId("preparing-session")).toBeNull();
+  });
+});
+
+describe("stored wallet that cannot be decrypted", () => {
+  test("shows a different neutral message than 'unsupported browser', logs the reason, and claims nothing", async () => {
+    mockBehavior.open = "unreadable";
+    const consoleError = jest.spyOn(console, "error").mockImplementation(() => {});
+    render(<WalletModePanel />);
+    const page = await screen.findByTestId("wallet-unreadable");
+    expect(page.textContent).toBe(UNREADABLE_MESSAGE);
+    expect(page.textContent).not.toBe(UNSUPPORTED_MESSAGE);
+    expect(screen.queryByTestId("unsupported-browser")).toBeNull();
+    expect(page.textContent).not.toMatch(/wallet|key|TEST|gas/i);
+    expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("cannot be decrypted"), expect.stringContaining("could not be decrypted"));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+    expect(claimCalls).toHaveLength(0);
+  });
+});
+
+describe("participant identity across tabs", () => {
+  test("a new tab or bookmark without ?pid= reuses the last valid pid, hence the same wallet scope", async () => {
+    const first = render(<WalletModePanel />);
+    await waitFor(() => expect(mockWallets).toHaveLength(1));
+    const scope = mockWallets[0].options.scope;
+    first.unmount();
+    window.sessionStorage.clear(); // new tab: no session value
+    window.history.pushState({}, "", "/");
+    render(<WalletModePanel />);
+    await waitFor(() => expect(mockWallets).toHaveLength(2));
+    expect(mockWallets[1].options.scope).toBe(scope);
+    expect(window.localStorage.getItem("data-market:last-participant-code")).toBe(PID);
+  });
+
+  test("with no pid anywhere the default wallet is used", async () => {
+    window.history.pushState({}, "", "/");
+    render(<WalletModePanel />);
+    await waitFor(() => expect(mockWallets).toHaveLength(1));
+    expect(mockWallets[0].options.scope).toBe("default");
+  });
+
+  test("asks the browser for persistent storage once, and a refusal is ignored", async () => {
+    const persist = jest.fn(async () => { throw new Error("denied"); });
+    Object.defineProperty(window.navigator, "storage", { configurable: true, value: { persist } });
+    try {
+      const { __resetPersistForTests } = require("./participantId.mjs");
+      __resetPersistForTests();
+      const view = render(<WalletModePanel />);
+      await waitFor(() => expect(mockWallets[0].openSilent).toHaveBeenCalled());
+      view.rerender(<WalletModePanel />);
+      expect(persist).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole("alert")).toBeNull();
+    } finally {
+      delete window.navigator.storage;
+    }
   });
 });
 

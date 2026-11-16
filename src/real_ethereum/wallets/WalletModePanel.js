@@ -1,6 +1,7 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { getWalletMode, getWalletScopeOverride, isPassphraseRequired } from "./walletMode.mjs";
-import { getParticipantContext, stripParticipantParams } from "./participantId.mjs";
+import { WALLET_UNREADABLE } from "./silentVault.mjs";
+import { getParticipantContext, requestPersistentStorage, stripParticipantParams } from "./participantId.mjs";
 import { claimFunds, fetchFaucetStatus, FAUCET_MESSAGES } from "./faucetClient.mjs";
 import { autoClaim } from "./autoClaim.mjs";
 import { scopeIdFor } from "./silentVault.mjs";
@@ -40,7 +41,9 @@ const PassphraseWalletPanel = () => {
   const { pid: strictPid, openPid, studyId, experimentCode } = useMemo(() => {
     let storage;
     try { storage = window.sessionStorage; } catch { storage = undefined; }
-    const context = getParticipantContext({ search: window.location.search, storage });
+    let persistentStorage;
+  try { persistentStorage = window.localStorage; } catch { persistentStorage = undefined; }
+  const context = getParticipantContext({ search: window.location.search, storage, persistentStorage });
     stripParticipantParams(window); // keep the id (a faucet capability) out of the address bar, history and Referer headers
     return context;
   }, []);
@@ -220,12 +223,15 @@ const PassphraseWalletPanel = () => {
 const readParticipant = () => {
   let storage;
   try { storage = window.sessionStorage; } catch { storage = undefined; }
-  const context = getParticipantContext({ search: window.location.search, storage });
+  let persistentStorage;
+  try { persistentStorage = window.localStorage; } catch { persistentStorage = undefined; }
+  const context = getParticipantContext({ search: window.location.search, storage, persistentStorage });
   stripParticipantParams(window); // keep the id (a faucet capability) out of the address bar, history and Referer headers
   return context;
 };
 
 export const UNSUPPORTED_MESSAGE = "This browser is not supported for the study. Please open the link in Chrome, Edge or Firefox.";
+export const UNREADABLE_MESSAGE = "Your session could not be restored in this browser. Please contact the experimenter.";
 const unsupportedStyle = {
   position: "fixed", inset: 0, zIndex: 5000, display: "flex", alignItems: "center", justifyContent: "center", padding: 24,
   textAlign: "center", background: "#fff", color: "#1c2340", font: "1.1rem system-ui, sans-serif",
@@ -282,8 +288,10 @@ const InvisibleWalletHost = () => {
   const [address, setAddress] = useState("");
   const [needsMigration, setNeedsMigration] = useState(false);
   const [preparing, setPreparing] = useState(false);
-  const [unsupported, setUnsupported] = useState(false);
+  const [unsupported, setUnsupported] = useState(""); // "" | "storage" | "unreadable"
   const { isAdmin } = useIsAdminWallet();
+
+  useEffect(() => { requestPersistentStorage(); }, []); // once; a refusal or missing API is ignored
 
   useEffect(() => {
     let cancelled = false;
@@ -292,10 +300,12 @@ const InvisibleWalletHost = () => {
         const result = await wallet.openSilent();
         if (!cancelled) setNeedsMigration(result === "needs-migration");
       } catch (error) {
-        // IndexedDB or WebCrypto unavailable (very old browser, blocked storage): a wallet that would be lost on reload
-        // is worse than none, so the participant gets a clear full-page message instead.
-        console.error("[wallet] This browser cannot keep the study wallet:", error?.message || error);
-        if (!cancelled) setUnsupported(true);
+        // Storage unavailable (very old browser, blocked IndexedDB/WebCrypto): a wallet that would be lost on reload is
+        // worse than none, so the participant gets a clear full-page message instead. A stored wallet that cannot be
+        // decrypted is a different problem and gets its own neutral message. The reason is logged either way.
+        const unreadable = error?.code === WALLET_UNREADABLE;
+        console.error(unreadable ? "[wallet] The stored study wallet cannot be decrypted:" : "[wallet] This browser cannot keep the study wallet:", error?.message || error);
+        if (!cancelled) setUnsupported(unreadable ? "unreadable" : "storage");
       }
     })();
     // The session is "unlocked" as soon as the silent open finished; RequireWallet therefore never sees a lock screen.
@@ -321,8 +331,8 @@ const InvisibleWalletHost = () => {
 
   if (unsupported) {
     return (
-      <div style={unsupportedStyle} role="alert" data-testid="unsupported-browser">
-        <p style={{ maxWidth: 480, margin: 0 }}>{UNSUPPORTED_MESSAGE}</p>
+      <div style={unsupportedStyle} role="alert" data-testid={unsupported === "unreadable" ? "wallet-unreadable" : "unsupported-browser"}>
+        <p style={{ maxWidth: 480, margin: 0 }}>{unsupported === "unreadable" ? UNREADABLE_MESSAGE : UNSUPPORTED_MESSAGE}</p>
       </div>
     );
   }

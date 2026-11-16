@@ -119,6 +119,46 @@ describe("runTopUps", () => {
     expect(t.send).toHaveBeenCalledTimes(2);
   });
 
+  test("send N+1 never starts before waitFor(N) has resolved (deferred confirmations, strictly in order)", async () => {
+    const t = setup();
+    const releases = [];
+    t.waitFor = jest.fn((hash) => new Promise((resolve) => { releases.push(() => resolve(true)); t.order.push(`wait:${hash}`); }));
+    const run = runTopUps({ targets: [a(1), a(2), a(3)], amountWei: TEST("0.5"), ...t });
+    const flush = () => new Promise((resolve) => setTimeout(resolve, 15));
+    await flush();
+    expect(t.send).toHaveBeenCalledTimes(1); // the second send is held back while waitFor(1) is pending
+    await flush();
+    expect(t.send).toHaveBeenCalledTimes(1);
+    releases[0]();
+    await flush();
+    expect(t.send).toHaveBeenCalledTimes(2);
+    expect(t.waitFor).toHaveBeenCalledTimes(2);
+    releases[1]();
+    await flush();
+    expect(t.send).toHaveBeenCalledTimes(3);
+    releases[2]();
+    const results = await run;
+    expect(results.map((r) => r.state)).toEqual(["confirmed", "confirmed", "confirmed"]);
+  });
+
+  test("a confirmation that times out (null) is 'unconfirmed (check explorer)', not failed, and the run goes on", async () => {
+    const t = setup();
+    t.waitFor = jest.fn(async (hash) => (hash === "0x1" ? null : true));
+    const results = await runTopUps({ targets: [a(1), a(2)], amountWei: TEST("0.5"), ...t });
+    expect(results.map((r) => r.state)).toEqual(["unconfirmed", "confirmed"]);
+    expect(results[0].error).toBe("unconfirmed (check explorer)");
+    expect(results[0].hash).toBeTruthy();
+  });
+
+  test("a mined-but-reverted transfer (false) is still 'failed'; a wait that throws after sending is unconfirmed", async () => {
+    const t = setup();
+    t.waitFor = jest.fn(async () => false);
+    expect((await runTopUps({ targets: [a(1)], amountWei: TEST("0.5"), ...t }))[0]).toMatchObject({ state: "failed", error: "Transaction failed" });
+    const u = setup();
+    u.waitFor = jest.fn(async () => { throw new Error("rpc down"); });
+    expect((await runTopUps({ targets: [a(1)], amountWei: TEST("0.5"), ...u }))[0].state).toBe("unconfirmed");
+  });
+
   test("an unreadable admin balance stops the run instead of guessing", async () => {
     const t = setup();
     t.getAdminBalance.mockRejectedValue(new Error("rpc down"));

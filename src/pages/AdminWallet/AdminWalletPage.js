@@ -10,7 +10,7 @@ const AdminWalletPage = () => (
   <main style={{ maxWidth: 420, margin: "64px auto", padding: 20, font: "14px/1.5 system-ui, sans-serif" }} data-testid="admin-wallet-page">
     <meta name="robots" content="noindex,nofollow" />
     <h1 style={{ fontSize: 20 }}>Admin wallet</h1>
-    {getWalletMode() === "local" ? <AdminWalletRestore /> : <p>The admin wallet is managed in MetaMask for this build.</p>}
+    {getWalletMode() === "local" ? <AdminWalletRestore onRestored={() => window.location.assign("/manage-budget")} /> : <p>The admin wallet is managed in MetaMask for this build.</p>}
   </main>
 );
 

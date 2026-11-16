@@ -55,6 +55,8 @@ test("network, alarm and exposure settings", () => {
   assert.equal(template.Resources.FaucetFunction.Properties.ReservedConcurrentExecutions, 1);
   assert.equal(template.Resources.LowBalanceAlarm.Properties.TreatMissingData, "breaching");
   assert.equal(template.Resources.LowBalanceAlarm.Properties.Threshold, 5);
+  assert.ok(template.Resources.FaucetUrl.Properties.Cors.AllowHeaders.includes("x-admin-password"), "browser admin calls may send the password header");
+  assert.ok(template.Resources.FaucetUrl.Properties.Cors.AllowHeaders.includes("content-type"));
   assert.deepEqual(template.Resources.FaucetUrl.Properties.Cors.AllowMethods, ["GET", "POST"]); // GET /status, POST /claim and /admin/state
   const json = JSON.stringify(template);
   assert.equal(/datamarketplaces\.net/.test(json), false, "no production domain");

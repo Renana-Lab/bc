@@ -172,12 +172,31 @@ const createDynamoStore = ({ table, rateTable, client } = {}) => {
       const item = (await send(new sdk.GetItemCommand({ TableName: table, Key: LIMIT_KEY, ConsistentRead: true }))).Item;
       return item?.value?.N !== undefined ? Number(item.value.N) : null;
     },
+    // Atomic against the payout counter without needing extra IAM actions (no transaction): write the cap, then
+    // re-read the counter. If slots in use already exceed the new cap (a claim took one in between), the write is rolled
+    // back (only while it is still our value) and false is returned. Resolves true when the cap was set.
     async setMaxPayouts(value, updatedAt) {
-      await send(new sdk.UpdateItemCommand({
+      const result = await send(new sdk.UpdateItemCommand({
         TableName: table, Key: LIMIT_KEY,
         UpdateExpression: "SET #v = :value, updatedAt = :at", ExpressionAttributeNames: { "#v": "value" },
         ExpressionAttributeValues: { ":value": { N: String(value) }, ":at": { N: String(updatedAt) } },
+        ReturnValues: "ALL_OLD",
       }));
+      if ((await store.getPayoutCount()) <= value) return true;
+      const before = result?.Attributes;
+      try {
+        await send(new sdk.UpdateItemCommand({
+          TableName: table, Key: LIMIT_KEY,
+          ConditionExpression: "#v = :value",
+          ...(before?.value
+            ? { UpdateExpression: "SET #v = :previous, updatedAt = :at", ExpressionAttributeValues: { ":value": { N: String(value) }, ":previous": before.value, ":at": before.updatedAt || { N: String(updatedAt) } } }
+            : { UpdateExpression: "REMOVE #v, updatedAt", ExpressionAttributeValues: { ":value": { N: String(value) } } }),
+          ExpressionAttributeNames: { "#v": "value" },
+        }));
+      } catch (error) {
+        if (!isConditionFailure(error)) throw error; // someone else changed the cap meanwhile: leave theirs
+      }
+      return false;
     },
     // Atomic counter per (scope, window); the item expires by TTL.
     async hit(scope, windowId, expiresAt, by = 1) {

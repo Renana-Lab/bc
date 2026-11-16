@@ -4,7 +4,7 @@ import "fake-indexeddb/auto";
 import { webcrypto } from "crypto";
 import { Wallet } from "ethers";
 import { createIndexedDbStorage, createLocalWallet } from "./localWallet.mjs";
-import { scopeIdFor } from "./silentVault.mjs";
+import { WALLET_UNREADABLE, createSilentVault, scopeIdFor } from "./silentVault.mjs";
 
 const DB = "data-market-local-wallet";
 const newWallet = (scope, extra = {}) => createLocalWallet({
@@ -47,11 +47,11 @@ test("the stored record contains no plaintext key, only IV + ciphertext", async 
   await wallet.openSilent();
   const stored = await readAll("silent");
   const record = stored["wallet:default"];
-  expect(Object.keys(record).sort()).toEqual(["ciphertext", "iv", "v"]);
+  expect(Object.keys(record).sort()).toEqual(["ciphertext", "iv", "key", "v"]); // ONE record: key, iv and ciphertext together
   expect(record.iv.length).toBe(12);
   const dump = JSON.stringify(Array.from(record.ciphertext)) + JSON.stringify(Array.from(record.iv));
   // Decrypt through the wallet and make sure the key hex is nowhere in what was stored.
-  const key = stored["key:default"];
+  const key = record.key;
   const plain = Buffer.from(await webcrypto.subtle.decrypt({ name: "AES-GCM", iv: record.iv }, key, record.ciphertext)).toString("utf8");
   expect(plain).toMatch(/^0x[0-9a-f]{64}$/);
   expect(new Wallet(plain).address).toBe(wallet.address);
@@ -64,7 +64,7 @@ test("the stored record contains no plaintext key, only IV + ciphertext", async 
 test("the AES key is a non-extractable CryptoKey", async () => {
   const wallet = newWallet("default");
   await wallet.openSilent();
-  const key = (await readAll("silent"))["key:default"];
+  const key = (await readAll("silent"))["wallet:default"].key;
   expect(key.constructor.name).toBe("CryptoKey");
   expect(key.extractable).toBe(false);
   expect(key.algorithm.name).toBe("AES-GCM");
@@ -87,7 +87,7 @@ test("concurrent opens (Strict Mode) create exactly one wallet", async () => {
   const wallet = newWallet("default");
   const [one, two] = await Promise.all([wallet.openSilent(), wallet.openSilent()]);
   expect(one).toBe(two);
-  expect(Object.keys(await readAll("silent")).sort()).toEqual(["key:default", "wallet:default"]);
+  expect(Object.keys(await readAll("silent")).sort()).toEqual(["wallet:default"]);
 });
 
 test("an old passphrase keystore: unlock once, re-save silently, never asked again", async () => {
@@ -135,4 +135,115 @@ test("without WebCrypto or IndexedDB the silent open fails loudly (the host then
   const wallet = createLocalWallet({ storage: brokenStorage, silentStorage: brokenStorage, scope: "default" });
   await expect(wallet.openSilent()).rejects.toThrow(/IndexedDB is not available/);
   expect(wallet.isUnlocked()).toBe(false);
+});
+
+// A storage whose every operation is slow and jittered, over the real IndexedDB: two tabs racing on a first visit.
+const slowStorage = (inner, delays) => {
+  let call = 0;
+  const wait = () => new Promise((resolve) => setTimeout(resolve, delays[call++ % delays.length]));
+  return {
+    get: async (key) => { await wait(); return inner.get(key); },
+    set: async (key, value) => { await wait(); return inner.set(key, value); },
+    delete: async (key) => { await wait(); return inner.delete(key); },
+    putIfAbsent: async (key, value) => { await wait(); return inner.putIfAbsent(key, value); },
+  };
+};
+
+test("two concurrent wallets (two tabs) on one slow storage end up with the same address, and the stored record decrypts", async () => {
+  const slow = slowStorage(createIndexedDbStorage({ storeName: "silent" }), [30, 5, 18, 2, 40, 9]);
+  const make = () => createLocalWallet({ storage: createIndexedDbStorage(), silentStorage: slow, scope: "default", scryptN: 2 ** 4 });
+  const [one, two] = [make(), make()]; // separate objects: Strict Mode de-duplication does not apply
+  const results = await Promise.all([one.openSilent(), two.openSilent()]);
+  expect(one.address).toBe(two.address);
+  expect(results.slice().sort()).toEqual(["created", "opened"]); // exactly one of them created it
+  const stored = await readAll("silent");
+  expect(Object.keys(stored)).toEqual(["wallet:default"]);
+  const record = stored["wallet:default"];
+  const plain = Buffer.from(await webcrypto.subtle.decrypt({ name: "AES-GCM", iv: record.iv }, record.key, record.ciphertext)).toString("utf8");
+  expect(new Wallet(plain).address).toBe(one.address); // key, iv and ciphertext belong together
+  const later = newWallet("default");
+  expect(await later.openSilent()).toBe("opened");
+  expect(later.address).toBe(one.address);
+});
+
+test("many tabs at once still converge on a single wallet", async () => {
+  const slow = slowStorage(createIndexedDbStorage({ storeName: "silent" }), [11, 3, 25, 7]);
+  const wallets = Array.from({ length: 5 }, () => createLocalWallet({ storage: createIndexedDbStorage(), silentStorage: slow, scope: "default", scryptN: 2 ** 4 }));
+  await Promise.all(wallets.map((wallet) => wallet.openSilent()));
+  expect(new Set(wallets.map((wallet) => wallet.address)).size).toBe(1);
+});
+
+test("the first-visit open runs inside navigator.locks `wallet:<scope>` when the Web Locks API exists", async () => {
+  const names = [];
+  const original = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  Object.defineProperty(globalThis, "navigator", { configurable: true, value: { locks: { request: jest.fn(async (name, callback) => { names.push(name); return callback(); }) } } });
+  try {
+    const wallet = newWallet("pid-abc");
+    expect(await wallet.openSilent()).toBe("created");
+    expect(names).toEqual(["wallet:pid-abc"]);
+    expect(wallet.isUnlocked()).toBe(true);
+  } finally {
+    if (original) Object.defineProperty(globalThis, "navigator", original); else delete globalThis.navigator;
+  }
+});
+
+test("without navigator.locks the open still works", async () => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  Object.defineProperty(globalThis, "navigator", { configurable: true, value: {} });
+  try {
+    expect(await newWallet("default").openSilent()).toBe("created");
+  } finally {
+    if (original) Object.defineProperty(globalThis, "navigator", original); else delete globalThis.navigator;
+  }
+});
+
+test("the IV is random: 12 bytes, never all zeros, and different for every seal", async () => {
+  const wallet = newWallet("default");
+  await wallet.openSilent();
+  const first = (await readAll("silent"))["wallet:default"].iv;
+  expect(first.length).toBe(12);
+  expect(Array.from(first).some((byte) => byte !== 0)).toBe(true);
+  const other = newWallet("other");
+  await other.openSilent();
+  const second = (await readAll("silent"))["wallet:other"].iv;
+  expect(Array.from(second).some((byte) => byte !== 0)).toBe(true);
+  expect(Buffer.from(first).equals(Buffer.from(second))).toBe(false);
+  // Re-sealing the same key (migration, restore) draws a fresh IV and a fresh AES key.
+  const vault = createSilentVault({ storage: createIndexedDbStorage({ storeName: "silent" }), scope: "default" });
+  await vault.seal(`0x${"11".repeat(32)}`);
+  const resealed = (await readAll("silent"))["wallet:default"];
+  expect(Buffer.from(resealed.iv).equals(Buffer.from(first))).toBe(false);
+});
+
+test("putIfAbsent never overwrites: the first record wins and a later sealIfAbsent reports false", async () => {
+  const vault = createSilentVault({ storage: createIndexedDbStorage({ storeName: "silent" }), scope: "default" });
+  expect(await vault.sealIfAbsent(`0x${"11".repeat(32)}`)).toBe(true);
+  expect(await vault.sealIfAbsent(`0x${"22".repeat(32)}`)).toBe(false);
+  expect(await vault.open()).toBe(`0x${"11".repeat(32)}`);
+});
+
+test("a stored wallet that cannot be decrypted is reported as unreadable (different from unavailable storage)", async () => {
+  const wallet = newWallet("default");
+  await wallet.openSilent();
+  const storage = createIndexedDbStorage({ storeName: "silent" });
+  const record = await storage.get("wallet:default");
+  await storage.set("wallet:default", { ...record, ciphertext: new Uint8Array(record.ciphertext.length) }); // corrupted
+  const error = await newWallet("default").openSilent().catch((e) => e);
+  expect(error.code).toBe(WALLET_UNREADABLE);
+  const missingKey = { get: async (key) => (key === "wallet:default" ? { v: 1, iv: record.iv, ciphertext: record.ciphertext } : null), set: async () => {}, delete: async () => {} };
+  const lost = await createLocalWallet({ storage: missingKey, silentStorage: missingKey, scope: "default" }).openSilent().catch((e) => e);
+  expect(lost.code).toBe(WALLET_UNREADABLE);
+});
+
+test("a record written by the first version (key in its own entry) still opens", async () => {
+  const storage = createIndexedDbStorage({ storeName: "silent" });
+  const key = await webcrypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+  const iv = webcrypto.getRandomValues(new Uint8Array(12));
+  const secret = `0x${"33".repeat(32)}`;
+  const ciphertext = new Uint8Array(await webcrypto.subtle.encrypt({ name: "AES-GCM", iv }, key, Buffer.from(secret)));
+  await storage.set("key:default", key);
+  await storage.set("wallet:default", { v: 1, iv, ciphertext });
+  const wallet = newWallet("default");
+  expect(await wallet.openSilent()).toBe("opened");
+  expect(wallet.address).toBe(new Wallet(secret).address);
 });

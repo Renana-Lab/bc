@@ -1,10 +1,14 @@
 // MetaMask admin sign-in for builds that run the embedded wallet (REACT_APP_WALLET_MODE=local).
 import { Wallet } from "ethers";
 import { isAdminAddress } from "../ManageBudget/adminGate";
+import { readFactoryOwner, readIsFactoryAdmin } from "../../real_ethereum/adminChain";
 import { ensureTargetChain } from "../../real_ethereum/sapphireNetworks";
 import { createIndexedDbStorage } from "../../real_ethereum/wallets/localWallet.mjs";
 import { createSilentVault } from "../../real_ethereum/wallets/silentVault.mjs";
 import { setWalletModeOverride, setWalletScopeOverride } from "../../real_ethereum/wallets/walletMode.mjs";
+import { normalizePrivateKey, restoreAdminBackup } from "../../real_ethereum/wallets/adminSlot";
+
+export { normalizePrivateKey, restoreAdminBackup };
 
 // The admin wallet sees MetaMask directly (walletAccess ignores window.ethereum in local mode).
 export const findMetaMaskProvider = ({ waitMs = 300 } = {}) => new Promise((resolve) => {
@@ -20,6 +24,15 @@ export const findMetaMaskProvider = ({ waitMs = 300 } = {}) => new Promise((reso
     resolve(injected.find((provider) => provider?.isMetaMask && typeof provider.request === "function") || null);
   }, waitMs);
 });
+
+// On-chain admin/owner role, read-only. Uses the same readers as useAdminAccess (its default readIsAdmin / readOwner).
+export const readOnChainAdminRole = async (account, { readIsAdmin = readIsFactoryAdmin, readOwner = readFactoryOwner } = {}) => {
+  const [admin, owner] = await Promise.all([
+    Promise.resolve(readIsAdmin(account)).catch(() => false),
+    Promise.resolve(readOwner()).catch(() => ""),
+  ]);
+  return Boolean(admin) || (Boolean(owner) && String(owner).toLowerCase() === String(account).toLowerCase());
+};
 
 // Resolves { ok: true, account } after setting the override, or { ok: false, message } without touching it.
 export const connectAdminWithMetaMask = async ({ findProvider = findMetaMaskProvider, allowlist, extraAdminCheck } = {}) => {
@@ -46,7 +59,7 @@ export const connectAdminWithMetaMask = async ({ findProvider = findMetaMaskProv
 // separate "admin" slot. Only an address on the admin list is accepted.
 export const importAdminKey = async ({ privateKey, allowlist, silentStorage = createIndexedDbStorage({ storeName: "silent" }) }) => {
   let wallet;
-  try { wallet = new Wallet(String(privateKey || "").trim()); } catch { return { ok: false, message: "That is not a valid private key." }; }
+  try { wallet = new Wallet(normalizePrivateKey(privateKey)); } catch { return { ok: false, message: "That is not a valid private key." }; }
   if (!isAdminAddress(wallet.address, allowlist)) return { ok: false, message: "This account is not an admin." };
   await createSilentVault({ storage: silentStorage, scope: "admin" }).seal(wallet.privateKey);
   setWalletScopeOverride();

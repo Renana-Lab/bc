@@ -5,7 +5,7 @@ const TEST_PREFIX = "test-";
 
 const buildTemplate = ({
   origins, alertEmail = "", secretArn = "", faucetAddress = "", rpcUrl, chainId, amountWei, lowBalance,
-  rateLimit = "20", reservedConcurrency = 1,
+  rateLimit = "20", globalRateLimit = "600", reservedConcurrency = 1,
   pidMode = "allowlist", maxPayouts = "", requiredStudyId = "", adminSecretArn = "", faucetCodeDir, monitorCodeDir,
 }) => {
 const policy = (statement) => ({ PolicyName: "inline", PolicyDocument: { Version: "2012-10-17", Statement: statement } });
@@ -69,7 +69,7 @@ const policy = (statement) => ({ PolicyName: "inline", PolicyDocument: { Version
           Variables: {
             FAUCET_TABLE: { Ref: "FaucetTable" }, RATE_TABLE: { Ref: "RateTable" }, RATE_TTL_GRACE_SECONDS: "60", FAUCET_SECRET_ID: secretArn || "unset",
             RPC_URL: rpcUrl, CHAIN_ID: String(chainId), FAUCET_AMOUNT_WEI: amountWei,
-            RATE_LIMIT_PER_WINDOW: rateLimit, GLOBAL_RATE_LIMIT_PER_WINDOW: "600", RATE_WINDOW_SECONDS: "600",
+            RATE_LIMIT_PER_WINDOW: rateLimit, GLOBAL_RATE_LIMIT_PER_WINDOW: String(globalRateLimit), RATE_WINDOW_SECONDS: "600",
             FAUCET_PID_MODE: pidMode, FAUCET_MAX_PAYOUTS: String(maxPayouts), FAUCET_REQUIRED_STUDY_ID: requiredStudyId,
             FAUCET_EXPERIMENT_CODE: { Ref: "ExperimentCode" }, FAUCET_ADMIN_SECRET_ID: adminSecretArn || "unset",
             ADMIN_RATE_LIMIT_PER_WINDOW: "5", ADMIN_GLOBAL_RATE_LIMIT_PER_WINDOW: "300", ADMIN_SECRET_TTL_SECONDS: "60",

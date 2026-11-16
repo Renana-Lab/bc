@@ -242,13 +242,18 @@ const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, getAdminSecret
   const publicState = (state) => ({ open: state.open, updatedAt: state.updatedAt ? new Date(state.updatedAt * 1000).toISOString() : null, pidMode: config.pidMode || "allowlist" });
 
   // The payout cap in force: the admin-managed value (DynamoDB) when present, else the deploy-time value.
-  // An unreadable store falls back to the deploy-time value so a DynamoDB hiccup never lifts the cap.
+  // The last value read is remembered in this container (the faucet runs with reserved concurrency 1), so an unreadable
+  // store keeps the cap the admin last set. Only a cold start during an outage falls back to the deploy-time value.
+  let lastEffectiveMax = null;
   const effectiveMax = async () => {
     try {
       const stored = await store.getMaxPayouts?.();
-      if (Number.isInteger(stored) && stored > 0) return stored;
-    } catch { /* fall back */ }
-    return config.maxPayouts;
+      if (Number.isInteger(stored) && stored > 0) { lastEffectiveMax = stored; return stored; }
+      lastEffectiveMax = config.maxPayouts; // item missing: the deploy-time value is the cap
+      return config.maxPayouts;
+    } catch {
+      return lastEffectiveMax ?? config.maxPayouts;
+    }
   };
 
   // Counter scopes for one request: the current window, its TTL and the (salted, /64-normalised) caller key.
@@ -376,7 +381,9 @@ const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, getAdminSecret
       const payoutsUsed = await store.getPayoutCount();
       if (value < payoutsUsed) return json(400, { error: "below_used", payoutsUsed });
       const previous = await effectiveMax();
-      await store.setMaxPayouts(value, Math.floor(now() / 1000));
+      // The store re-checks the counter atomically, so a claim racing this request cannot leave used > cap.
+      if ((await store.setMaxPayouts(value, Math.floor(now() / 1000))) === false) return json(400, { error: "below_used", payoutsUsed: await store.getPayoutCount() });
+      lastEffectiveMax = value;
       event("admin_max_payouts_changed", { from: previous, to: value, payoutsUsed });
       return json(200, { payoutsUsed, maxPayouts: value });
     } catch {

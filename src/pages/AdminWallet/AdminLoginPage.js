@@ -1,11 +1,11 @@
 import React, { useState } from "react";
-import { connectAdminWithMetaMask, importAdminKey } from "./adminLogin";
+import { connectAdminWithMetaMask, importAdminKey, readOnChainAdminRole } from "./adminLogin";
 import { getWalletMode } from "../../real_ethereum/wallets/walletMode.mjs";
 
 // Hidden route (/admin-login), reached from the Admin Zone entry only. Participants never need it.
 const defaultRedirect = (path) => window.location.assign(path);
 
-const AdminLoginPage = ({ allowlist, findProvider, extraAdminCheck, redirect = defaultRedirect, silentStorage }) => {
+const AdminLoginPage = ({ allowlist, findProvider, extraAdminCheck = readOnChainAdminRole, redirect = defaultRedirect, silentStorage }) => {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [key, setKey] = useState("");

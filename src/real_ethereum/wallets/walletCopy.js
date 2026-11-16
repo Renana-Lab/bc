@@ -95,6 +95,11 @@ const INVISIBLE = {
   connectFailed: "Please wait a moment and try again.",
   txPending: "Please wait a moment and try again.",
   txRejected: "The action was cancelled.",
+  seo: {
+    description: "A research data auction platform.",
+    loginTitle: "Preparing your session | Blockchain Data Market",
+    loginDescription: "Your session is being prepared.",
+  },
 };
 
 export const getWalletCopy = (mode = getWalletMode()) => {

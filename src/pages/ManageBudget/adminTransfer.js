@@ -16,7 +16,7 @@ export const sendNativeFromAdmin = async (to, valueWei) => {
   });
 };
 
-// true = mined successfully, false = mined but failed or not seen before the timeout.
+// true = mined successfully, false = mined but failed, null = not seen before the timeout (outcome unknown).
 export const waitForReceipt = async (hash, { timeoutMs = 90_000, intervalMs = 2000, read, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) => {
   const fetchReceipt = read || ((txHash) => readOnlyExecute(({ web3 }) => web3.eth.getTransactionReceipt(txHash), undefined, { preferInjected: false, allowInjectedFallback: false }));
   const deadline = Date.now() + timeoutMs;
@@ -24,7 +24,7 @@ export const waitForReceipt = async (hash, { timeoutMs = 90_000, intervalMs = 20
     let receipt = null;
     try { receipt = await fetchReceipt(hash); } catch { receipt = null; }
     if (receipt) return receipt.status === true || receipt.status === 1 || receipt.status === "0x1" || receipt.status === 1n;
-    if (Date.now() >= deadline) return false;
+    if (Date.now() >= deadline) return null;
     await sleep(intervalMs);
   }
 };

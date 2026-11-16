@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { claimFunds } from "./faucetClient.mjs";
 import { formatNative } from "./nativeBalance";
-import { getActiveLocalWallet } from "./localWalletRegistry";
+import { restoreAdminBackup } from "./adminSlot";
 import styles from "./WalletModePanel.module.scss";
 
 // Everything wallet-related that only admins may see: address, TEST balance, passphrase-encrypted backup,
@@ -17,24 +17,27 @@ const downloadJson = (text, filename) => {
   setTimeout(() => URL.revokeObjectURL(link.href), 10_000);
 };
 
-export const AdminWalletRestore = ({ wallet = getActiveLocalWallet(), onRestored }) => {
+export const AdminWalletRestore = ({ onRestored, restore: restoreImpl = restoreAdminBackup, confirm = (text) => window.confirm(text) }) => {
   const [passphrase, setPassphrase] = useState("");
   const [message, setMessage] = useState("");
-  if (!wallet?.restoreBackupSilent) return null;
   const restore = async (file) => {
     setMessage("");
     try {
-      const address = await wallet.restoreBackupSilent(await file.text(), passphrase);
+      const result = await restoreImpl({
+        json: await file.text(), passphrase,
+        confirmReplace: () => confirm("An admin wallet already exists in this browser. Replace it with the backup?"),
+      });
+      if (!result.ok) { setMessage(result.message); return; }
       setPassphrase("");
-      setMessage(`Restored ${address}.`);
-      onRestored?.(address);
+      setMessage(`Restored ${result.account}.`);
+      onRestored?.(result.account);
     } catch (error) {
       setMessage(error.message);
     }
   };
   return (
     <div data-testid="admin-wallet-restore">
-      <p className={styles.hint}>Restore the admin wallet from a passphrase-encrypted backup (replaces this browser&apos;s wallet).</p>
+      <p className={styles.hint}>Restore the admin wallet from a passphrase-encrypted backup into this browser&apos;s separate admin slot (the participant wallet is not touched).</p>
       <input className={styles.input} type="password" autoComplete="off" aria-label="Backup passphrase" value={passphrase}
         onChange={(event) => setPassphrase(event.target.value)} placeholder="Backup passphrase" />
       <input type="file" accept="application/json" data-testid="admin-wallet-restore-file"
@@ -104,7 +107,7 @@ const AdminWalletPanel = ({ wallet, provider, address, symbol = "TEST", faucetUr
             onChange={(event) => setPassphrase(event.target.value)} placeholder="Passphrase (12+ chars)" />
           <button type="button" className={styles.button} onClick={backup}>Download encrypted backup</button>
           {faucetUrl && pid ? <button type="button" className={styles.button} onClick={requestFunds}>Request test funds</button> : null}
-          <AdminWalletRestore wallet={wallet} />
+          <AdminWalletRestore onRestored={() => window.location.reload()} />
           {notice ? <p className={styles.notice} role="status">{notice}</p> : null}
           {message ? <p className={styles.error} role="alert">{message}</p> : null}
         </>

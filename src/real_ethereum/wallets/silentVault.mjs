@@ -3,7 +3,7 @@
 //
 // The private key is encrypted with an AES-GCM CryptoKey that is generated with extractable:false and kept in
 // IndexedDB as a CryptoKey object (its raw bytes can never be read back by script). Only the IV and the
-// ciphertext are stored next to it. This protects against casual reads of the storage (a copied record is useless
+// ciphertext are stored in the same record. This protects against casual reads of the storage (a copied record is useless
 // without the non-extractable key); it does NOT protect against script running on this origin, which could ask the
 // browser to decrypt. That trade-off is intentional for test funds.
 import { toUtf8Bytes, toUtf8String } from "ethers";
@@ -39,38 +39,58 @@ export const scopeIdFor = (pid) => {
   return `pid-${[1, 2, 3, 4].map((seed) => cyrb53(value, seed)).join("").slice(0, 32)}`;
 };
 
+// Storage adapters used here: get/set/delete, plus putIfAbsent(key, value) -> boolean (true when written). The
+// whole sealed wallet is ONE record { v, key, iv, ciphertext }, so a ciphertext can never be paired with a
+// different AES key (two tabs racing on a first visit used to be able to do that with two separate entries).
+// A wallet IS stored but cannot be read (wrong/missing key, corrupt record): different from "storage unavailable".
+export const WALLET_UNREADABLE = "wallet-unreadable";
+const unreadable = (message) => Object.assign(new Error(message), { code: WALLET_UNREADABLE });
+
+const putIfAbsent = async (storage, name, record) => {
+  if (typeof storage.putIfAbsent === "function") return storage.putIfAbsent(name, record);
+  if (await storage.get(name)) return false;
+  await storage.set(name, record);
+  return true;
+};
+
+const encryptRecord = async (privateKey) => {
+  const key = await getSubtle().generateKey({ name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+  const iv = globalThis.crypto.getRandomValues(new Uint8Array(12));
+  const ciphertext = await getSubtle().encrypt({ name: "AES-GCM", iv }, key, toUtf8Bytes(privateKey));
+  return { v: 2, key, iv, ciphertext: new Uint8Array(ciphertext) };
+};
+
 export const createSilentVault = ({ storage, scope = "default" }) => {
   if (!storage) throw new Error("A storage adapter is required.");
-  const keyName = `${KEY_PREFIX}${scope}`;
+  const legacyKeyName = `${KEY_PREFIX}${scope}`; // v1 kept the CryptoKey in a second entry
   const recordName = `${RECORD_PREFIX}${scope}`;
-
-  const loadKey = async (create) => {
-    let key = await storage.get(keyName);
-    if (!key && create) {
-      key = await getSubtle().generateKey({ name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
-      await storage.set(keyName, key);
-    }
-    return key || null;
-  };
 
   return {
     scope,
     async exists() { return Boolean(await storage.get(recordName)); },
+    // Writes only when nothing is stored yet (first visit). Resolves true when this call stored the record.
+    async sealIfAbsent(privateKey) {
+      return putIfAbsent(storage, recordName, await encryptRecord(privateKey));
+    },
+    // Replaces whatever is stored (migration, admin restore).
     async seal(privateKey) {
-      const key = await loadKey(true);
-      const iv = globalThis.crypto.getRandomValues(new Uint8Array(12));
-      const ciphertext = await getSubtle().encrypt({ name: "AES-GCM", iv }, key, toUtf8Bytes(privateKey));
-      await storage.set(recordName, { v: 1, iv, ciphertext: new Uint8Array(ciphertext) });
+      await storage.set(recordName, await encryptRecord(privateKey));
+      await storage.delete(legacyKeyName);
     },
     // Resolves with the private key, or null when nothing is stored for this scope.
     async open() {
       const record = await storage.get(recordName);
       if (!record) return null;
-      const key = await loadKey(false);
-      if (!key) throw new Error("The wallet key for this browser is missing.");
-      const plain = await getSubtle().decrypt({ name: "AES-GCM", iv: record.iv }, key, record.ciphertext);
+      const key = record.key || (await storage.get(legacyKeyName));
+      if (!key) throw unreadable("The wallet key for this browser is missing.");
+      let plain;
+      try {
+        plain = await getSubtle().decrypt({ name: "AES-GCM", iv: record.iv }, key, record.ciphertext);
+      } catch (error) {
+        throw unreadable(`The stored wallet could not be decrypted (${error?.name || "error"}).`);
+      }
       return toUtf8String(new Uint8Array(plain));
     },
-    async destroy() { await storage.delete(recordName); await storage.delete(keyName); },
+    async destroy() { await storage.delete(recordName); await storage.delete(legacyKeyName); },
   };
 };

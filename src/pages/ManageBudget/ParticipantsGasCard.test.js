@@ -138,3 +138,54 @@ test("auto-refreshes every 60 s while visible (and not while the tab is hidden)"
     jest.useRealTimers();
   }
 });
+
+test("bidders and sellers that only appear in events are read, flagged low and included in Top up all", async () => {
+  const deps = makeDeps();
+  deps.readSources = jest.fn(async () => ({
+    users: [a(1)],
+    events: [{ actor: a(5), blockNumber: 95, args: {} }, { actor: "", blockNumber: 96, args: { seller: a(6), user: a(1) } }],
+    latestBlock: 100, warning: "",
+  }));
+  deps.readBalances = jest.fn(async (addresses) => Object.fromEntries(addresses.map((address) => [address, address === a(5) ? T("0.01") : T("1")])));
+  render(<ParticipantsGasCard deps={deps} />);
+  await waitFor(() => expect(screen.getAllByTestId("participant-row")).toHaveLength(3));
+  const requested = deps.readBalances.mock.calls[0][0];
+  expect(requested).toEqual(expect.arrayContaining([a(1), a(5), a(6)]));
+  expect(deps.readBudgets.mock.calls[0][0]).toEqual(expect.arrayContaining([a(5), a(6)]));
+  expect(rowFor(a(5)).getAttribute("data-low")).toBe("true");
+  expect(rowFor(a(5)).textContent).toContain("block 95");
+  fireEvent.click(screen.getByRole("button", { name: /Top up all below threshold \(1\)/ }));
+  await screen.findByTestId("confirm-summary");
+  await waitFor(() => expect(screen.getByTestId("confirm-admin-balance").textContent).toMatch(/10\.0000/));
+  fireEvent.click(screen.getByRole("button", { name: "Confirm and send" }));
+  await waitFor(() => expect(deps.send).toHaveBeenCalledTimes(1));
+  expect(deps.send.mock.calls[0][0]).toBe(a(5));
+});
+
+test("the connected admin address is excluded from Top up all (but can still be topped up row by row)", async () => {
+  const deps = makeDeps({ balances: { [a(1)]: T("0.02"), [a(2)]: T("0.5"), [a(3)]: T("0.09"), [ADMIN]: T("0.01") } });
+  deps.readSources = jest.fn(async () => ({ users: [a(1), a(2), a(3), ADMIN], events: [], latestBlock: 100, warning: "" }));
+  render(<ParticipantsGasCard deps={deps} />);
+  await waitFor(() => expect(screen.getAllByTestId("participant-row")).toHaveLength(4));
+  expect(rowFor(ADMIN).getAttribute("data-low")).toBe("true");
+  fireEvent.click(screen.getByRole("button", { name: /Top up all below threshold \(2\)/ }));
+  await screen.findByTestId("confirm-summary");
+  await waitFor(() => expect(screen.getByTestId("confirm-admin-balance").textContent).toMatch(/10\.0000/));
+  fireEvent.click(screen.getByRole("button", { name: "Confirm and send" }));
+  await waitFor(() => expect(deps.send).toHaveBeenCalledTimes(2));
+  expect(deps.send.mock.calls.map(([to]) => to)).toEqual([a(1), a(3)]);
+  await waitFor(() => expect(within(rowFor(ADMIN)).getByRole("button", { name: "Top up" }).disabled).toBe(false));
+});
+
+test("a confirmation that times out is shown as 'Unconfirmed (check explorer)', not Failed", async () => {
+  const deps = makeDeps();
+  deps.waitFor = jest.fn(async () => null);
+  render(<ParticipantsGasCard deps={deps} />);
+  await waitFor(() => expect(screen.getAllByTestId("participant-row")).toHaveLength(3));
+  fireEvent.click(within(rowFor(a(1))).getByRole("button", { name: "Top up" }));
+  await screen.findByTestId("confirm-summary");
+  await waitFor(() => expect(screen.getByTestId("confirm-admin-balance").textContent).toMatch(/10\.0000/));
+  fireEvent.click(screen.getByRole("button", { name: "Confirm and send" }));
+  await waitFor(() => expect(within(rowFor(a(1))).getByTestId("row-status").textContent).toMatch(/Unconfirmed \(check explorer\)/));
+  expect(within(rowFor(a(1))).getByTestId("row-status").textContent).not.toMatch(/Failed/);
+});

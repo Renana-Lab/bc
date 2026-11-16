@@ -38,6 +38,7 @@ import {
   validateAuctionForm,
 } from "./auctionLimits";
 import { getWalletCopy } from "../../real_ethereum/wallets/walletCopy";
+import { participantMessage } from "../../real_ethereum/wallets/participantCopy";
 import "./new.module.scss";
 
 const requestConnectedAccount = async () => {
@@ -48,7 +49,7 @@ const requestConnectedAccount = async () => {
   const account = accounts?.[0];
 
   if (!account) {
-    throw new Error("No wallet account is connected.");
+    throw new Error(participantMessage("No wallet account is connected."));
   }
 
   return account;

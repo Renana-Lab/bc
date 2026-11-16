@@ -7,7 +7,7 @@ import { useIsAdminWallet } from "../../real_ethereum/wallets/useIsAdminWallet";
 import { LOCAL_BOTS_KEY } from "../../telemetry/botPresence";
 import { mapBotConfig } from "./adminCardData";
 import {
-  DEFAULT_THRESHOLD, DEFAULT_TOPUP_AMOUNT, REFRESH_MS, buildParticipantRows, isAddressLike, loadManualAddresses, loadSetting,
+  DEFAULT_THRESHOLD, DEFAULT_TOPUP_AMOUNT, addressesFromEvents, REFRESH_MS, buildParticipantRows, isAddressLike, loadManualAddresses, loadSetting,
   planTopUp, runTopUps, saveManualAddresses, saveSetting, selectLowRows,
 } from "./participantsGasData";
 import { readBudgets, readNativeBalances, readParticipantSources } from "./participantsGasReaders";
@@ -25,6 +25,7 @@ const statusText = (status) => {
   if (status.state === "sending") return "Sending...";
   if (status.state === "sent") return "Sent, waiting for confirmation...";
   if (status.state === "confirmed") return "Confirmed";
+  if (status.state === "unconfirmed") return "Unconfirmed (check explorer)";
   if (status.state === "skipped") return `Skipped: ${status.error}`;
   return `Failed: ${status.error || "error"}`;
 };
@@ -54,7 +55,9 @@ export const ParticipantsGasCardBody = ({ adminAccount, deps: depsOverride, refr
     try {
       const sources = await deps.readSources({ force });
       const { bots } = readLocalBots();
-      const addresses = Array.from(new Set([...sources.users, ...manualRef.current, ...Array.from(bots)].map((a) => String(a).toLowerCase()).filter(isAddressLike)));
+      // Bidders and sellers only appear in events (not in factory.allUsers), so they are read and can be flagged low too.
+      const eventAddresses = Array.from(addressesFromEvents(sources.events || []).keys());
+      const addresses = Array.from(new Set([...sources.users, ...eventAddresses, ...manualRef.current, ...Array.from(bots)].map((a) => String(a).toLowerCase()).filter(isAddressLike)));
       const [balances, budgets] = await Promise.all([deps.readBalances(addresses), deps.readBudgets(addresses)]);
       if (requestId === requestRef.current) setData({ sources, balances, budgets, loading: false, error: sources.warning || "", at: Date.now() });
     } catch (error) {
@@ -81,7 +84,9 @@ export const ParticipantsGasCardBody = ({ adminAccount, deps: depsOverride, refr
       balances: data.balances, budgets: data.budgets, latestBlock: data.sources?.latestBlock ?? null, thresholdWei,
     });
   }, [data, manual, thresholdWei]);
-  const lowRows = selectLowRows(rows);
+  // The connected admin wallet is excluded from "Top up all" (it would fund itself); it can still be topped up row by row.
+  const adminLower = String(adminAccount || "").toLowerCase();
+  const lowRows = selectLowRows(rows).filter((row) => row.address !== adminLower);
   const amountWei = parseNative(amount);
 
   const changeThreshold = (value) => { setThreshold(value); saveSetting("threshold", value); };

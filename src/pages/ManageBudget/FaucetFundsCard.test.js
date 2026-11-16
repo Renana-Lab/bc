@@ -107,10 +107,38 @@ describe("payout limit", () => {
     fireEvent.click(screen.getByRole("button", { name: "+10" }));
     expect((await screen.findByTestId("add-confirm-text")).textContent).toMatch(/from 50 to 60 \(\+10\)/);
     expect(deps.setMax).not.toHaveBeenCalled();
-    fireEvent.change(screen.getByLabelText("Faucet admin password"), { target: { value: "pw2" } });
+    fireEvent.change(screen.getByLabelText("Confirm faucet admin password"), { target: { value: "pw2" } });
     fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
     await waitFor(() => expect(deps.setMax).toHaveBeenCalledWith(expect.objectContaining({ value: 60, password: "pw2" })));
     await waitFor(() => expect(screen.getByTestId("faucet-payouts").textContent).toBe("40 of 60 payouts used, 20 left"));
+  });
+
+  test("one pass: the password is typed INSIDE the Add payouts dialog, so it works even though loading the status already cleared the card field", async () => {
+    const deps = makeDeps();
+    await load(deps);
+    expect(screen.getByLabelText("Faucet admin password").value).toBe(""); // spent by "Load status"
+    fireEvent.click(screen.getByRole("button", { name: "+50" }));
+    await screen.findByTestId("add-confirm-text");
+    const confirm = screen.getByRole("button", { name: "Confirm" });
+    expect(confirm.disabled).toBe(true); // no password yet
+    fireEvent.change(screen.getByLabelText("Confirm faucet admin password"), { target: { value: "pw3" } });
+    expect(confirm.disabled).toBe(false);
+    fireEvent.click(confirm);
+    await waitFor(() => expect(deps.setMax).toHaveBeenCalledWith(expect.objectContaining({ value: 100, password: "pw3" })));
+    await waitFor(() => expect(screen.queryByTestId("add-confirm-text")).toBeNull());
+    expect(screen.getByLabelText("Faucet admin password").value).toBe("");
+  });
+
+  test("cancelling the dialog discards the typed password", async () => {
+    const deps = makeDeps();
+    await load(deps);
+    fireEvent.click(screen.getByRole("button", { name: "+10" }));
+    fireEvent.change(await screen.findByLabelText("Confirm faucet admin password"), { target: { value: "secret" } });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByTestId("add-confirm-text")).toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "+10" }));
+    expect((await screen.findByLabelText("Confirm faucet admin password")).value).toBe("");
+    expect(deps.setMax).not.toHaveBeenCalled();
   });
 
   test("custom amounts must be whole numbers", async () => {
@@ -199,5 +227,18 @@ describe("Top up faucet (Admin Zone)", () => {
     await waitFor(() => expect(screen.getByTestId("topup-admin-balance").textContent).toMatch(/50\.0000/));
     fireEvent.click(screen.getByRole("button", { name: "Confirm and send" }));
     await waitFor(() => expect(screen.getByTestId("faucet-topup-status").textContent).toMatch(/Failed: User rejected/));
+  });
+});
+
+describe("faucet top-up confirmation", () => {
+  test("a transfer whose receipt is not seen before the timeout is shown as unconfirmed, not failed", async () => {
+    const deps = makeDeps();
+    deps.waitFor = jest.fn(async () => null);
+    render(<FaucetFundsCardBody faucetUrl="https://faucet.example" envAddress={FAUCET} adminAccount={ADMIN} allowTopUp deps={deps} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Top up faucet" }));
+    await waitFor(() => expect(screen.getByTestId("topup-admin-balance").textContent).toMatch(/50\.0000/));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm and send" }));
+    await waitFor(() => expect(screen.getByTestId("faucet-topup-status").textContent).toMatch(/Unconfirmed \(check explorer\)/));
+    expect(screen.getByTestId("faucet-topup-status").textContent).not.toMatch(/Failed/);
   });
 });

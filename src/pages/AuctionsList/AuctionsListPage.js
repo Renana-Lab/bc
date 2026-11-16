@@ -1973,7 +1973,7 @@ function AuctionsListPage() {
                 className={styles.searchInput}
                 value={searchQuery}
                 onChange={handleSearchChange}
-                placeholder="Search auctions by description, wallet, address, or exact bid"
+                placeholder="Search auctions by description, address, or exact bid"
                 variant="outlined"
                 size="small"
                 InputProps={{

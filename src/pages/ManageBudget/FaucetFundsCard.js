@@ -42,6 +42,7 @@ export const FaucetFundsCardBody = ({
   const symbol = getTargetNetwork().nativeCurrency?.symbol || "TEST";
   const [status, setStatus] = useState(null); // from the admin endpoint (needs the password)
   const [password, setPassword] = useState("");
+  const [dialogPassword, setDialogPassword] = useState(""); // typed inside the Add payouts dialog
   const [balanceWei, setBalanceWei] = useState(null);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
@@ -67,19 +68,22 @@ export const FaucetFundsCardBody = ({
     return () => window.clearInterval(id);
   }, [loadBalance, refreshMs]);
 
-  const withPassword = async (action) => {
-    if (!password || busy) return;
+  // The password never outlives one request. "Add payouts" has its own password field INSIDE its dialog, so one pass
+  // (open dialog, type the password, confirm) is enough even though loading the status already spent the card's field.
+  const withPassword = async (pw, clear, action) => {
+    if (!pw || busy) return;
     setBusy(true); setMessage("");
-    try { await action(password); } catch (error) { setMessage(error.message); }
-    finally { setPassword(""); setBusy(false); } // the password never outlives one request
+    try { await action(pw); } catch (error) { setMessage(error.message); }
+    finally { clear(""); setBusy(false); }
   };
-  const loadStatus = () => withPassword(async (pw) => setStatus(await deps.fetchStatus({ faucetUrl, password: pw, fetchImpl })));
-  const addPayouts = () => withPassword(async (pw) => {
+  const loadStatus = () => withPassword(password, setPassword, async (pw) => setStatus(await deps.fetchStatus({ faucetUrl, password: pw, fetchImpl })));
+  const closeAdd = () => { setAddConfirm(null); setDialogPassword(""); };
+  const addPayouts = () => withPassword(dialogPassword, setDialogPassword, async (pw) => {
     const value = status.maxPayouts + addConfirm;
     const result = await deps.setMax({ faucetUrl, value, password: pw, fetchImpl });
     setStatus((current) => ({ ...current, maxPayouts: result.maxPayouts, payoutsUsed: result.payoutsUsed }));
     setMessage(`Payout limit is now ${result.maxPayouts}.`);
-    setAddConfirm(null);
+    closeAdd();
   });
 
   const left = status && status.maxPayouts !== null ? status.maxPayouts - status.payoutsUsed : null;
@@ -102,7 +106,8 @@ export const FaucetFundsCardBody = ({
       const hash = await deps.send(faucetAddress, topUpWei);
       setTopUpState({ state: "sent", hash });
       const ok = await deps.waitFor(hash);
-      setTopUpState({ state: ok ? "confirmed" : "failed", hash, error: ok ? "" : "Transaction failed" });
+      if (ok === null || ok === undefined) setTopUpState({ state: "unconfirmed", hash });
+      else setTopUpState({ state: ok ? "confirmed" : "failed", hash, error: ok ? "" : "Transaction failed" });
       loadBalance();
     } catch (error) {
       setTopUpState({ state: "failed", error: error?.message || "Transaction failed" });
@@ -159,7 +164,7 @@ export const FaucetFundsCardBody = ({
           </Box>
           {topUpState ? (
             <Typography variant="body2" data-testid="faucet-topup-status" sx={{ mt: 1 }}>
-              {topUpState.state === "sending" ? "Sending..." : topUpState.state === "sent" ? "Sent, waiting for confirmation..." : topUpState.state === "confirmed" ? "Confirmed." : `Failed: ${topUpState.error}`}{" "}
+              {topUpState.state === "sending" ? "Sending..." : topUpState.state === "sent" ? "Sent, waiting for confirmation..." : topUpState.state === "confirmed" ? "Confirmed." : topUpState.state === "unconfirmed" ? "Unconfirmed (check explorer)." : `Failed: ${topUpState.error}`}{" "}
               {topUpState.hash ? <a href={explorerTxUrl(topUpState.hash)} target="_blank" rel="noopener noreferrer">View transaction</a> : null}
             </Typography>
           ) : null}
@@ -167,15 +172,16 @@ export const FaucetFundsCardBody = ({
       ) : null}
       {faucetAddress && explorerAddressUrl(faucetAddress) ? <Typography variant="caption"><a href={explorerAddressUrl(faucetAddress)} target="_blank" rel="noopener noreferrer">Faucet on the explorer</a></Typography> : null}
 
-      <Dialog open={addConfirm !== null} onClose={() => setAddConfirm(null)}>
+      <Dialog open={addConfirm !== null} onClose={closeAdd}>
         <DialogTitle>Add payouts</DialogTitle>
         <DialogContent>
           <Typography data-testid="add-confirm-text">Raise the payout limit from {status?.maxPayouts} to {status ? status.maxPayouts + (addConfirm || 0) : ""} (+{addConfirm}). The limit cannot exceed 1000.</Typography>
-          <Typography variant="body2" sx={{ mt: 1 }}>Type the faucet admin password in the field on the card, then confirm.</Typography>
+          <TextField size="small" fullWidth type="password" autoComplete="new-password" label="Faucet admin password" sx={{ mt: 2 }}
+            value={dialogPassword} onChange={(e) => setDialogPassword(e.target.value)} inputProps={{ "aria-label": "Confirm faucet admin password" }} />
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setAddConfirm(null)}>Cancel</Button>
-          <Button variant="contained" onClick={addPayouts} disabled={!password || busy}>Confirm</Button>
+          <Button onClick={closeAdd}>Cancel</Button>
+          <Button variant="contained" onClick={addPayouts} disabled={!dialogPassword || busy}>Confirm</Button>
         </DialogActions>
       </Dialog>
 

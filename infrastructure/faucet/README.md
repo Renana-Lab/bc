@@ -35,6 +35,15 @@ means simultaneous requests are NOT queued: Lambda throttles them (429, non-JSON
 The rate limiter counts every request, so a few abusive IPs can exhaust the global limit for everyone (raise `GLOBAL_RATE_LIMIT_PER_WINDOW` or add WAF). A claim for a code that is mid-payment answers 409/202/200, so code validity can be inferred only by someone who already holds that code and address.
 A reverted transfer (for example a contract address that rejects plain transfers) releases the code so it can be used again with a normal address; each failed attempt costs the faucet gas, bounded by the rate limits.
 
+### Lab sessions: raise the rate limits
+
+The limits count requests per 10-minute window (`RATE_WINDOW_SECONDS`): `RATE_LIMIT_PER_WINDOW` per caller (default 20, deploy flag
+`--rate-limit`) and `GLOBAL_RATE_LIMIT_PER_WINDOW` for everyone together (default 600, deploy flag `--global-rate-limit`). In a lab, a whole
+room usually shares ONE public IP (the lab's NAT) and every participant's page makes a status read plus a claim, often at the same minute, so the
+per-caller limit trips first and the browser sees `429 rate_limited`. The app retries a rate-limited or failed auto-claim once after 5-15 s, never
+more, so for a lab session raise both before it starts, for example `--rate-limit 300 --global-rate-limit 3000` for about 100 participants on one
+network, and lower them again afterwards (or edit the two Lambda environment variables directly). The admin password limits are separate and unchanged.
+
 ## Prolific mode, payout cap and the open/closed switch
 
 By default (`FAUCET_PID_MODE=allowlist`) nothing above changes. Set `--pid-mode prolific` to use one shared link for the whole
@@ -108,8 +117,11 @@ Participants see "Test funds are not available right now." while the faucet is c
 ### Payout limit (admins)
 
 `FAUCET_MAX_PAYOUTS` is only the **deploy-time** value. Admins can raise (or lower, never below what was used) the limit at runtime without
-redeploying: the value is stored in the codes table (`config#maxPayouts`) and takes precedence; if the item is missing (or unreadable) the
-deploy-time value applies, so a DynamoDB hiccup never lifts the cap. Only prolific and open mode have a cap; allowlist mode reports `maxPayouts: null`
+redeploying: the value is stored in the codes table (`config#maxPayouts`) and takes precedence; if the item is missing the deploy-time
+value applies. If the table cannot be read, the container keeps using the last cap it saw (the faucet runs with reserved concurrency 1),
+so a short DynamoDB hiccup does not change the cap. Only a cold start **during** an outage falls back to the deploy-time value, which is
+higher than the stored one if the admin had lowered the limit. Lowering is atomic against the counter: the cap is written, the counter is
+re-read, and the write is rolled back (`400 below_used`) if payouts already exceed it. Only prolific and open mode have a cap; allowlist mode reports `maxPayouts: null`
 and refuses changes (`400 not_applicable`).
 
 * `GET /admin/status` with the password in the **`x-admin-password` header** (never the URL) returns
