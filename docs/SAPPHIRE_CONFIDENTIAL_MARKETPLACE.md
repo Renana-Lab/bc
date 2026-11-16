@@ -36,7 +36,23 @@ signature per session instead of one per read.
 | `REACT_APP_NETWORK` | `sapphire-testnet` (default) or `sapphire-localnet` |
 | `REACT_APP_FACTORY_ADDRESS` | CampaignFactory on that network (no factory is committed) |
 | `REACT_APP_RPC_URLS` / `REACT_APP_RPC_URL` | optional RPC override |
-| `DEPLOY_NETWORK`, `DEPLOY_PRIVATE_KEY`, `FACTORY_SIWE_DOMAIN` (see above), `DEPLOY_MARKET` | `src/real_ethereum/deploy.js` (localnet/testnet only) |
+| `DEPLOY_NETWORK`, `DEPLOY_PRIVATE_KEY`, `FACTORY_SIWE_DOMAIN` (see above), `FACTORY_OWNER_ADDRESS` (required, non-zero), `DEPLOY_MARKET` | `src/real_ethereum/deploy.js` (localnet/testnet only) |
+
+### Admin role, limits and controls
+
+`CampaignFactory(string domain, address initialOwner)`. The owner is also an admin; only the owner adds/removes admins
+(the owner can never be removed; ownership moves with the 2-step `transferOwnership` / `acceptOwnership`). Admin-only
+(enforced on-chain with `onlyAdmin`; the UI allowlist `REACT_APP_ADMIN_ADDRESSES` is not a security boundary):
+`resetAllBudgets` (>= 1, O(1) lazy epoch; funds held by leading bids are kept), `setUserBudget(user, total)`
+(total >= held), `setMinimum`, `closeNow`, `cancelAuction(campaign, note <= 500 B)`, `setHidden` (UI-only flag),
+`setDisabled` (blocks create/bid for that wallet only; **a new wallet bypasses it**), `setAllowSellerEdit`.
+Sellers may edit their minimum (`sellerSetMinimum`) while the auction has no bids and has not ended, when allowed
+(default on). Cancel refunds the leader (pull refund), does not pay the seller and makes the payload unreadable.
+There is **no admin path to payloads**: only the winner reads them. Events never carry payloads.
+Limits: description <= 1200 bytes, payload <= 2000 bytes (`MAX_PAYLOAD_BYTES`), minimum 1..1,000,000,000, duration 1..30 min.
+Deploy order: `npm run sapphire:compile`, `npm run sapphire:test` on localnet, `deployTestnet.js --dry-run`, deploy, copy the
+address to Amplify `REACT_APP_FACTORY_ADDRESS`, redeploy, check `factory.domain()` (details in `docs/SAPPHIRE_TESTNET_RUNBOOK.md`).
+The owner for the lab deployment is `0xa38C101659f5a1DC28745c47746e0ae84b574D26`.
 
 ### SIWE domain
 

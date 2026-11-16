@@ -4,6 +4,7 @@
 //
 //   $env:DEPLOY_PRIVATE_KEY = "0x..."          # PowerShell, this shell session only; never in .env
 //   $env:FACTORY_SIWE_DOMAIN = "datamarketplaces.net"
+//   $env:FACTORY_OWNER_ADDRESS = "0x..."       # factory owner and first admin
 //   node scripts/sapphire/deployTestnet.js --dry-run               # checks only, no network, no transaction
 //   node scripts/sapphire/deployTestnet.js --confirm-public-testnet
 //
@@ -12,6 +13,7 @@
 //  * the deployer key comes from the process environment, NOT from .env
 //  * FACTORY_SIWE_DOMAIN is set, has no scheme/path, and is not localhost (it is fixed in the contract forever)
 //  * DEPLOY_NETWORK is forced to sapphire-testnet (mainnet is not supported by deploy.js)
+//  * FACTORY_OWNER_ADDRESS is a valid, non-zero address (owner and first admin of the factory)
 //  * the compiled contract exists
 const fs = require("fs");
 const path = require("path");
@@ -36,7 +38,11 @@ if (!domain) problems.push("FACTORY_SIWE_DOMAIN is required (the host users open
 else if (/^https?:\/\//i.test(domain) || domain.includes("/")) problems.push("FACTORY_SIWE_DOMAIN must be a host (and optional port) only, e.g. datamarketplaces.net");
 else if (/^(localhost|127\.0\.0\.1)(:\d+)?$/.test(domain)) problems.push("FACTORY_SIWE_DOMAIN must not be localhost for a testnet deployment.");
 
-if (process.env.DEPLOY_RPC_URL && !/^https:\/\/([a-z0-9-]+\.)*oasis\.io(:\d+)?(\/|$)/.test(process.env.DEPLOY_RPC_URL)) {
+const owner = process.env.FACTORY_OWNER_ADDRESS || "";
+if (!/^0x[0-9a-fA-F]{40}$/.test(owner)) problems.push("FACTORY_OWNER_ADDRESS is required and must be a valid 0x address (owner and first admin of the factory).");
+else if (/^0x0{40}$/.test(owner)) problems.push("FACTORY_OWNER_ADDRESS must not be the zero address.");
+
+if (process.env.DEPLOY_RPC_URL &&!/^https:\/\/([a-z0-9-]+\.)*oasis\.io(:\d+)?(\/|$)/.test(process.env.DEPLOY_RPC_URL)) {
   problems.push("DEPLOY_RPC_URL, if set, must be an https://*.oasis.io endpoint.");
 }
 if (!fs.existsSync(path.join(root, "src", "real_ethereum", "build", "CampaignFactory.json"))) {
@@ -49,7 +55,7 @@ if (problems.length) {
   process.exit(1);
 }
 if (dryRun) {
-  console.log("[dry run] all checks passed. Nothing was sent. Domain:", domain, "| network: sapphire-testnet (chain 23295)");
+  console.log("[dry run] all checks passed. Nothing was sent. Domain:", domain, "| owner:", owner, "| network: sapphire-testnet (chain 23295)");
   process.exit(0);
 }
 

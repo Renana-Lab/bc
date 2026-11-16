@@ -3,7 +3,7 @@
 //
 //   DEPLOY_NETWORK=sapphire-localnet DEPLOY_PRIVATE_KEY=0x... node src/real_ethereum/deploy.js
 //
-// Never commit keys. Set FACTORY_SIWE_DOMAIN to the app host users sign in on
+// Never commit keys. Set FACTORY_OWNER_ADDRESS (factory owner and first admin). Set FACTORY_SIWE_DOMAIN to the app host users sign in on
 // (for example "localhost:3000").
 const fs = require("fs");
 const path = require("path");
@@ -28,9 +28,14 @@ const deploymentMarket = String(process.env.DEPLOY_MARKET || "dev").toLowerCase(
 const siweDomain =
   process.env.FACTORY_SIWE_DOMAIN || (networkId === "sapphire-localnet" ? "localhost:3000" : "");
 const rpcUrl = process.env.DEPLOY_RPC_URL || network?.rpcUrl;
+// The factory owner (also the first admin). Never hardcoded in the contract; passed at deploy time.
+const ownerAddress = String(process.env.FACTORY_OWNER_ADDRESS || "").trim();
 
 if (!network) throw new Error(`DEPLOY_NETWORK must be one of ${Object.keys(NETWORKS).join(", ")}`);
 if (!siweDomain) throw new Error("Set FACTORY_SIWE_DOMAIN to the host users open the app on (no default outside localnet)");
+if (!/^0x[0-9a-fA-F]{40}$/.test(ownerAddress) || /^0x0{40}$/.test(ownerAddress)) {
+  throw new Error("Set FACTORY_OWNER_ADDRESS to the (non-zero) address that will own the factory and be its first admin");
+}
 if (!privateKey) throw new Error("Set DEPLOY_PRIVATE_KEY (or PRIVATE_KEY) in .env");
 if (!["dev", "real"].includes(deploymentMarket)) {
   throw new Error("DEPLOY_MARKET must be either dev or real");
@@ -64,7 +69,8 @@ const deploy = async () => {
     `0x${compiledFactory.evm.bytecode.object}`,
     signer
   );
-  const contract = await factory.deploy(siweDomain);
+  console.log("Factory owner/admin:", ownerAddress);
+  const contract = await factory.deploy(siweDomain, ownerAddress);
   await contract.waitForDeployment();
   const contractAddress = await contract.getAddress();
   console.log("CampaignFactory deployed at:", contractAddress);

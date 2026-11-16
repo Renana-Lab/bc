@@ -21,6 +21,7 @@ import {
   notEndedError,
 } from "../../real_ethereum/finalizeRetry";
 import ContributeForm from "../../components/ContributeForm";
+import AuctionAdminPanel from "./AuctionAdminPanel";
 import toast from "react-hot-toast";
 import { readOnlyCall } from "../../real_ethereum/readOnly";
 import { campaignSocket } from "../../real_ethereum/socketFactory";
@@ -192,6 +193,7 @@ const initialState = {
   contributors: [],
   refundsProcessed: false,
   closed: false,
+  cancelled: false,
   userBid: 0,
   loading: true,
   error: null,
@@ -310,10 +312,11 @@ function AuctionPageContent() {
     const id = window.setTimeout(() => setClock(chainNowMs()), wait + 50);
     return () => window.clearTimeout(id);
   }, [state.endTime, clockSyncTick]);
+  // A closed auction is never active (an admin cancel closes it before its end time).
   const isAuctionActive = useMemo(
-    () => Number(state.endTime) * 1000 > Math.max(clock, chainNowMs()),
+    () => !state.closed && Number(state.endTime) * 1000 > Math.max(clock, chainNowMs()),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [state.endTime, clock],
+    [state.endTime, state.closed, clock],
   );
   const isManager = useMemo(
     () =>
@@ -326,6 +329,8 @@ function AuctionPageContent() {
       state.connectedAccount?.toLowerCase(),
     [state.highestBidder, state.connectedAccount],
   );
+  // After a cancel the leader is just another refundable bidder.
+  const isWinner = isHighestBidder && !state.cancelled;
   const hasUserBid = useMemo(
     () =>
       state.contributors.some(
@@ -429,6 +434,16 @@ function AuctionPageContent() {
                 )
               : Promise.resolve(false),
         ]);
+      // Cancelled auctions are final: no winner, no payload, the leader is refunded like everyone else.
+      const cancelled = closed
+        ? Boolean(
+            await readOnlyCall(
+              ({ campaign }) => campaign(address).methods.cancelled(),
+              undefined,
+              compatibilityReadOptions,
+            ).catch(() => false),
+          )
+        : false;
       const userBid = userStatus ? userStatus[1] : fallbackUserBid;
       const userParticipated = userStatus
         ? Boolean(userStatus[0])
@@ -436,7 +451,7 @@ function AuctionPageContent() {
       const contributors =
         summaryIsLight && userParticipated ? [account] : addresses;
 
-      if (auctionEnded && closed && userIsHighestBidder && !dataForSell) {
+      if (auctionEnded && closed && !cancelled && userIsHighestBidder && !dataForSell) {
         // Signs one SIWE message per session, then reads with a bearer token.
         setWinnerData((prev) =>
           prev.status === "ready" || prev.status === "error"
@@ -541,6 +556,7 @@ function AuctionPageContent() {
           refundsProcessed,
           userBid: Number(userBid),
           closed,
+          cancelled,
         },
       });
 
@@ -700,7 +716,7 @@ function AuctionPageContent() {
   // A losing bidder's refund is claimed once automatically after finalize.
   useEffect(() => {
     if (!state.closed || !state.auction || !state.connectedAccount) return;
-    if (isManager || isHighestBidder || !hasUserBid) return;
+    if (isManager || isWinner || !hasUserBid) return;
     if (state.refundsProcessed || !(state.userBid > 0)) return;
     const key = String(address).toLowerCase();
     if (refundAttemptedRef.current.has(key)) return;
@@ -727,7 +743,7 @@ function AuctionPageContent() {
     address,
     fetchAuctionData,
     hasUserBid,
-    isHighestBidder,
+    isWinner,
     isManager,
     state.auction,
     state.closed,
@@ -920,6 +936,7 @@ function AuctionPageContent() {
           )}
 
         {state.closed &&
+          !state.cancelled &&
           !isAuctionActive &&
           isManager &&
           state.transactions.length !== 0 && (
@@ -1024,6 +1041,17 @@ function AuctionPageContent() {
     <Layout>
       <div className={showPageStyles.page}>
         {renderAuctionInfo()}
+        <AuctionAdminPanel
+          address={address}
+          account={state.connectedAccount}
+          manager={state.manager}
+          minimumContribution={state.minimumContribution}
+          hasBids={Number(state.highestBid) > 0}
+          endTimeSec={Number(state.endTime)}
+          closed={state.closed}
+          cancelled={state.cancelled}
+          onChanged={fetchAuctionData}
+        />
         {!isAuctionActive && !state.closed && autoFinalize.status === "pending" && (
           <Typography textAlign="center" role="status">
             Finalizing auction...
@@ -1075,7 +1103,7 @@ function AuctionPageContent() {
             />
           </div>
         )}
-        {!isAuctionActive && isHighestBidder && (
+        {!isAuctionActive && isWinner && (
           <div className={showPageStyles.contributeForm}>
             <div className={showPageStyles.centered}>
               <img alt="Auction winner medal" width="80px" src={picSrc} />
@@ -1137,23 +1165,29 @@ function AuctionPageContent() {
             </Dialog>
           </div>
         )}
-        {!isAuctionActive && !isManager && !hasUserBid && !isHighestBidder && (
+        {!isAuctionActive && !isManager && !hasUserBid && !isWinner && (
           <div className={showPageStyles.contributeForm}>
             <Typography variant="h6" textAlign="center" role="status">
-              {state.closed
+              {state.cancelled
+                ? "This auction was cancelled."
+                : state.closed
                 ? "This auction has ended."
                 : "This auction has ended and is awaiting finalization."}
             </Typography>
           </div>
         )}
-        {!isAuctionActive && !isManager && hasUserBid && !isHighestBidder && (
+        {!isAuctionActive && !isManager && hasUserBid && !isWinner && (
           <div className={showPageStyles.contributeForm}>
             <Typography
               variant="h6"
               textAlign="center"
               sx={{ marginBottom: "1rem" }}
             >
-              {state.refundsProcessed
+              {state.cancelled
+                ? state.refundsProcessed
+                  ? "This auction was cancelled. Your bid has been refunded."
+                  : "This auction was cancelled. Press Claim refund now to get your bid back."
+                : state.refundsProcessed
                 ? "You did not win the auction. Your bid has been refunded."
                 : state.closed
                   ? autoRefund.status === "pending"

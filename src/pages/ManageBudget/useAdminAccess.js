@@ -1,9 +1,11 @@
 /* eslint-env es2020 */
-// React side of the Admin Zone UI gate (see adminGate.js: UI only, contract writes are not enforced).
+// React side of the Admin Zone gate (see adminGate.js): signed UI gate, plus the on-chain factory.isAdmin
+// check that write actions require (`canWrite`).
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Typography } from "@mui/material";
 import { getWalletAccess, requireWalletAccess, subscribeWalletAccess } from "../../real_ethereum/walletAccess";
 import { ensureTargetChain, getTargetNetwork } from "../../real_ethereum/sapphireNetworks";
+import { readFactoryOwner, readIsFactoryAdmin } from "../../real_ethereum/adminChain";
 import {
   ADMIN_GATE_NOTE,
   getAdminAddresses,
@@ -21,10 +23,12 @@ const connectedAccount = () => {
 // Tracks the connected wallet and whether it currently holds a valid admin proof. Admin status is
 // re-derived (signature re-verified) on wallet changes, tab focus/visibility and at proof expiry, so an
 // open tab loses admin after ADMIN_PROOF_MINUTES and when the wallet account changes.
-export const useAdminAccess = ({ allowlist } = {}) => {
+export const useAdminAccess = ({ allowlist, readIsAdmin = readIsFactoryAdmin, readOwner = readFactoryOwner } = {}) => {
   const list = useMemo(() => allowlist || getAdminAddresses(), [allowlist]);
   const [account, setAccount] = useState(connectedAccount);
   const [isAdmin, setIsAdmin] = useState(false);
+  // On-chain role of the signed-in admin. Contract writes need BOTH the signed UI gate and this.
+  const [chainRole, setChainRole] = useState({ account: "", admin: false, owner: false });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const timerRef = useRef(null);
@@ -65,6 +69,31 @@ export const useAdminAccess = ({ allowlist } = {}) => {
     };
   }, [recheck]);
 
+  useEffect(() => {
+    if (!isAdmin || !account) {
+      setChainRole({ account: "", admin: false, owner: false });
+      return undefined;
+    }
+    let cancelled = false;
+    Promise.all([
+      Promise.resolve(readIsAdmin(account)).catch(() => false),
+      Promise.resolve(readOwner()).catch(() => ""),
+    ]).then(([admin, owner]) => {
+      if (cancelled || !mountedRef.current) return;
+      setChainRole({
+        account: account.toLowerCase(),
+        admin: Boolean(admin),
+        owner: Boolean(owner) && String(owner).toLowerCase() === account.toLowerCase(),
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isAdmin, account, readIsAdmin, readOwner]);
+
+  const onChainAdmin = isAdmin && chainRole.admin && chainRole.account === String(account).toLowerCase();
+  const isOwner = onChainAdmin && chainRole.owner;
+
   const onAllowlist = isAdminAddress(account, list);
 
   const unlock = useCallback(async () => {
@@ -101,7 +130,19 @@ export const useAdminAccess = ({ allowlist } = {}) => {
     }
   }, [list, recheck]);
 
-  return { account, isAdmin, onAllowlist, busy, error, unlock, allowlistSize: list.length };
+  return {
+    account,
+    isAdmin,
+    onChainAdmin,
+    isOwner,
+    // Write actions: signed gate + factory.isAdmin(account) on-chain.
+    canWrite: onChainAdmin,
+    onAllowlist,
+    busy,
+    error,
+    unlock,
+    allowlistSize: list.length,
+  };
 };
 
 export const AdminGatePrompt = ({ access, shortAddress = (value) => value }) => (

@@ -15,6 +15,12 @@ jest.mock("../../real_ethereum/walletAccess", () => ({
   requireWalletAccess: async () => mockWallet.snapshot,
 }));
 
+// The default on-chain readers would hit the network; tests inject their own where it matters.
+jest.mock("../../real_ethereum/adminChain", () => ({
+  readIsFactoryAdmin: async () => false,
+  readFactoryOwner: async () => "",
+}));
+
 if (!globalThis.crypto?.getRandomValues) {
   Object.defineProperty(globalThis, "crypto", { value: webcrypto, configurable: true });
 }
@@ -64,7 +70,47 @@ describe("Admin gate UI", () => {
     expect(screen.getByText(/not on the admin list/i)).toBeInTheDocument();
     expect(signCalls(provider)).toHaveLength(0);
     expect(screen.queryByText("ADMIN ZONE")).toBeNull();
-    expect(screen.getByText(/UI gate only/i)).toBeInTheDocument();
+    expect(screen.getByText(/Contract writes are enforced/i)).toBeInTheDocument();
+  });
+
+  test("writes need the on-chain admin role as well as the signed gate", async () => {
+    connect(admin);
+    const readIsAdmin = jest.fn(async () => false);
+    const readOwner = jest.fn(async () => "");
+    let latest;
+    const Probe = () => {
+      latest = useAdminAccess({ allowlist, readIsAdmin, readOwner });
+      return latest.isAdmin ? <div>UNLOCKED</div> : <AdminGatePrompt access={latest} />;
+    };
+    render(<Probe />);
+    // Not signed yet: the on-chain role is not even queried.
+    expect(readIsAdmin).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: /sign to unlock/i }));
+    await waitFor(() => expect(screen.getByText("UNLOCKED")).toBeInTheDocument());
+    await waitFor(() => expect(readIsAdmin).toHaveBeenCalledWith(admin.address));
+    // Allowlisted + signed but not an on-chain admin: UI visible, writes disabled.
+    expect(latest.isAdmin).toBe(true);
+    expect(latest.canWrite).toBe(false);
+  });
+
+  test("signed admin who is an on-chain admin can write; owner flag follows factory.owner()", async () => {
+    connect(admin);
+    const readIsAdmin = jest.fn(async () => true);
+    const readOwner = jest.fn(async () => admin.address.toLowerCase());
+    let latest;
+    const Probe = () => {
+      latest = useAdminAccess({ allowlist, readIsAdmin, readOwner });
+      return latest.isAdmin ? <div>UNLOCKED</div> : <AdminGatePrompt access={latest} />;
+    };
+    render(<Probe />);
+    fireEvent.click(screen.getByRole("button", { name: /sign to unlock/i }));
+    await waitFor(() => expect(latest.canWrite).toBe(true));
+    expect(latest.isOwner).toBe(true);
+
+    // Switching to a wallet that is not signed in drops write access immediately.
+    switchWallet(outsider);
+    await waitFor(() => expect(latest.canWrite).toBe(false));
+    expect(latest.isOwner).toBe(false);
   });
 
   test("admin wallet signs once and unlocks; switching wallet re-locks", async () => {

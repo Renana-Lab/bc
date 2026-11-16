@@ -127,7 +127,8 @@ describe("no hard-coded admin secret", () => {
     expect(source).not.toMatch(/Admin Key/);
   });
   test("the gate states that it is UI-only", () => {
-    expect(ADMIN_GATE_NOTE).toMatch(/UI gate only/);
-    expect(ADMIN_GATE_NOTE).toMatch(/contract has an admin role/);
+    expect(ADMIN_GATE_NOTE).toMatch(/UI allowlist/);
+    expect(ADMIN_GATE_NOTE).toMatch(/Contract writes are enforced/);
+    expect(ADMIN_GATE_NOTE).not.toMatch(/not enforced/);
   });
 });

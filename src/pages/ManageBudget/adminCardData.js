@@ -2,11 +2,29 @@
 
 export const AUDIT_EVENT_TYPES = [
   "BudgetChanged",
+  "GlobalBudgetReset",
+  "UserBudgetSet",
   "AuctionCreatedDetailed",
   "AuctionFinalizationFailed",
+  "MinimumChanged",
+  "AuctionClosedEarly",
+  "AuctionCancelled",
+  "AuctionHiddenChanged",
+  "UserDisabledChanged",
+  "SellerEditAllowedChanged",
+  "AdminAdded",
+  "AdminRemoved",
+  "OwnershipTransferred",
   "SellerPaid",
+  "SellerPaymentDeferred",
   "RefundProcessed",
 ];
+
+// Events emitted by the factory (read by address) and by campaigns (read by recent campaign list).
+export const FACTORY_AUDIT_EVENTS = AUDIT_EVENT_TYPES.filter(
+  (name) => !["SellerPaid", "SellerPaymentDeferred", "RefundProcessed"].includes(name)
+);
+export const CAMPAIGN_AUDIT_EVENTS = ["SellerPaid", "SellerPaymentDeferred", "RefundProcessed"];
 
 const lower = (value) => String(value ?? "").toLowerCase();
 const num = (value) => {
@@ -47,6 +65,32 @@ const summarizeEvent = (name, args) => {
       return `${args.campaignAddress} by ${args.seller}, min ${args.minimum}`;
     case "AuctionFinalizationFailed":
       return `${args.campaignAddress}: ${decodeRevertReason(args.reason)}`;
+    case "GlobalBudgetReset":
+      return `epoch ${args.epoch}: default budget ${args.newBudget} by ${args.by}`;
+    case "UserBudgetSet":
+      return `${args.user}: total ${args.total}, available ${args.available} by ${args.by}`;
+    case "MinimumChanged":
+      return `${args.campaign}: minimum ${args.oldMinimum} -> ${args.newMinimum} by ${args.by}`;
+    case "AuctionClosedEarly":
+      return `${args.campaign} closed early by ${args.by}`;
+    case "AuctionCancelled":
+      return `${args.campaign} cancelled by ${args.by}${args.fundsReleased === "true" ? "" : " (already finalized: hidden only)"}${
+        args.note ? `: ${args.note}` : ""
+      }`;
+    case "AuctionHiddenChanged":
+      return `${args.campaign} ${args.hidden === "true" ? "hidden" : "unhidden"} by ${args.by}`;
+    case "UserDisabledChanged":
+      return `${args.user} ${args.disabled === "true" ? "disabled" : "enabled"} by ${args.by}`;
+    case "SellerEditAllowedChanged":
+      return `seller minimum edits ${args.allowed === "true" ? "allowed" : "blocked"} by ${args.by}`;
+    case "AdminAdded":
+      return `${args.admin} added as admin by ${args.by}`;
+    case "AdminRemoved":
+      return `${args.admin} removed as admin by ${args.by}`;
+    case "OwnershipTransferred":
+      return `ownership ${args.previousOwner} -> ${args.newOwner}`;
+    case "SellerPaymentDeferred":
+      return `${args.seller}: ${args.amount} credited for withdrawal (payout failed)`;
     case "SellerPaid":
       return `${args.seller} paid ${args.amount}`;
     case "RefundProcessed":
@@ -68,8 +112,12 @@ export const normalizeAuditEvent = (raw = {}, source = "") => {
     blockNumber: num(raw.blockNumber),
     logIndex: num(raw.logIndex),
     transactionHash: raw.transactionHash || "",
-    auction: lower(args.campaignAddress || (name === "SellerPaid" || name === "RefundProcessed" ? raw.address : "")),
-    actor: lower(args.user || args.seller || args.contributor || ""),
+    auction: lower(
+      args.campaignAddress ||
+        args.campaign ||
+        (["SellerPaid", "SellerPaymentDeferred", "RefundProcessed"].includes(name) ? raw.address : "")
+    ),
+    actor: lower(args.user || args.seller || args.contributor || args.admin || args.by || ""),
     summary: summarizeEvent(name, args),
     args,
   };
@@ -113,7 +161,17 @@ export const inspectEventJson = (event) =>
 
 // addresses: factory.allUsers in registration order. budgets: map lowercase address -> usersBudget string.
 // events: normalized BudgetChanged events. labels: lowercase address -> local label. bots: Set of lowercase wallets.
-export const mapUserRows = ({ addresses = [], budgets = {}, events = [], labels = {}, bots = new Set() }) => {
+// held: lowercase address -> amount reserved by leading bids. disabled: Set of lowercase addresses.
+// budgets are "available" (getBudget); total = available + held, which is what setUserBudget takes.
+export const mapUserRows = ({
+  addresses = [],
+  budgets = {},
+  events = [],
+  labels = {},
+  bots = new Set(),
+  held = {},
+  disabled = new Set(),
+}) => {
   const lastChange = new Map();
   [...events].sort(compareNewestFirst).forEach((event) => {
     if (event.name === "BudgetChanged" && !lastChange.has(event.actor)) lastChange.set(event.actor, event);
@@ -128,6 +186,11 @@ export const mapUserRows = ({ addresses = [], budgets = {}, events = [], labels 
         label: labels[key] || "",
         isBot: bots.has(key),
         budget: budgets[key] ?? "",
+        held: held[key] ?? "0",
+        total: /^\d+$/.test(String(budgets[key] ?? "")) && /^\d+$/.test(String(held[key] ?? "0"))
+          ? (BigInt(budgets[key]) + BigInt(held[key] ?? "0")).toString()
+          : "",
+        disabled: disabled.has(key),
         lastChange: last
           ? {
               blockNumber: last.blockNumber,
@@ -145,6 +208,49 @@ export const mapUserRows = ({ addresses = [], budgets = {}, events = [], labels 
         num(b.lastChange?.blockNumber ?? -1) - num(a.lastChange?.blockNumber ?? -1) || b.index - a.index
     );
 };
+
+// ---- per-auction admin rows -------------------------------------------------------------------
+
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+
+// summary: getListSummary() result [min, balance, approvers, manager, highestBid, description, highestBidder, endTime, closed].
+export const mapAuctionAdminRow = ({ address, summary = [], cancelled = false, hidden = false }) => ({
+  address,
+  minimum: String(summary[0] ?? ""),
+  manager: String(summary[3] ?? ""),
+  highestBid: String(summary[4] ?? "0"),
+  description: String(summary[5] ?? ""),
+  hasBids: lower(summary[6]) !== ZERO_ADDRESS && Boolean(summary[6]),
+  endTime: num(summary[7]),
+  closed: Boolean(summary[8]),
+  cancelled: Boolean(cancelled),
+  hidden: Boolean(hidden),
+});
+
+export const getAuctionAdminStatus = (row, nowSec) => {
+  if (row.cancelled) return "cancelled";
+  if (row.closed) return "finalized";
+  return row.endTime <= nowSec ? "ended" : "live";
+};
+
+// Mirrors the contract preconditions so the UI only offers actions that can succeed.
+export const getAdminActionAvailability = (row, nowSec) => {
+  const status = getAuctionAdminStatus(row, nowSec);
+  return {
+    status,
+    editMinimum: status === "live" && !row.hasBids,
+    closeNow: status === "live",
+    cancel: status !== "cancelled",
+    cancelHidesOnly: status === "finalized",
+    toggleHidden: true,
+  };
+};
+
+// Seller edit-minimum has the same preconditions as the admin one, plus the factory toggle.
+export const canSellerEditMinimum = ({ row, account, nowSec, allowSellerEdit }) =>
+  Boolean(allowSellerEdit) &&
+  lower(account) === lower(row.manager) &&
+  getAdminActionAvailability(row, nowSec).editMinimum;
 
 // Local bot config (localStorage list) -> { labels, bots } keyed by lowercase wallet.
 export const mapBotConfig = (list) => {

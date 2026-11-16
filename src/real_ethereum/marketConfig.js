@@ -89,12 +89,51 @@ export const MARKET_DEFINITIONS = [
   },
 ];
 
+const sameAddress = (a, b) => normalizeAddress(a).toLowerCase() === normalizeAddress(b).toLowerCase();
+
+// The admin-entered override is stored as {address, envAddressAtSet}. It only wins while the
+// build-time REACT_APP_FACTORY_ADDRESS is still the one that was current when it was set; once a
+// new factory is configured in the environment the stale override is ignored and deleted.
+// Legacy plain-string values are kept only when no (different) env address is configured.
+const readStoredOverride = (definition) => {
+  const raw = getStoredValue(definition.storageKey);
+  if (!raw) return "";
+
+  const envAddress = firstValidAddress(definition.envAddress);
+  let address = "";
+  let envAtSet = null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") {
+      address = normalizeAddress(parsed.address);
+      envAtSet = normalizeAddress(parsed.envAddressAtSet);
+    }
+  } catch {
+    address = normalizeAddress(raw); // legacy format
+  }
+
+  const stale =
+    !isValidAddress(address) ||
+    (envAtSet === null
+      ? Boolean(envAddress) && !sameAddress(envAddress, address)
+      : !sameAddress(envAtSet, envAddress));
+  if (stale) {
+    try {
+      removeStoredValue(definition.storageKey);
+    } catch {
+      // storage unavailable: still ignore the value
+    }
+    return "";
+  }
+  return address;
+};
+
 export const getMarketFactoryAddress = (marketId) => {
   const definition = MARKET_DEFINITIONS.find((market) => market.id === marketId);
   if (!definition) return "";
 
   return firstValidAddress(
-    getStoredValue(definition.storageKey),
+    readStoredOverride(definition),
     definition.envAddress,
     definition.fallbackAddress
   );
@@ -115,7 +154,13 @@ export const setMarketFactoryAddress = (marketId, address) => {
     throw new Error("Invalid factory address");
   }
 
-  setStoredValue(market.storageKey, normalizedAddress);
+  setStoredValue(
+    market.storageKey,
+    JSON.stringify({
+      address: normalizedAddress,
+      envAddressAtSet: firstValidAddress(market.envAddress),
+    })
+  );
   dispatchMarketChanged(getActiveMarket(), "factory-address");
 
   return normalizedAddress;

@@ -75,7 +75,7 @@ test("sapphire confidentiality", { skip, timeout: 300_000 }, async (t) => {
     `0x${compiledFactory.evm.bytecode.object}`,
     sellerSigner
   );
-  const deployed = await deployer.deploy(DOMAIN);
+  const deployed = await deployer.deploy(DOMAIN, seller.address);
   await deployed.waitForDeployment();
   const factoryAddress = await deployed.getAddress();
   // The localnet gateway caps eth_getLogs ranges, so start at the factory deployment block.

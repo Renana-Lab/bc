@@ -44,6 +44,7 @@ import { preserveAuctionUserState } from "./auctionVisualState";
 import { finalizeAuctionIfReady } from "../../real_ethereum/autoFinalize";
 import { MAX_FINALIZE_ATTEMPTS } from "../../real_ethereum/finalizeRetry";
 import { pickAuctionToFinalize, resolveFinalizeOutcome } from "./listFinalize";
+import { auctionBadges, filterHiddenAuctions, useAuctionAdminFlags } from "./auctionAdminFlags";
 import { chainNowMs, useChainClockSync } from "../../real_ethereum/chainClock";
 import { AuctionCountdown, LastUpdatedLabel } from "./AuctionLiveValues";
 import styles from "./auctions.module.scss";
@@ -362,9 +363,11 @@ export const AuctionTableRow = React.memo(function AuctionTableRow({
   currentUserAddress,
   boundaryClock,
   onOpen,
+  hidden = false,
+  cancelled = false,
 }) {
-  const auctionOpen = Number(auction.endTime) > boundaryClock;
-  const userWon = !auctionOpen && addressMatches(auction.highestBidder, currentUserAddress);
+  const auctionOpen = !cancelled && Number(auction.endTime) > boundaryClock;
+  const userWon = !cancelled && !auctionOpen && addressMatches(auction.highestBidder, currentUserAddress);
   const userParticipated = Boolean(
     auction?.addresses?.some((address) => addressMatches(address, currentUserAddress)),
   );
@@ -380,7 +383,10 @@ export const AuctionTableRow = React.memo(function AuctionTableRow({
     : userFontColor;
 
   let paymentStatus = "";
-  if (!auction.isReadPlaceholder) {
+  if (cancelled) {
+    // Cancelled: the leader is refunded and the seller is not paid; there is no winner.
+    paymentStatus = userParticipated ? (auction.isRefunded ? "Cancelled, refunded" : "Cancelled, refund due") : "Cancelled";
+  } else if (!auction.isReadPlaceholder) {
     if (userParticipated && !userWon && !auctionOpen) {
       paymentStatus = auction.isRefunded ? "Refunded" : "Awaiting Refund";
     } else if (userWon) {
@@ -418,6 +424,11 @@ export const AuctionTableRow = React.memo(function AuctionTableRow({
     >
       <TableCell sx={fontSx} align="center">
         {auction.isReadPlaceholder ? <LoadingAuctionLabel /> : auction.dataDescription}
+        {auctionBadges({ hidden, cancelled }).map((badge) => (
+          <strong key={badge} data-testid={`auction-badge-${badge.toLowerCase()}`} style={{ marginLeft: 8, fontSize: 11 }}>
+            [{badge}]
+          </strong>
+        ))}
       </TableCell>
       <TableCell align="center" sx={fontSx}>
         <span className={styles.dateCell}>
@@ -1250,6 +1261,12 @@ function AuctionsListPage() {
     normalizeRemainingBudget(navState?.remainingBudget),
   );
   const currentUserAddress = connectedAccount;
+  const adminFlags = useAuctionAdminFlags(auctionsList);
+  // Hidden auctions are removed from every derived view below for non-admins.
+  const viewableAuctions = useMemo(
+    () => filterHiddenAuctions(auctionsList, adminFlags.hidden, adminFlags.isAdmin),
+    [auctionsList, adminFlags.hidden, adminFlags.isAdmin],
+  );
   const searchIsActive = Boolean(searchQuery.trim());
   const loadRemainingBudget = useCallback(async (account) => {
     const factoryAddressForRequest = activeFactoryAddressRef.current;
@@ -1732,7 +1749,7 @@ function AuctionsListPage() {
     const numberMap = new Map();
     const exactAddressMap = new Map();
 
-    auctionsList.forEach((auction) => {
+    viewableAuctions.forEach((auction) => {
       const textFields = [
         auction.dataDescription,
         auction.dataForSell,
@@ -1780,11 +1797,11 @@ function AuctionsListPage() {
     });
 
     return { rows, tokenMap, numberMap, exactAddressMap };
-  }, [auctionsList, boundaryClock]);
+  }, [viewableAuctions, boundaryClock]);
 
   const searchedAuctions = useMemo(() => {
     const query = getSearchKind(deferredSearchQuery);
-    if (!query.value) return auctionsList;
+    if (!query.value) return viewableAuctions;
 
     const orderedRows = auctionSearchIndex.rows;
     let candidateRows = orderedRows;
@@ -1831,7 +1848,7 @@ function AuctionsListPage() {
         );
       })
       .map(({ auction }) => auction);
-  }, [auctionSearchIndex, auctionsList, deferredSearchQuery]);
+  }, [auctionSearchIndex, viewableAuctions, deferredSearchQuery]);
 
   const sortClock = sortMode === "ending" ? boundaryClock : 0;
   const sortedAuctions = useMemo(() => {
@@ -2058,6 +2075,8 @@ function AuctionsListPage() {
                     currentUserAddress={currentUserAddress}
                     boundaryClock={boundaryClock}
                     onOpen={handleOpenAuction}
+                    hidden={adminFlags.hidden.has(String(auction.address).toLowerCase())}
+                    cancelled={adminFlags.cancelled.has(String(auction.address).toLowerCase())}
                   />
                 ))}
               </TableBody>
