@@ -116,7 +116,7 @@ test("the dialog tells admins when participants see the message", async () => {
   render(<ParticipantsGasCard defaultOpen deps={makeDeps(messageApi())} />);
   await waitFor(() => expect(screen.getAllByTestId("participant-row")).toHaveLength(3));
   fireEvent.click(screen.getByRole("button", { name: "Message all participants" }));
-  expect(await screen.findByText(/within about 5 seconds/)).toBeTruthy();
+  expect(await screen.findByText(/within about 30 seconds/)).toBeTruthy();
 });
 
 test("Message all participants sends a broadcast and shows how many read each one; errors are reported", async () => {

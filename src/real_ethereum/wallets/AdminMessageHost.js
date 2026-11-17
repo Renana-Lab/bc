@@ -5,17 +5,19 @@ import { fetchSweepConfig, pidHashFor } from "./sweepClient.mjs";
 import { ackInbox, fetchInbox } from "./inboxClient.mjs";
 
 // Messages from the administrator. Draws nothing until one arrives, then a blocking popup, one message at a time.
-//  * Polls the faucet server every 5 s while the tab is visible, and right away when the participant returns to the tab.
+//  * Polls the faucet server every 30 s while the tab is visible, and right away when the participant returns to the tab.
 //  * "Got it" tells the server (signed with the wallet) so the message is not shown again; ids are also remembered
 //    for this page load, so a message never opens twice even if the acknowledgement is still on its way.
 // Same gating as AutoSweepHost: only for the invisible local wallet of a participant, never in MetaMask mode,
 // never with the admin override or the admin key slot, never for an admin address.
-export const POLL_MS = 5_000;
+// /inbox shares FaucetFunction (reserved concurrency 1) with claims: never poll faster than this.
+export const POLL_JITTER_MS = 5_000; // one-time random delay before the first poll so a lab does not poll in sync
+export const POLL_MS = 30_000;
 export const INBOX_POLL_SECONDS = POLL_MS / 1000; // quoted in the admin message dialog
 const CONFIG_RETRY_MS = 30_000;
 const CONFIG_ATTEMPTS = 4;
 
-const AdminMessageHost = ({ wallet, address, faucetUrl, strictPid, openPid, isAdmin = false, pollMs = POLL_MS }) => {
+const AdminMessageHost = ({ wallet, address, faucetUrl, strictPid, openPid, isAdmin = false, pollMs = POLL_MS, random = Math.random }) => {
   const enabled = Boolean(wallet && address && faucetUrl && (strictPid || openPid) && !isAdmin && isInvisibleWalletMode() && getWalletScopeOverride() !== "admin");
   const [queue, setQueue] = useState([]);
   const ackRef = useRef(null);
@@ -25,6 +27,7 @@ const AdminMessageHost = ({ wallet, address, faucetUrl, strictPid, openPid, isAd
     let cancelled = false;
     let timer = null;
     let retryTimer = null;
+    let jitterTimer = null;
     let session = null; // { pidHash, offset } once the server has told us the pid mode and its clock
     let busy = false;
     const seen = new Set(); // every id shown (or being shown) in this page load
@@ -67,19 +70,27 @@ const AdminMessageHost = ({ wallet, address, faucetUrl, strictPid, openPid, isAd
       if (!pidHash) return;
       // Signature timestamps use the server's clock (a participant's clock may be minutes off).
       session = { pidHash, offset: Number.isFinite(config.serverTime) ? config.serverTime - Date.now() : 0 };
-      poll();
-      timer = setInterval(() => { if (!document.hidden) poll(); }, pollMs);
       document.addEventListener("visibilitychange", onVisible);
+      // First poll after a random 0-5 s delay; later polls every pollMs. Returning to the tab still polls at once.
+      const begin = () => {
+        if (cancelled) return;
+        poll();
+        timer = setInterval(() => { if (!document.hidden) poll(); }, pollMs);
+      };
+      const delay = Math.floor(random() * POLL_JITTER_MS);
+      if (delay > 0) jitterTimer = setTimeout(begin, delay);
+      else begin();
     };
     start(0);
     return () => {
       cancelled = true;
       clearTimeout(retryTimer);
+      clearTimeout(jitterTimer);
       clearInterval(timer);
       document.removeEventListener("visibilitychange", onVisible);
       ackRef.current = null;
     };
-  }, [enabled, address, faucetUrl, strictPid, openPid, wallet, pollMs]);
+  }, [enabled, address, faucetUrl, strictPid, openPid, wallet, pollMs, random]);
 
   const current = queue[0];
   if (!enabled || !current) return null;

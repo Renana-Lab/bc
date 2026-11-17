@@ -2688,7 +2688,7 @@ const ManageBudgetPage = () => {
                               sx={{ mt: 0.5 }}
                             >
                               <Typography variant="caption" color="text.secondary">
-                                Bid {option.highestBid} wei
+                                Bid {option.highestBid}
                               </Typography>
                               <Typography variant="caption" color="text.secondary">
                                 Seller {shortAddress(option.seller)}

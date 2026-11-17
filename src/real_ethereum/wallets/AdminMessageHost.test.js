@@ -15,7 +15,7 @@ const msg = (id, body) => ({ id, body, createdAt: 1 });
 let wallet;
 let hidden;
 
-const mount = (props = {}) => render(<AdminMessageHost wallet={wallet} address={ADDRESS} faucetUrl="https://faucet.example" strictPid={PID} openPid={PID} {...props} />);
+const mount = (props = {}) => render(<AdminMessageHost wallet={wallet} address={ADDRESS} faucetUrl="https://faucet.example" strictPid={PID} openPid={PID} random={() => 0} {...props} />);
 const setHidden = (value) => { hidden = value; document.dispatchEvent(new Event("visibilitychange")); };
 const tick = async (ms) => { act(() => { jest.advanceTimersByTime(ms); }); await flush(); };
 
@@ -71,11 +71,11 @@ test("messages show one at a time in order; the text is plain text, not markup",
   expect(container.innerHTML).toBe("");
 });
 
-test("polls every 5 s while visible, pauses while hidden and checks again when the tab returns", async () => {
+test("polls every 30 s while visible, pauses while hidden and checks again when the tab returns", async () => {
   mount();
   await flush();
   expect(fetchInbox).toHaveBeenCalledTimes(1);
-  await tick(5_000);
+  await tick(30_000);
   expect(fetchInbox).toHaveBeenCalledTimes(2);
   setHidden(true);
   await tick(90_000);
@@ -93,11 +93,11 @@ test("a message is never shown twice: the server may repeat it until the acknowl
   await flush();
   fireEvent.click(screen.getByRole("button", { name: "Got it" }));
   await flush();
-  await tick(5_000); // next poll: retries the ack first, and the repeated message is not queued again
+  await tick(30_000); // next poll: retries the ack first, and the repeated message is not queued again
   expect(screen.queryByRole("dialog")).toBeNull();
   expect(ackInbox.mock.calls.length).toBeGreaterThanOrEqual(2);
   ackInbox.mockResolvedValue(true);
-  await tick(5_000);
+  await tick(30_000);
   const acks = ackInbox.mock.calls.length;
   await tick(60_000);
   expect(ackInbox.mock.calls.length).toBe(acks); // acknowledged: no more retries
@@ -109,7 +109,7 @@ test("a new message arriving while one is open waits its turn", async () => {
   mount();
   await flush();
   fetchInbox.mockResolvedValue({ ok: true, messages: [msg("m1-aaaaaaaa", "one"), msg("m2-aaaaaaaa", "two")], serverTime: null });
-  await tick(5_000);
+  await tick(30_000);
   expect(screen.getByTestId("admin-message-body").textContent).toBe("one");
   fireEvent.click(screen.getByRole("button", { name: "Got it" }));
   await flush();
@@ -131,7 +131,7 @@ test("silent when the server is unreachable or the config cannot be read (it ret
   await tick(30_000); // the config retry is slower than the inbox poll
   expect(fetchInbox).toHaveBeenCalledTimes(1);
   fetchInbox.mockResolvedValue({ ok: false, messages: [], serverTime: null });
-  await tick(5_000);
+  await tick(30_000);
   expect(container.innerHTML).toBe("");
 });
 
@@ -163,4 +163,29 @@ test("stops polling when it unmounts", async () => {
   view.unmount();
   await tick(90_000);
   expect(fetchInbox).toHaveBeenCalledTimes(1);
+});
+
+test("the first poll waits a random 0-5 s, then polls every 30 s", async () => {
+  mount({ random: () => 0.5 }); // 2.5 s
+  await flush();
+  expect(fetchInbox).not.toHaveBeenCalled();
+  await tick(2_499);
+  expect(fetchInbox).not.toHaveBeenCalled();
+  await tick(1);
+  expect(fetchInbox).toHaveBeenCalledTimes(1);
+  await tick(29_999);
+  expect(fetchInbox).toHaveBeenCalledTimes(1);
+  await tick(1);
+  expect(fetchInbox).toHaveBeenCalledTimes(2);
+});
+
+test("the jitter never exceeds 5 s and returning to the tab still polls immediately", async () => {
+  mount({ random: () => 0.999999 });
+  await flush();
+  await tick(5_000);
+  expect(fetchInbox).toHaveBeenCalledTimes(1);
+  setHidden(true);
+  setHidden(false);
+  await flush();
+  expect(fetchInbox).toHaveBeenCalledTimes(2);
 });
