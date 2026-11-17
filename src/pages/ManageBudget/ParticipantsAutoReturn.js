@@ -7,6 +7,7 @@ import { adminHeadCellSx } from "./AdminCard";
 import { useFaucetSessionPassword } from "./faucetSessionPassword";
 import { formatNative } from "../../real_ethereum/wallets/nativeBalance";
 import { fetchSweeps, saveSweepIdleMinutes } from "../../real_ethereum/wallets/sweepClient.mjs";
+import { fetchSweepsShared } from "./faucetSweepsCache";
 
 const STATUS_LABELS = { armed: "armed", sent: "sent", stale: "stale", none: "none" };
 
@@ -33,8 +34,9 @@ export const useAutoReturn = ({ faucetUrl = process.env.REACT_APP_FAUCET_URL, de
   }, []);
   // load(typed) uses the typed password, or the session one when nothing is typed. Resolves to the sweeps map
   // (lowercase address -> sweep) or undefined when the request failed.
-  const load = (typed) => run(() => session.run(typed, async (auth) => {
-    const body = await api.fetchSweeps({ faucetUrl, ...auth });
+  // The request goes through the shared 30 s cache; the Load button forces a fresh read, other cards pass { force: false }.
+  const load = (typed, { force = true } = {}) => run(() => session.run(typed, async (auth) => {
+    const body = await fetchSweepsShared({ key: String(faucetUrl || ""), force, fetcher: () => api.fetchSweeps({ faucetUrl, ...auth }) });
     const map = Object.fromEntries(body.sweeps.map((sweep) => [String(sweep.address).toLowerCase(), sweep]));
     setSweeps(map);
     setIdleMinutes(Number.isInteger(body.idleMinutes) ? body.idleMinutes : null);

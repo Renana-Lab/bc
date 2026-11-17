@@ -56,6 +56,9 @@ import StatusLabel from "./AuctionStatusLabel";
 import { Countdown, useChainNowSec } from "./AdminCountdown";
 import useAuctionAdminDialogs from "./useAuctionAdminDialogs";
 import { buildRunbook } from "./architectureRunbook";
+import { useAutoReturn } from "./ParticipantsAutoReturn";
+import { REFRESH_MS, isAddressLike } from "./participantsGasData";
+import { formatAgo, isOnline, lastSeenMs, unionParticipants } from "./userPresence";
 
 const READ_OPTIONS = { preferInjected: false, allowInjectedFallback: false };
 const PROBE_TIMEOUT_MS = 6000;
@@ -191,18 +194,46 @@ export const UsersBudgetsCard = ({ canWrite = false, actions: actionsOverride })
   const actions = useMemo(() => actionsOverride || createAdminActions(), [actionsOverride]);
   const [budgetDraft, setBudgetDraft] = useState({ address: "", value: "" });
   const [open, toggle] = useCardState(false);
-  const [state, setState] = useState({ rows: [], loading: false, error: "", warnings: [], audit: null, historyError: "" });
+  const [state, setState] = useState({ rows: [], loading: false, error: "", warnings: [], audit: null, historyError: "", sweeps: {}, sweepsOk: null });
   const requestRef = useRef(0);
+  // Faucet sweep records (lastSeen) through the shared 30 s cache + the same wallet-proof/password auth as Participants gas.
+  const autoReturn = useAutoReturn();
+  const autoLoadRef = useRef(autoReturn.load);
+  autoLoadRef.current = autoReturn.load;
+  const sweepsEnabled = autoReturn.enabled;
+  const knownRef = useRef(new Set());
 
-  const load = useCallback(async (force = false) => {
+  // Resolves lowercase address -> sweep, or null when unavailable (not configured, 401, network). Never throws.
+  const readSweeps = useCallback(async (force) => {
+    if (!sweepsEnabled) return null;
+    try { return (await autoLoadRef.current("", { force })) || null; } catch (_) { return null; }
+  }, [sweepsEnabled]);
+
+  const load = useCallback(async (force = false, forceSweeps = false) => {
     const requestId = ++requestRef.current;
     setState((current) => ({ ...current, loading: true, error: "" }));
     try {
       const factoryAddress = getActiveFactoryAddress();
       const options = { ...READ_OPTIONS, factoryAddress };
-      const users = await readAllUsers((index) =>
-        readOnlyCall(({ factory }) => factory.methods.allUsers(index), 1, options)
-      );
+      const [allUsers, sweeps] = await Promise.all([
+        readAllUsers((index) => readOnlyCall(({ factory }) => factory.methods.allUsers(index), 1, options)),
+        readSweeps(forceSweeps),
+      ]);
+      // One audit read is shared with the Audit events card and Participants gas (no second log scan).
+      let audit = null;
+      let historyError = "";
+      try {
+        audit = await getAuditSnapshot(factoryAddress, { force });
+      } catch (auditError) {
+        historyError = auditError?.message || "audit read failed";
+      }
+      // allUsers only has wallets that bid; sellers and wallets that merely entered come from events / faucet sweeps.
+      const { addresses, registered } = unionParticipants({
+        users: allUsers.addresses,
+        events: audit?.events || [],
+        sweepAddresses: Object.keys(sweeps || {}),
+      });
+      const users = { addresses, warning: allUsers.warning };
       let budgetErrors = 0;
       const held = {};
       const disabled = new Set();
@@ -223,14 +254,6 @@ export const UsersBudgetsCard = ({ canWrite = false, actions: actionsOverride })
           return [key, "unavailable"];
         }
       });
-      // One audit read is shared with the Audit events card.
-      let audit = null;
-      let historyError = "";
-      try {
-        audit = await getAuditSnapshot(factoryAddress, { force });
-      } catch (auditError) {
-        historyError = auditError?.message || "audit read failed";
-      }
       const { labels, bots } = readLocalBots();
       const rows = mapUserRows({
         addresses: users.addresses,
@@ -240,24 +263,38 @@ export const UsersBudgetsCard = ({ canWrite = false, actions: actionsOverride })
         bots,
         held,
         disabled,
-      });
+      }).map((row) => ({ ...row, registered: registered.has(row.address.toLowerCase()) }));
       const warnings = [users.warning, budgetErrors ? `${budgetErrors} budget reads failed.` : ""].filter(Boolean);
       if (requestId === requestRef.current) {
-        setState({ rows, loading: false, error: "", warnings, audit, historyError });
+        knownRef.current = new Set(rows.map((row) => row.address.toLowerCase()));
+        setState({ rows, loading: false, error: "", warnings, audit, historyError, sweeps: sweeps || {}, sweepsOk: Boolean(sweeps) });
       }
     } catch (error) {
       if (requestId === requestRef.current) {
         setState((current) => ({ ...current, loading: false, error: error?.message || "Could not read users." }));
       }
     }
-  }, []);
+  }, [readSweeps]);
 
   useEffect(() => {
     if (open) load();
   }, [open, load]);
   useAdminLiveRefresh(() => open && load(true));
+  // Last seen refreshes at the Participants gas cadence (60 s), only while the tab is visible and the card is open.
+  useEffect(() => {
+    if (!open || !sweepsEnabled) return undefined;
+    const id = window.setInterval(async () => {
+      if (document.hidden) return;
+      const sweeps = await readSweeps(false);
+      setState((current) => ({ ...current, sweeps: sweeps || current.sweeps, sweepsOk: Boolean(sweeps) }));
+      if (sweeps && Object.keys(sweeps).some((address) => isAddressLike(address) && !knownRef.current.has(address))) load();
+    }, REFRESH_MS);
+    return () => window.clearInterval(id);
+  }, [open, sweepsEnabled, readSweeps, load]);
   const { busy, message, run } = useAdminActionRunner(() => load(true));
 
+  const nowMs = Date.now();
+  const onlineNow = state.rows.filter((row) => isOnline(state.sweeps[row.address.toLowerCase()], nowMs)).length;
   const history = state.historyError ? "unavailable" : state.audit?.failedRanges?.length ? "partial" : "ok";
   const historyNote = describeRangeHealth(state.audit || {});
 
@@ -266,12 +303,16 @@ export const UsersBudgetsCard = ({ canWrite = false, actions: actionsOverride })
       title="Users and budgets"
       open={open}
       onToggle={toggle}
-      onRefresh={() => load(true)}
+      onRefresh={() => load(true, true)}
       loading={state.loading}
     >
       <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
-        Registered wallets from the factory, their available budget, funds held by leading bids and last budget change. Admins can set a user's total budget or disable them.
+        Every wallet that entered: registered users from the factory, plus bidders, sellers and wallets known to the faucet. Their available budget, funds held by leading bids, last budget change and last seen. Admins can set a user's total budget or disable them.
       </Typography>
+      <Typography variant="body2" sx={{ fontWeight: 600 }} data-testid="online-now">Online now: {onlineNow}</Typography>
+      {state.sweepsOk === false ? (
+        <Typography variant="caption" color="text.secondary" display="block" data-testid="online-unavailable">Online status unavailable</Typography>
+      ) : null}
       <WriteNotice canWrite={canWrite} />
       <Typography variant="caption" color="text.secondary" display="block">
         Disabling blocks creating and bidding for that wallet only; a new wallet bypasses it.
@@ -294,7 +335,7 @@ export const UsersBudgetsCard = ({ canWrite = false, actions: actionsOverride })
         <Table size="small">
           <TableHead>
             <TableRow>
-              {["User", "Available", "Held", "Total", "Last change"].map((name) => (
+              {["User", "Available", "Held", "Total", "Last change", "Last seen"].map((name) => (
                 <TableCell key={name} sx={adminHeadCellSx}>{name}</TableCell>
               ))}
               {canWrite ? <TableCell sx={adminHeadCellSx}>Actions</TableCell> : null}
@@ -310,6 +351,9 @@ export const UsersBudgetsCard = ({ canWrite = false, actions: actionsOverride })
                   {row.label ? <strong>{row.label}</strong> : null}{" "}
                   {row.isBot ? <Chip size="small" label="bot" color="secondary" /> : null}{" "}
                   {row.disabled ? <Chip size="small" label="disabled" color="error" /> : null}
+                  {row.registered ? null : (
+                    <Typography variant="caption" color="text.secondary" display="block">not registered yet</Typography>
+                  )}
                 </TableCell>
                 <TableCell sx={monoSx}>{row.budget}</TableCell>
                 <TableCell sx={monoSx}>{row.held}</TableCell>
@@ -320,6 +364,19 @@ export const UsersBudgetsCard = ({ canWrite = false, actions: actionsOverride })
                     : history === "unavailable"
                       ? "budget history unavailable"
                       : `none in last ${state.audit?.lookback ?? getAuditLookbackBlocks()} blocks`}
+                </TableCell>
+                <TableCell sx={{ fontSize: 12, whiteSpace: "nowrap" }} data-testid="last-seen">
+                  {(() => {
+                    const sweep = state.sweeps[row.address.toLowerCase()];
+                    const seen = lastSeenMs(sweep);
+                    if (seen === null) return "-";
+                    return (
+                      <>
+                        <span title={new Date(seen).toISOString()}>{formatAgo(seen, nowMs)}</span>
+                        {isOnline(sweep, nowMs) ? <Chip size="small" label="Online" color="success" sx={{ ml: 0.5 }} /> : null}
+                      </>
+                    );
+                  })()}
                 </TableCell>
                 {canWrite ? (
                   <TableCell sx={{ whiteSpace: "nowrap" }}>
