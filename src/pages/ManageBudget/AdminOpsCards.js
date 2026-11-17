@@ -8,14 +8,17 @@ import {
   Box,
   Button,
   Chip,
-  Collapse,
   FormControlLabel,
-  IconButton,
   Checkbox,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableRow,
   TextField,
   Typography,
 } from "@mui/material";
-import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
+import SharedAdminCard, { AdminRefreshButton, adminHeadCellSx, adminPrimaryButtonSx } from "./AdminCard";
 import { readOnlyCall, readOnlyExecute } from "../../real_ethereum/readOnly";
 import { getActiveFactoryAddress, subscribeToMarketChanges } from "../../real_ethereum/marketConfig";
 import { getTargetNetwork } from "../../real_ethereum/sapphireNetworks";
@@ -23,7 +26,6 @@ import { getConfiguredRpcUrls } from "../../real_ethereum/rpcConfig";
 import { canUseLiveEvents, factorySocket } from "../../real_ethereum/socketFactory";
 import { notifyBudgetChanged, subscribeToBudgetChanges } from "../../real_ethereum/budget";
 import { readCancelledSet, readFactoryOwner, readHiddenSet } from "../../real_ethereum/adminChain";
-import { chainNowMs } from "../../real_ethereum/chainClock";
 import { createAdminActions } from "./adminActions";
 import { subscribeActiveAuctionRegistry } from "../../real_ethereum/activeAuctionRegistry";
 import { getLivePresence, isPresenceConfigured } from "../../telemetry/presenceClient";
@@ -46,8 +48,14 @@ import {
   joinUrl,
   mapBotConfig,
   mapUserRows,
+  pageAuctionRows,
   toServiceRow,
+  AUCTION_ADMIN_PAGE_SIZE,
 } from "./adminCardData";
+import StatusLabel from "./AuctionStatusLabel";
+import { Countdown, useChainNowSec } from "./AdminCountdown";
+import useAuctionAdminDialogs from "./useAuctionAdminDialogs";
+import { buildRunbook } from "./architectureRunbook";
 
 const READ_OPTIONS = { preferInjected: false, allowInjectedFallback: false };
 const PROBE_TIMEOUT_MS = 6000;
@@ -60,16 +68,6 @@ const LIVE_FACTORY_EVENTS = [
   "AuctionCancelled",
   "AuctionHiddenChanged",
 ];
-const AUCTION_ADMIN_LIMIT = 30;
-
-const cardSx = {
-  width: "100%",
-  mb: 3,
-  p: { xs: 1.5, sm: 2 },
-  border: "1px solid #d9dff2",
-  borderRadius: 3,
-  background: "rgba(255,255,255,0.72)",
-};
 
 const readLocalBots = () => {
   try {
@@ -116,35 +114,16 @@ export const useAdminLiveRefresh = (refresh, { debounceMs = 1500 } = {}) => {
   }, [debounceMs]);
 };
 
-const AdminCard = ({ title, description, open, onToggle, onRefresh, loading, children }) => (
-  <Box sx={cardSx}>
-    <Box sx={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 2, alignItems: "start" }}>
-      <Box sx={{ minWidth: 0 }}>
-        <Typography variant="h6">{title}</Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, maxWidth: 680 }}>
-          {description}
-        </Typography>
-      </Box>
-      <Box sx={{ display: "flex", gap: 1, alignItems: "center" }}>
-        {onRefresh ? (
-          <Button size="small" variant="outlined" onClick={onRefresh} disabled={loading}>
-            {loading ? "Loading..." : "Refresh"}
-          </Button>
-        ) : null}
-        <IconButton
-          size="small"
-          aria-label={open ? `Collapse ${title}` : `Expand ${title}`}
-          onClick={onToggle}
-          sx={{ transform: open ? "rotate(180deg)" : "none" }}
-        >
-          <KeyboardArrowDownIcon />
-        </IconButton>
-      </Box>
-    </Box>
-    <Collapse in={open} timeout="auto" unmountOnExit>
-      <Box sx={{ mt: 2 }}>{children}</Box>
-    </Collapse>
-  </Box>
+// Adapter over the shared market-style card: Refresh becomes the outlined pill action.
+const AdminCard = ({ title, open, onToggle, onRefresh, loading, children }) => (
+  <SharedAdminCard
+    title={title}
+    open={open}
+    onToggle={onToggle}
+    action={onRefresh ? <AdminRefreshButton onClick={onRefresh} loading={loading} /> : null}
+  >
+    {children}
+  </SharedAdminCard>
 );
 
 const useCardState = (initialOpen = false) => {
@@ -285,12 +264,14 @@ export const UsersBudgetsCard = ({ canWrite = false, actions: actionsOverride })
   return (
     <AdminCard
       title="Users and budgets"
-      description="Registered wallets from the factory, their available budget, funds held by leading bids and last budget change. Admins can set a user's total budget or disable them."
       open={open}
       onToggle={toggle}
       onRefresh={() => load(true)}
       loading={state.loading}
     >
+      <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
+        Registered wallets from the factory, their available budget, funds held by leading bids and last budget change. Admins can set a user's total budget or disable them.
+      </Typography>
       <WriteNotice canWrite={canWrite} />
       <Typography variant="caption" color="text.secondary" display="block">
         Disabling blocks creating and bidding for that wallet only; a new wallet bypasses it.
@@ -309,41 +290,39 @@ export const UsersBudgetsCard = ({ canWrite = false, actions: actionsOverride })
       <Typography variant="caption" color="text.secondary">
         {state.rows.length} users. Newest activity first. Budget changes are read from the last {state.audit?.lookback ?? getAuditLookbackBlocks()} blocks. Labels come from this browser's bot config.
       </Typography>
-      <Box sx={{ overflowX: "auto", mt: 1 }}>
-        <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 13 }}>
-          <thead>
-            <tr style={{ textAlign: "left" }}>
-              <th>User</th>
-              <th>Available</th>
-              <th>Held</th>
-              <th>Total</th>
-              <th>Last change</th>
-              {canWrite ? <th>Actions</th> : null}
-            </tr>
-          </thead>
-          <tbody>
+      <div className="tableScrollWrap">
+        <Table size="small">
+          <TableHead>
+            <TableRow>
+              {["User", "Available", "Held", "Total", "Last change"].map((name) => (
+                <TableCell key={name} sx={adminHeadCellSx}>{name}</TableCell>
+              ))}
+              {canWrite ? <TableCell sx={adminHeadCellSx}>Actions</TableCell> : null}
+            </TableRow>
+          </TableHead>
+          <TableBody>
             {state.rows.map((row) => (
-              <tr key={row.address} style={{ borderTop: "1px solid #e3e7f5" }}>
-                <td>
+              <TableRow key={row.address}>
+                <TableCell>
                   <span style={monoSx} title={row.address}>
                     {shortAddress(row.address)}
                   </span>{" "}
                   {row.label ? <strong>{row.label}</strong> : null}{" "}
                   {row.isBot ? <Chip size="small" label="bot" color="secondary" /> : null}{" "}
                   {row.disabled ? <Chip size="small" label="disabled" color="error" /> : null}
-                </td>
-                <td style={monoSx}>{row.budget}</td>
-                <td style={monoSx}>{row.held}</td>
-                <td style={monoSx}>{row.total}</td>
-                <td style={{ fontSize: 12 }}>
+                </TableCell>
+                <TableCell sx={monoSx}>{row.budget}</TableCell>
+                <TableCell sx={monoSx}>{row.held}</TableCell>
+                <TableCell sx={monoSx}>{row.total}</TableCell>
+                <TableCell sx={{ fontSize: 12 }}>
                   {row.lastChange
                     ? `${row.lastChange.direction} ${row.lastChange.amount} at block ${row.lastChange.blockNumber}`
                     : history === "unavailable"
                       ? "budget history unavailable"
                       : `none in last ${state.audit?.lookback ?? getAuditLookbackBlocks()} blocks`}
-                </td>
+                </TableCell>
                 {canWrite ? (
-                  <td style={{ whiteSpace: "nowrap" }}>
+                  <TableCell sx={{ whiteSpace: "nowrap" }}>
                     <Button
                       size="small"
                       disabled={Boolean(busy)}
@@ -355,19 +334,22 @@ export const UsersBudgetsCard = ({ canWrite = false, actions: actionsOverride })
                       size="small"
                       color={row.disabled ? "primary" : "error"}
                       disabled={Boolean(busy)}
-                      onClick={() =>
-                        run(row.disabled ? "Enable user" : "Disable user", () => actions.setDisabled(row.address, !row.disabled))
-                      }
+                      onClick={() => {
+                        const name = row.label || shortAddress(row.address);
+                        // Same confirmation as the marketplace admin, before the wallet asks to sign.
+                        if (!window.confirm(row.disabled ? `Enable ${name}?` : `Disable ${name}?`)) return;
+                        run(row.disabled ? "Enable user" : "Disable user", () => actions.setDisabled(row.address, !row.disabled));
+                      }}
                     >
                       {row.disabled ? "Enable" : "Disable"}
                     </Button>
-                  </td>
+                  </TableCell>
                 ) : null}
-              </tr>
+              </TableRow>
             ))}
-          </tbody>
-        </table>
-      </Box>
+          </TableBody>
+        </Table>
+      </div>
       {canWrite && budgetDraft.address ? (
         <Box sx={{ display: "flex", gap: 1, alignItems: "center", mt: 1.5, flexWrap: "wrap" }}>
           <Typography variant="body2">
@@ -382,6 +364,7 @@ export const UsersBudgetsCard = ({ canWrite = false, actions: actionsOverride })
           <Button
             size="small"
             variant="contained"
+            sx={adminPrimaryButtonSx}
             disabled={Boolean(busy)}
             onClick={() =>
               run("Set budget", async () => {
@@ -423,6 +406,31 @@ const probeJson = async (url) => {
 
 export const getFaucetBaseUrl = () => String(process.env.REACT_APP_FAUCET_URL || "").trim();
 export const getBotnetBaseUrl = () => String(process.env.REACT_APP_BOTNET_API_URL || "/api/botnet").trim();
+
+export const RunbookBlock = ({ factoryAddress = getActiveFactoryAddress(), network = getTargetNetwork() }) => {
+  const runbook = buildRunbook({ factoryAddress, network });
+  return (
+    <Box sx={{ mt: 2 }} data-testid="architecture-runbook">
+      <Typography variant="subtitle1" sx={{ fontWeight: 700, color: "#002884" }}>
+        How to access and maintain each component
+      </Typography>
+      {runbook.components.map((component) => (
+        <Box key={component.name} sx={{ mt: 1.5 }}>
+          <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>{component.name}</Typography>
+          {component.lines.map((line) => (
+            <Typography key={line} variant="body2" color="text.secondary" sx={{ wordBreak: "break-word" }}>{line}</Typography>
+          ))}
+          <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap", mt: 0.5 }}>
+            {component.links.map((link) => (
+              <a key={link.href} href={link.href} target="_blank" rel="noopener noreferrer" style={{ fontSize: 13 }}>{link.label}</a>
+            ))}
+          </Box>
+        </Box>
+      ))}
+      <Typography variant="body2" sx={{ mt: 1.5, fontWeight: 600 }} data-testid="runbook-deploy">{runbook.deploy.text}</Typography>
+    </Box>
+  );
+};
 
 export const ArchitectureCard = () => {
   const [open, toggle] = useCardState(false);
@@ -475,12 +483,14 @@ export const ArchitectureCard = () => {
   return (
     <AdminCard
       title="Architecture & Operations"
-      description="Health of the services the experiment depends on. Read-only; no secrets are sent or shown."
       open={open}
       onToggle={toggle}
       onRefresh={load}
       loading={state.loading}
     >
+      <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
+        Health of the services the experiment depends on. Read-only; no secrets are sent or shown.
+      </Typography>
       <ErrorLine error={state.error} />
       {state.checkedAt ? (
         <Typography variant="caption" color="text.secondary">
@@ -494,6 +504,7 @@ export const ArchitectureCard = () => {
           <Box sx={{ ...monoSx, minWidth: 0 }}>{row.detail}</Box>
         </Box>
       ))}
+      <RunbookBlock />
     </AdminCard>
   );
 };
@@ -530,12 +541,14 @@ export const AuditEventsCard = () => {
   return (
     <AdminCard
       title="Audit events"
-      description="Factory and recent campaign events, newest first. Read-only."
       open={open}
       onToggle={toggle}
       onRefresh={() => load(true)}
       loading={state.loading}
     >
+      <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
+        Factory and recent campaign events, newest first. Read-only.
+      </Typography>
       <ErrorLine error={state.error} />
       {health ? (
         <Typography variant="body2" sx={{ color: "#8a5a00", mb: 0.5 }} data-testid="audit-range-health">
@@ -601,13 +614,15 @@ export const FaucetCard = () => {
   return (
     <AdminCard
       title="Faucet"
-      description="Test-fund faucet status. The faucet controls live on the faucet admin page."
       open={open}
       onToggle={toggle}
       onRefresh={faucetUrl ? load : undefined}
       loading={state.loading}
     >
-      <Button component={RouterLink} to="/admin/faucet" size="small" variant="contained" sx={{ mb: 1.5 }}>
+      <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
+        Test-fund faucet status. The faucet controls live on the faucet admin page.
+      </Typography>
+      <Button component={RouterLink} to="/admin/faucet" size="small" variant="contained" sx={{ ...adminPrimaryButtonSx, mb: 1.5 }}>
         Open faucet admin
       </Button>
       {!faucetUrl ? (
@@ -632,112 +647,173 @@ export const FaucetCard = () => {
 
 // ---- Auction controls ---------------------------------------------------------------------------
 
-const STATUS_COLOR = { live: "success", ended: "warning", finalized: "default", cancelled: "error" };
+const lowerKey = (address) => String(address ?? "").toLowerCase();
 
 export const AuctionControlsCard = ({ canWrite = false, actions: actionsOverride, reader }) => {
   const actions = useMemo(() => actionsOverride || createAdminActions(), [actionsOverride]);
   const [open, toggle] = useCardState(false);
-  const [state, setState] = useState({ rows: [], loading: false, error: "" });
-  const [pending, setPending] = useState(null); // { type: "minimum" | "cancel", address, value }
+  const [state, setState] = useState({ addresses: [], loading: false, error: "", tick: 0, progress: "" });
+  const [query, setQuery] = useState("");
+  const [appliedQuery, setAppliedQuery] = useState("");
+  const [visible, setVisible] = useState(AUCTION_ADMIN_PAGE_SIZE);
+  const [pending, setPending] = useState(null); // { address, value } for the minimum editor
+  const cacheRef = useRef(new Map());
+  const addressesRef = useRef([]);
   const requestRef = useRef(0);
+  const queryRef = useRef("");
+  const visibleRef = useRef(AUCTION_ADMIN_PAGE_SIZE);
+  queryRef.current = appliedQuery;
+  visibleRef.current = visible;
+  const nowSec = useChainNowSec(open);
 
-  const load = useCallback(async () => {
-    const requestId = ++requestRef.current;
-    setState((current) => ({ ...current, loading: true, error: "" }));
-    try {
-      const options = { ...READ_OPTIONS, factoryAddress: getActiveFactoryAddress() };
-      const rows = reader
-        ? await reader()
-        : await (async () => {
-            const all = await readOnlyCall(({ factory }) => factory.methods.getDeployedCampaigns(), 1, options);
-            const recent = [...all].slice(-AUCTION_ADMIN_LIMIT).reverse();
-            const summaries = await mapWithConcurrency(recent, 4, async (address) => {
-              try {
-                return await readOnlyCall(({ campaign }) => campaign(address).methods.getListSummary(), 1, options);
-              } catch (_) {
-                return null;
-              }
-            });
-            const hidden = await readHiddenSet(recent, { options }).catch(() => new Set());
-            const closed = recent.filter((_, index) => summaries[index]?.[8]);
-            const cancelled = await readCancelledSet(closed, { options });
-            return recent
-              .map((address, index) =>
-                summaries[index]
-                  ? mapAuctionAdminRow({
-                      address,
-                      summary: summaries[index],
-                      cancelled: cancelled.has(address.toLowerCase()),
-                      hidden: hidden.has(address.toLowerCase()),
-                    })
-                  : null
-              )
-              .filter(Boolean);
-          })();
-      if (requestId === requestRef.current) setState({ rows, loading: false, error: "" });
-    } catch (error) {
-      if (requestId === requestRef.current) {
-        setState((current) => ({ ...current, loading: false, error: error?.message || "Could not read auctions." }));
+  useEffect(() => {
+    const timer = window.setTimeout(() => setAppliedQuery(query), 300);
+    return () => window.clearTimeout(timer);
+  }, [query]);
+
+  const readBatch = useCallback(async (batch, options) => {
+    const summaries = await mapWithConcurrency(batch, 4, async (address) => {
+      try {
+        return await readOnlyCall(({ campaign }) => campaign(address).methods.getListSummary(), 1, options);
+      } catch (_) {
+        return null;
       }
-    }
-  }, [reader]);
+    });
+    const hidden = await readHiddenSet(batch, { options }).catch(() => new Set());
+    const closed = batch.filter((_, index) => summaries[index]?.[8]);
+    const cancelled = closed.length ? await readCancelledSet(closed, { options }).catch(() => new Set()) : new Set();
+    batch.forEach((address, index) => {
+      if (!summaries[index]) return;
+      cacheRef.current.set(
+        lowerKey(address),
+        mapAuctionAdminRow({
+          address,
+          summary: summaries[index],
+          cancelled: cancelled.has(lowerKey(address)),
+          hidden: hidden.has(lowerKey(address)),
+        })
+      );
+    });
+  }, []);
+
+  // Newest auctions first, loaded one page at a time. A search needs every description, so it loads the rest.
+  const load = useCallback(
+    async ({ force = false } = {}) => {
+      const requestId = ++requestRef.current;
+      setState((current) => ({ ...current, loading: true, error: "" }));
+      try {
+        if (reader) {
+          const rows = await reader();
+          cacheRef.current = new Map(rows.map((row) => [lowerKey(row.address), row]));
+          addressesRef.current = rows.map((row) => row.address);
+          if (requestId === requestRef.current) {
+            setState((current) => ({ ...current, addresses: addressesRef.current, loading: false, tick: current.tick + 1 }));
+          }
+          return;
+        }
+        const options = { ...READ_OPTIONS, factoryAddress: getActiveFactoryAddress() };
+        if (force || !addressesRef.current.length) {
+          const all = await readOnlyCall(({ factory }) => factory.methods.getDeployedCampaigns(), 1, options);
+          addressesRef.current = [...all].reverse();
+        }
+        if (force) cacheRef.current = new Map();
+        const addresses = addressesRef.current;
+        const wanted = queryRef.current.trim() ? addresses : addresses.slice(0, visibleRef.current);
+        const missing = wanted.filter((address) => !cacheRef.current.has(lowerKey(address)));
+        for (let start = 0; start < missing.length; start += AUCTION_ADMIN_PAGE_SIZE) {
+          if (requestId !== requestRef.current) return;
+          const batch = missing.slice(start, start + AUCTION_ADMIN_PAGE_SIZE);
+          await readBatch(batch, options);
+          if (requestId === requestRef.current) {
+            setState((current) => ({
+              ...current,
+              addresses,
+              tick: current.tick + 1,
+              progress: missing.length > AUCTION_ADMIN_PAGE_SIZE ? `Loaded ${Math.min(start + batch.length, missing.length)} of ${missing.length}...` : "",
+            }));
+          }
+        }
+        if (requestId === requestRef.current) {
+          setState((current) => ({ ...current, addresses, loading: false, progress: "", tick: current.tick + 1 }));
+        }
+      } catch (error) {
+        if (requestId === requestRef.current) {
+          setState((current) => ({ ...current, loading: false, error: error?.message || "Could not read auctions." }));
+        }
+      }
+    },
+    [reader, readBatch]
+  );
 
   useEffect(() => {
     if (open) load();
-  }, [open, load]);
-  useAdminLiveRefresh(() => open && load());
-  const { busy, message, run } = useAdminActionRunner(load);
+  }, [open, load, appliedQuery, visible]);
+  useAdminLiveRefresh(() => open && load({ force: true }));
+  const refresh = useCallback(() => load({ force: true }), [load]);
+  const { busy, message, run } = useAdminActionRunner(refresh);
+  const dialogs = useAuctionAdminDialogs({ actions, canWrite, onChanged: refresh });
 
-  const nowSec = Math.floor(chainNowMs() / 1000);
+  const loadedRows = state.addresses.map((address) => cacheRef.current.get(lowerKey(address))).filter(Boolean);
+  const page = pageAuctionRows({ rows: loadedRows, query: appliedQuery, visible });
+  const searching = Boolean(appliedQuery.trim());
+  const hasMore = searching ? page.hasMore : state.addresses.length > visible;
 
   return (
-    <AdminCard
-      title="Auction controls"
-      description="Edit the minimum bid, close early, cancel (refunds the leader, seller not paid) or hide an auction. Hidden auctions are only hidden in the UI."
-      open={open}
-      onToggle={toggle}
-      onRefresh={load}
-      loading={state.loading}
-    >
+    <AdminCard title="Auction controls" open={open} onToggle={toggle} onRefresh={refresh} loading={state.loading}>
+      <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
+        Edit the minimum bid, close early, cancel (refunds the leader, seller not paid) or hide an auction. Hiding only affects this app's UI; it is not enforced on chain.
+      </Typography>
       <WriteNotice canWrite={canWrite} />
       <ErrorLine error={state.error} />
-      <Typography variant="caption" color="text.secondary">
-        Newest {AUCTION_ADMIN_LIMIT} auctions. Auction payloads are never shown here.
+      <TextField
+        size="small"
+        label="Search description or address"
+        value={query}
+        onChange={(event) => setQuery(event.target.value)}
+        sx={{ minWidth: 280, mb: 1 }}
+      />
+      <Typography variant="caption" color="text.secondary" display="block">
+        Newest first. {searching ? `${page.total} match${page.total === 1 ? "" : "es"}. ` : `${state.addresses.length} auctions. `}
+        {state.progress} Auction payloads are never shown here.
       </Typography>
-      <Box sx={{ overflowX: "auto", mt: 1 }}>
-        <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 13 }}>
-          <thead>
-            <tr style={{ textAlign: "left" }}>
-              <th>Auction</th>
-              <th>Status</th>
-              <th>Min</th>
-              <th>Highest</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {state.rows.map((row) => {
+      <div className="tableScrollWrap">
+        <Table size="small">
+          <TableHead>
+            <TableRow>
+              {["Auction", "Status", "Min", "Highest", "Countdown", "Actions"].map((name) => (
+                <TableCell key={name} sx={adminHeadCellSx}>{name}</TableCell>
+              ))}
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {page.rows.map((row) => {
               const can = getAdminActionAvailability(row, nowSec);
               const disabled = !canWrite || Boolean(busy);
               return (
-                <tr key={row.address} style={{ borderTop: "1px solid #e3e7f5" }} data-testid={`auction-row-${row.address}`}>
-                  <td>
+                <TableRow key={row.address} data-testid={`auction-row-${row.address}`}>
+                  <TableCell>
                     <span style={monoSx} title={row.address}>
                       {shortAddress(row.address)}
                     </span>{" "}
-                    {row.description}
-                  </td>
-                  <td>
-                    <Chip size="small" label={can.status} color={STATUS_COLOR[can.status]} />{" "}
-                    {row.hidden ? <Chip size="small" label="hidden" variant="outlined" /> : null}
-                  </td>
-                  <td style={monoSx}>{row.minimum}</td>
-                  <td style={monoSx}>{row.highestBid}</td>
-                  <td style={{ whiteSpace: "nowrap" }}>
+                    {row.description}{" "}
+                    <Button component={RouterLink} to={`/auction/${row.address}`} size="small">View</Button>
+                  </TableCell>
+                  <TableCell>
+                    <StatusLabel status={can.status} hidden={row.hidden} />
+                  </TableCell>
+                  <TableCell sx={monoSx}>{row.minimum}</TableCell>
+                  <TableCell sx={monoSx}>{row.highestBid}</TableCell>
+                  <TableCell sx={{ whiteSpace: "nowrap" }}>
+                    {can.status === "active" ? <Countdown endTime={row.endTime} nowSec={nowSec} /> : "-"}
+                  </TableCell>
+                  <TableCell sx={{ whiteSpace: "nowrap" }}>
+                    <Button size="small" onClick={() => dialogs.openRecord(row.address)}>
+                      Record
+                    </Button>
                     <Button
                       size="small"
                       disabled={disabled || !can.editMinimum}
-                      onClick={() => setPending({ type: "minimum", address: row.address, value: row.minimum })}
+                      onClick={() => setPending({ address: row.address, value: row.minimum })}
                     >
                       Edit minimum
                     </Button>
@@ -752,7 +828,7 @@ export const AuctionControlsCard = ({ canWrite = false, actions: actionsOverride
                       size="small"
                       color="error"
                       disabled={disabled || !can.cancel}
-                      onClick={() => setPending({ type: "cancel", address: row.address, value: "" })}
+                      onClick={() => dialogs.openCancel(row)}
                     >
                       {can.cancelHidesOnly ? "Cancel (hide only)" : "Cancel"}
                     </Button>
@@ -765,39 +841,45 @@ export const AuctionControlsCard = ({ canWrite = false, actions: actionsOverride
                     >
                       {row.hidden ? "Unhide" : "Hide"}
                     </Button>
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               );
             })}
-          </tbody>
-        </table>
-      </Box>
+            {!page.rows.length && !state.loading ? (
+              <TableRow><TableCell colSpan={6}>{searching ? "No auctions match your search." : "No auctions found."}</TableCell></TableRow>
+            ) : null}
+          </TableBody>
+        </Table>
+      </div>
+      {hasMore ? (
+        <Button size="small" variant="outlined" sx={{ mt: 1, borderRadius: "20px" }} onClick={() => setVisible((value) => value + AUCTION_ADMIN_PAGE_SIZE)}>
+          Load more
+        </Button>
+      ) : null}
       {canWrite && pending ? (
         <Box sx={{ display: "flex", gap: 1, alignItems: "center", mt: 1.5, flexWrap: "wrap" }}>
           <Typography variant="body2">
-            {pending.type === "minimum" ? "New minimum bid" : "Cancellation note (optional, max 500 bytes)"} for{" "}
-            <span style={monoSx}>{shortAddress(pending.address)}</span>:
+            New minimum bid for <span style={monoSx}>{shortAddress(pending.address)}</span>:
           </Typography>
           <TextField
             size="small"
-            label={pending.type === "minimum" ? "Minimum" : "Note"}
+            label="Minimum"
             value={pending.value}
             onChange={(event) => setPending((current) => ({ ...current, value: event.target.value }))}
           />
           <Button
             size="small"
             variant="contained"
-            color={pending.type === "cancel" ? "error" : "primary"}
+            sx={adminPrimaryButtonSx}
             disabled={Boolean(busy)}
             onClick={() =>
-              run(pending.type === "minimum" ? "Edit minimum" : "Cancel auction", async () => {
-                if (pending.type === "minimum") await actions.setMinimum(pending.address, pending.value);
-                else await actions.cancelAuction(pending.address, pending.value);
+              run("Edit minimum", async () => {
+                await actions.setMinimum(pending.address, pending.value);
                 setPending(null);
               })
             }
           >
-            {pending.type === "minimum" ? "Save" : "Confirm cancel"}
+            Save
           </Button>
           <Button size="small" onClick={() => setPending(null)}>
             Back
@@ -805,6 +887,7 @@ export const AuctionControlsCard = ({ canWrite = false, actions: actionsOverride
         </Box>
       ) : null}
       <ActionMessage message={message} />
+      {dialogs.dialogs}
     </AdminCard>
   );
 };
@@ -826,10 +909,12 @@ export const AdminsCard = ({ isOwner = false, actions: actionsOverride, ownerRea
   return (
     <AdminCard
       title="Admins"
-      description="Only the factory owner can add or remove admins. The owner can never be removed; ownership transfers are 2-step."
       open={open}
       onToggle={toggle}
     >
+      <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
+        Only the factory owner can add or remove admins. The owner can never be removed; ownership transfers are 2-step.
+      </Typography>
       <Typography variant="body2" sx={monoSx}>
         Owner: {owner || "..."}
       </Typography>
@@ -844,6 +929,7 @@ export const AdminsCard = ({ isOwner = false, actions: actionsOverride, ownerRea
         <Button
           size="small"
           variant="contained"
+          sx={adminPrimaryButtonSx}
           disabled={Boolean(busy)}
           onClick={() => run("Add admin", () => actions.addAdmin(address))}
         >
@@ -891,11 +977,13 @@ export const MarketSettingsCard = ({ canWrite = false, actions: actionsOverride,
   return (
     <AdminCard
       title="Marketplace settings"
-      description="Whether sellers may edit the minimum bid of their own auction while it has no bids."
       open={open}
       onToggle={toggle}
       onRefresh={load}
     >
+      <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
+        Whether sellers may edit the minimum bid of their own auction while it has no bids.
+      </Typography>
       <WriteNotice canWrite={canWrite} />
       <ErrorLine error={error} />
       <FormControlLabel

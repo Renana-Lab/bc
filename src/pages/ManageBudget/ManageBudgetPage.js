@@ -5,13 +5,9 @@ import {
   Typography,
   Box,
   LinearProgress,
-  Divider,
   Checkbox,
   CircularProgress,
-  Collapse,
-  IconButton,
 } from "@mui/material";
-import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
 import { lazy, Suspense, useState, useEffect, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import Layout from "../../components/Layout";
@@ -47,7 +43,22 @@ import {
 } from "../../real_ethereum/ethereumProvider";
 import { ADMIN_GATE_NOTE } from "./adminGate";
 import { AdminGatePrompt, useAdminAccess } from "./useAdminAccess";
-import AdminOpsCards from "./AdminOpsCards";
+import AdminCard, { AdminRefreshButton } from "./AdminCard";
+import ActiveAuctionListCard from "./ActiveAuctionListCard";
+import AuctionListHistoryCard from "./AuctionListHistoryCard";
+import { loadReportChainData } from "./reportChainData";
+import {
+  AdminsCard,
+  ArchitectureCard,
+  AuctionControlsCard,
+  AuditEventsCard,
+  FaucetCard,
+  MarketSettingsCard,
+  UsersBudgetsCard,
+} from "./AdminOpsCards";
+import { AdminSessionControls } from "./AdminGasCards";
+import ParticipantsGasCard from "./ParticipantsGasCard";
+import FaucetFundsCard from "./FaucetFundsCard";
 import {
   BULK_DRAFT_KEY,
   BULK_MAX_AUCTIONS,
@@ -98,6 +109,16 @@ const REPORT_SECTION_OPTIONS = [
     key: "summary",
     label: "Auction Summary",
     description: "One clean row per auction contract.",
+  },
+  {
+    key: "users",
+    label: "Users and budget history",
+    description: "Every wallet with role, budget, held funds and last budget change.",
+  },
+  {
+    key: "audit",
+    label: "Audit events",
+    description: "Factory and campaign events: admin actions, budgets and payments.",
   },
   {
     key: "bids",
@@ -220,76 +241,6 @@ const REPORT_EXPORT_OPTIONS = [
 ];
 const ADMIN_ZONE_BACKGROUND =
   "radial-gradient(circle at 18% 0%, rgba(255, 255, 255, 0.96) 0%, rgba(255, 255, 255, 0) 34%), linear-gradient(145deg, rgba(255, 255, 255, 0.98) 0%, rgba(249, 251, 255, 0.96) 48%, rgba(238, 243, 255, 0.94) 100%)";
-const ADMIN_CARD_BACKGROUND =
-  "linear-gradient(145deg, rgba(255, 255, 255, 0.98) 0%, rgba(255, 255, 255, 0.94) 54%, rgba(246, 249, 255, 0.96) 100%)";
-const ADMIN_CARD_OPEN_BACKGROUND =
-  "linear-gradient(145deg, rgba(255, 255, 255, 0.99) 0%, rgba(250, 252, 255, 0.97) 48%, rgba(238, 244, 255, 0.98) 100%)";
-const ADMIN_SECTION_BORDER = "rgba(137, 157, 226, 0.34)";
-const ADMIN_SECTION_BORDER_OPEN = "rgba(99, 123, 214, 0.46)";
-
-const getAdminGlossCardSx = (open = false) => ({
-  position: "relative",
-  overflow: "hidden",
-  contain: "paint",
-  background: open ? ADMIN_CARD_OPEN_BACKGROUND : ADMIN_CARD_BACKGROUND,
-  borderColor: open ? ADMIN_SECTION_BORDER_OPEN : ADMIN_SECTION_BORDER,
-  boxShadow: open
-    ? "0 16px 34px rgba(16, 48, 144, 0.105), 0 2px 8px rgba(240, 176, 48, 0.055), inset 0 1px 0 rgba(255, 255, 255, 0.92)"
-    : "0 8px 22px rgba(16, 48, 144, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.86)",
-  transition:
-    "background 180ms ease, box-shadow 180ms ease, border-color 180ms ease, filter 180ms ease",
-  "&::before": {
-    content: '""',
-    position: "absolute",
-    inset: 0,
-    pointerEvents: "none",
-    background:
-      "linear-gradient(115deg, rgba(255, 255, 255, 0.52) 0%, rgba(255, 255, 255, 0.12) 35%, rgba(126, 149, 226, 0.095) 100%)",
-  },
-  "&::after": {
-    content: '""',
-    position: "absolute",
-    inset: "0 0 auto 0",
-    height: "1px",
-    pointerEvents: "none",
-    background:
-      "linear-gradient(90deg, rgba(16, 48, 144, 0), rgba(16, 48, 144, 0.16), rgba(240, 176, 48, 0.2), rgba(16, 48, 144, 0))",
-  },
-  "&:hover": {
-    borderColor: open ? "rgba(90, 116, 214, 0.52)" : "rgba(112, 136, 224, 0.42)",
-    boxShadow: open
-      ? "0 18px 38px rgba(16, 48, 144, 0.12), 0 2px 10px rgba(240, 176, 48, 0.065), inset 0 1px 0 rgba(255, 255, 255, 0.94)"
-      : "0 10px 26px rgba(16, 48, 144, 0.075), inset 0 1px 0 rgba(255, 255, 255, 0.9)",
-  },
-  "& > *": {
-    position: "relative",
-    zIndex: 1,
-  },
-});
-
-const ADMIN_COLLAPSE_BUTTON_SX = {
-  width: 42,
-  height: 42,
-  border: "1px solid rgba(137, 157, 226, 0.56)",
-  color: "#103090",
-  background:
-    "linear-gradient(145deg, rgba(255, 255, 255, 0.96), rgba(245, 248, 255, 0.9))",
-  boxShadow:
-    "0 7px 18px rgba(16, 48, 144, 0.07), inset 0 1px 0 rgba(255, 255, 255, 0.9)",
-  transition:
-    "background-color 160ms ease, border-color 160ms ease, box-shadow 160ms ease, color 160ms ease",
-  "&:hover": {
-    borderColor: "rgba(88, 116, 216, 0.68)",
-    background:
-      "linear-gradient(145deg, rgba(255, 255, 255, 1), rgba(239, 244, 255, 0.98))",
-    boxShadow:
-      "0 10px 22px rgba(16, 48, 144, 0.105), inset 0 1px 0 rgba(255, 255, 255, 0.94)",
-  },
-};
-const ADMIN_COLLAPSE_TIMEOUT_MS = 90;
-const ADMIN_COLLAPSE_EASE = "cubic-bezier(0.16, 1, 0.3, 1)";
-const ADMIN_COLLAPSE_INNER_TRANSITION = `opacity ${ADMIN_COLLAPSE_TIMEOUT_MS}ms ${ADMIN_COLLAPSE_EASE}`;
-const ADMIN_COLLAPSE_ARROW_TRANSITION = `transform ${ADMIN_COLLAPSE_TIMEOUT_MS}ms ${ADMIN_COLLAPSE_EASE}`;
 
 const makeDefaultReportSelection = (options) =>
   options.reduce((selection, option) => {
@@ -390,10 +341,10 @@ const ManageBudgetPage = () => {
   const [bulkText, setBulkText] = useState("");
   const [bulkDefaults, setBulkDefaults] = useState({
     rowCount: "10",
-    minimumContribution: "100",
+    minimumContribution: "50",
     auctionDuration: "10",
-    descriptionPrefix: "Auction",
-    dataPrefix: "Data",
+    descriptionPrefix: "Research dataset",
+    dataPrefix: "Personal research records",
   });
   const [showBulkImport, setShowBulkImport] = useState(false);
   const [contractManagerOpen, setContractManagerOpen] = useState(false);
@@ -503,7 +454,7 @@ const ManageBudgetPage = () => {
         notifyBudgetChanged({ factoryAddress: activeMarket.address });
 
         toast.success(
-          `Budget set to ${budget} wei for all users`
+          `Budget set to ${budget} for all users`
         );
 
         navigate("/auctions-list");
@@ -517,6 +468,13 @@ const ManageBudgetPage = () => {
   };
 
   const handleResetBudget = async () => {
+    if (
+      !window.confirm(
+        `Reset every account budget? All users get ${DEFAULT_GLOBAL_BUDGET} again; funds held by leading bids are kept.`
+      )
+    ) {
+      return;
+    }
     try {
       const userAddress = await requestConnectedAccount();
       setBudget(DEFAULT_GLOBAL_BUDGET);
@@ -524,7 +482,7 @@ const ManageBudgetPage = () => {
         .resetAllBudgets(DEFAULT_GLOBAL_BUDGET)
         .send({ from: userAddress });
       notifyBudgetChanged({ factoryAddress: activeMarket.address });
-      toast.success(`Budget reset to ${DEFAULT_GLOBAL_BUDGET} wei for all users`);
+      toast.success(`Budget reset to ${DEFAULT_GLOBAL_BUDGET} for all users`);
       navigate("/auctions-list");
     } catch (resetError) {
       console.error("Error resetting budget:", resetError);
@@ -1414,8 +1372,19 @@ const ManageBudgetPage = () => {
         listStateRows = toAuctionListStateRows(listHistory, listStateRange);
       }
 
+      const chainData = await loadReportChainData({
+        reports: cleanReports,
+        wantUsers: Boolean(reportSections.users),
+        wantAudit: Boolean(reportSections.audit),
+        wantStatus: Boolean(reportSections.summary),
+      });
+      chainData.warnings.forEach((warning) => toast(warning));
+
       const exportReportOptions = {
         ...reportOptions,
+        userHistoryRows: chainData.userHistoryRows,
+        auditRows: chainData.auditRows,
+        cancelledAddresses: chainData.cancelledAddresses,
         activityRows,
         activityRange,
         listStateRows,
@@ -1641,415 +1610,47 @@ const ManageBudgetPage = () => {
               textAlign="center"
               sx={{ maxWidth: 680, mb: 3 }}
             >
-              Manage the active branch contract, global budgets, automation
-              health, batch auction creation, and exports from one operational
-              control area.
+              Manage users, budgets, auctions, automation, and reports.
             </Typography>
-            <Typography
-              variant="caption"
-              textAlign="center"
-              sx={{ maxWidth: 680, mb: 2, color: "#8a5a00" }}
-              data-testid="admin-gate-note"
-            >
-              {ADMIN_GATE_NOTE}
-            </Typography>
-
-            <AdminOpsCards access={adminAccess} />
-
-            <Box
-              sx={{
-                width: "100%",
-                mb: 3,
-                p: { xs: 1.5, sm: 2 },
-                border: "1px solid #d9dff2",
-                borderRadius: 3,
-                ...getAdminGlossCardSx(liveActivityOpen),
-              }}
-            >
-              <Box
-                sx={{
-                  display: "grid",
-                  gridTemplateColumns: "minmax(0, 1fr) auto",
-                  alignItems: "start",
-                  gap: 2,
-                }}
-              >
-                <Box sx={{ minWidth: 0 }}>
-                  <Typography variant="h6">Live Experiment Activity</Typography>
-                  <Typography
-                    variant="body2"
-                    color="text.secondary"
-                    sx={{ mt: 0.5, maxWidth: 680 }}
-                  >
-                    See connected participants, authenticated admins, running bots,
-                    and active auctions across the website in near real time.
-                  </Typography>
-                </Box>
-                <IconButton
-                  onClick={() => setLiveActivityOpen((current) => !current)}
-                  aria-expanded={liveActivityOpen}
-                  aria-controls="live-activity-panel"
-                  aria-label={
-                    liveActivityOpen
-                      ? "Collapse Live Experiment Activity"
-                      : "Expand Live Experiment Activity"
-                  }
-                  title={
-                    liveActivityOpen
-                      ? "Collapse Live Experiment Activity"
-                      : "Expand Live Experiment Activity"
-                  }
-                  sx={ADMIN_COLLAPSE_BUTTON_SX}
-                >
-                  <KeyboardArrowDownIcon
-                    sx={{
-                      transform: liveActivityOpen ? "rotate(180deg)" : "rotate(0deg)",
-                      transition: ADMIN_COLLAPSE_ARROW_TRANSITION,
-                    }}
-                  />
-                </IconButton>
-              </Box>
-              <Collapse
-                id="live-activity-panel"
-                in={liveActivityOpen}
-                timeout={ADMIN_COLLAPSE_TIMEOUT_MS}
-                unmountOnExit={false}
-              >
-                <Box
-                  sx={{
-                    pt: 2,
-                    opacity: liveActivityOpen ? 1 : 0,
-                    transition: ADMIN_COLLAPSE_INNER_TRANSITION,
-                  }}
-                >
-                  <LiveActivityPanel />
-                </Box>
-              </Collapse>
-            </Box>
-
-            <Box
-              sx={{
-                width: "100%",
-                mb: 3,
-                p: { xs: 1.5, sm: 2 },
-                border: "1px solid #d9dff2",
-                borderRadius: 3,
-                ...getAdminGlossCardSx(contractManagerOpen),
-              }}
-            >
-              <Box
-                sx={{
-                  display: "grid",
-                  gridTemplateColumns: "minmax(0, 1fr) auto",
-                  alignItems: "start",
-                  gap: 2,
-                }}
-              >
-                <Box>
-                  <Typography
-                    variant="caption"
-                    color="text.secondary"
-                    sx={{ textTransform: "uppercase", letterSpacing: 0.4 }}
-                  >
-                    Contract manager
-                  </Typography>
-                  <Typography variant="body1" sx={{ fontWeight: 800 }}>
-                    Environment: {activeMarket.environmentLabel || activeMarket.label}
-                  </Typography>
-                  <Typography
-                    variant="caption"
-                    color="text.secondary"
-                    sx={{ display: "block", maxWidth: 560 }}
-                  >
-                    This build uses one factory contract. Production and
-                    testing live in separate branches, so users cannot switch
-                    markets inside the app.
-                  </Typography>
-                </Box>
-                <Box display="flex" gap={1} alignItems="center" justifyContent="flex-end">
-                  {contractManagerOpen && (
-                    <Button
-                      variant="outlined"
-                      size="small"
-                      onClick={() => handleInspectContracts()}
-                      disabled={contractManagerLoading}
-                      sx={{ borderRadius: 999 }}
-                    >
-                      {contractManagerLoading ? "Inspecting..." : "Inspect"}
-                    </Button>
-                  )}
-                  <IconButton
-                    onClick={() => setContractManagerOpen((current) => !current)}
-                    aria-expanded={contractManagerOpen}
-                    aria-controls="contract-manager-panel"
-                    aria-label={
-                      contractManagerOpen
-                        ? "Collapse Contract Manager"
-                        : "Expand Contract Manager"
-                    }
-                    title={
-                      contractManagerOpen
-                        ? "Collapse Contract Manager"
-                        : "Expand Contract Manager"
-                    }
-                    sx={ADMIN_COLLAPSE_BUTTON_SX}
-                  >
-                    <KeyboardArrowDownIcon
-                      sx={{
-                        transform: contractManagerOpen
-                          ? "rotate(180deg)"
-                          : "rotate(0deg)",
-                        transition: ADMIN_COLLAPSE_ARROW_TRANSITION,
-                      }}
-                    />
-                  </IconButton>
-                </Box>
-              </Box>
-
-              <Collapse
-                id="contract-manager-panel"
-                in={contractManagerOpen}
-                timeout={ADMIN_COLLAPSE_TIMEOUT_MS}
-                unmountOnExit={false}
-              >
-                <Box
-                  sx={{
-                    display: "grid",
-                    gridTemplateColumns: "1fr",
-                    gap: 1.5,
-                    mt: 2,
-                    opacity: contractManagerOpen ? 1 : 0,
-                    transition: ADMIN_COLLAPSE_INNER_TRANSITION,
-                  }}
-                >
-                  {marketOptions.map((market) => {
-                    const isActive = activeMarket.id === market.id;
-                    const stats = contractStats[market.id] || {};
-                    const draft = contractDrafts[market.id] || "";
-                    const labelDraft = marketLabelDrafts[market.id] || "";
-                    const draftLooksValid = !draft || /^0x[a-fA-F0-9]{40}$/.test(draft);
-                    const labelLooksValid =
-                      labelDraft.trim().length > 0 && labelDraft.trim().length <= 18;
-
-                    return (
-                      <Box
-                        key={market.id}
-                        className={`${componentStyles.contractCard} ${
-                          isActive ? componentStyles.contractCardActive : ""
-                        } ${
-                          switchingMarketId === market.id
-                            ? componentStyles.contractCardSwitching
-                            : ""
-                        }`}
-                        sx={{
-                          p: 1.5,
-                          borderRadius: 2,
-                          backgroundColor: "#ffffff",
-                          border: isActive
-                            ? "1px solid #9fb0ef"
-                            : "1px solid #e5e9f8",
-                          boxShadow: isActive
-                            ? "0 8px 24px rgba(16, 48, 144, 0.08)"
-                            : "none",
-                        }}
-                      >
-                      <Box
-                        display="flex"
-                        justifyContent="space-between"
-                        alignItems="center"
-                        gap={1}
-                      >
-                        <Box>
-                          <Typography variant="subtitle2" sx={{ fontWeight: 800 }}>
-                            {market.label}
-                          </Typography>
-                          <Typography variant="caption" color="text.secondary">
-                            {market.description}
-                          </Typography>
-                        </Box>
-                        <Typography
-                          variant="caption"
-                          className={`${componentStyles.marketStatusPill} ${
-                            isActive ? componentStyles.marketStatusPillActive : ""
-                          }`}
-                          sx={{
-                            px: 1,
-                            py: 0.35,
-                            borderRadius: 999,
-                            backgroundColor: isActive ? "#e8efff" : "#f1f3f9",
-                            color: isActive ? "#103090" : "#69708c",
-                            fontWeight: 800,
-                          }}
-                        >
-                          {switchingMarketId === market.id
-                            ? "Switching"
-                            : market.environmentLabel || "Active"}
-                        </Typography>
-                      </Box>
-
-                      <TextField
-                        label="Market name"
-                        value={labelDraft}
-                        onChange={(event) =>
-                          handleMarketLabelDraftChange(market.id, event.target.value)
-                        }
-                        error={!labelLooksValid}
-                        helperText={
-                          labelLooksValid
-                            ? "Optional display name for reports and admin views."
-                            : "Use 1-18 characters."
-                        }
-                        size="small"
-                        fullWidth
-                        sx={{ mt: 1.25 }}
-                      />
-
-                      <TextField
-                        label="Factory address"
-                        value={draft}
-                        onChange={(event) =>
-                          handleContractDraftChange(market.id, event.target.value)
-                        }
-                        error={!draftLooksValid}
-                        helperText={
-                          draftLooksValid
-                            ? "Saved in this browser as a local override."
-                            : "Use a valid 0x contract address."
-                        }
-                        size="small"
-                        fullWidth
-                        sx={{ mt: 1.25 }}
-                        InputProps={{
-                          sx: {
-                            fontFamily: "monospace",
-                            fontSize: 13,
-                          },
-                        }}
-                      />
-
-                      <Box
-                        display="flex"
-                        gap={1}
-                        flexWrap="wrap"
-                        sx={{ mt: 1.25 }}
-                      >
-                        <Button
-                          variant="outlined"
-                          size="small"
-                          onClick={() => handleSaveMarketLabel(market.id)}
-                          disabled={!labelLooksValid || labelDraft.trim() === market.label}
-                          sx={{ borderRadius: 999 }}
-                        >
-                          Save Name
-                        </Button>
-                        <Button
-                          variant="outlined"
-                          size="small"
-                          onClick={() => handleSaveContractAddress(market.id)}
-                          disabled={!draftLooksValid || !draft}
-                          sx={{ borderRadius: 999 }}
-                        >
-                          Save Address
-                        </Button>
-                        <Button
-                          variant="text"
-                          size="small"
-                          onClick={() => handleClearMarketLabel(market.id)}
-                          disabled={market.label === market.defaultLabel}
-                        >
-                          Reset Name
-                        </Button>
-                        <Button
-                          variant="text"
-                          size="small"
-                          onClick={() => handleClearContractAddress(market.id)}
-                        >
-                          Clear
-                        </Button>
-                        <Button
-                          variant="text"
-                          size="small"
-                          onClick={() => handleInspectContracts(market.id)}
-                          disabled={!market.address || contractManagerLoading}
-                        >
-                          Inspect
-                        </Button>
-                      </Box>
-
-                      <Box
-                        sx={{
-                          mt: 1.25,
-                          p: 1,
-                          borderRadius: 2,
-                          backgroundColor: "#fbfcff",
-                          border: "1px solid #edf0fb",
-                        }}
-                      >
-                        {stats.loading ? (
-                          <>
-                            <LinearProgress />
-                            <Typography variant="caption" color="text.secondary">
-                              Reading contract...
-                            </Typography>
-                          </>
-                        ) : stats.error ? (
-                          <Typography variant="caption" color="error">
-                            {stats.error}
-                          </Typography>
-                        ) : stats.updatedAt ? (
-                          <>
-                            <Typography variant="caption" sx={{ fontWeight: 800 }}>
-                              {stats.count} auction{stats.count === 1 ? "" : "s"}
-                            </Typography>
-                            <Typography
-                              variant="caption"
-                              color="text.secondary"
-                              display="block"
-                            >
-                              Latest:{" "}
-                              {stats.latestAuction?.dataDescription || "No auctions yet"}
-                            </Typography>
-                          </>
-                        ) : (
-                          <Typography variant="caption" color="text.secondary">
-                            Not inspected yet.
-                          </Typography>
-                        )}
-                      </Box>
-                      </Box>
-                    );
-                  })}
-                </Box>
-              </Collapse>
-            </Box>
-
-            <Box
-              sx={{
-                width: "100%",
-                p: { xs: 1.5, sm: 2 },
-                border: "1px solid #d9dff2",
-                borderRadius: 3,
-                ...getAdminGlossCardSx(false),
-              }}
-            >
-              <Typography variant="h6">Set Global Budget</Typography>
+            {adminAccess.canWrite ? null : (
               <Typography
-                variant="body2"
-                color="text.secondary"
-                sx={{ mt: 0.5, maxWidth: 680 }}
+                variant="caption"
+                textAlign="center"
+                sx={{ maxWidth: 680, mb: 2, color: "#8a5a00" }}
+                data-testid="admin-gate-note"
               >
-                Set the default spending budget applied to bidder accounts
-                (minimum 1). Funds held by a user's leading bids are kept, so
-                their available budget is the new default minus what they hold.
-                Reset restores the standard 2000 wei budget. Admin wallets only.
+                {ADMIN_GATE_NOTE}
+              </Typography>
+            )}
+
+            <ArchitectureCard />
+
+            <AdminCard
+              title="Live Experiment Activity"
+              open={liveActivityOpen}
+              onToggle={() => setLiveActivityOpen((current) => !current)}
+            >
+              <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1.5 }}>
+                See connected participants, authenticated admins, running bots, and active auctions across the website in near real time.
+              </Typography>
+                  <LiveActivityPanel />
+            </AdminCard>
+
+            <MarketSettingsCard canWrite={Boolean(adminAccess.canWrite)} />
+
+            <UsersBudgetsCard canWrite={Boolean(adminAccess.canWrite)} />
+
+            <AdminCard title="Set Global Budget">
+              <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1.5 }}>
+                Set the default spending budget applied to bidder accounts (minimum 1). Funds held by a user's leading bids are kept, so their available budget is the new default minus what they hold. Reset restores the standard 2000 budget. Admin wallets only.
               </Typography>
               <TextField
-                label="Budget (wei)"
+                label="Budget"
                 type="number"
                 value={budget}
                 onChange={handleBudgetChange}
                 fullWidth
-                sx={{ mt: 2 }}
+                sx={{ mt: 1 }}
               />
               {error && (
                 <Typography color="error" sx={{ mt: 1 }}>
@@ -2078,155 +1679,17 @@ const ManageBudgetPage = () => {
                   Reset
                 </Button>
               </Box>
-            </Box>
+            </AdminCard>
 
-            <Box
-              sx={{
-                width: "100%",
-                mt: 3,
-                p: { xs: 1.5, sm: 2 },
-                border: "1px solid #d9dff2",
-                borderRadius: 3,
-                ...getAdminGlossCardSx(autoFinalizerOpen),
-              }}
+            <AdminCard
+              title="Bot Command Center"
+              open={botCommandCenterOpen}
+              onToggle={() => setBotCommandCenterOpen((current) => !current)}
+              unmountOnExit
             >
-              <Box
-                sx={{
-                  display: "grid",
-                  gridTemplateColumns: "minmax(0, 1fr) auto",
-                  alignItems: "start",
-                  gap: 2,
-                }}
-              >
-                <Box sx={{ minWidth: 0 }}>
-                  <Typography variant="h6">Auto Finalizer Monitor</Typography>
-                  <Typography
-                    variant="body2"
-                    color="text.secondary"
-                    sx={{ mt: 0.5, maxWidth: 680 }}
-                  >
-                    Watch GitHub Actions health, scan configured markets for
-                    ended auctions, and quickly re-run the finalizer if
-                    something is stuck.
-                  </Typography>
-                </Box>
-                <IconButton
-                  onClick={() => setAutoFinalizerOpen((current) => !current)}
-                  aria-expanded={autoFinalizerOpen}
-                  aria-controls="auto-finalizer-monitor-panel"
-                  aria-label={
-                    autoFinalizerOpen
-                      ? "Collapse Auto Finalizer Monitor"
-                      : "Expand Auto Finalizer Monitor"
-                  }
-                  title={
-                    autoFinalizerOpen
-                      ? "Collapse Auto Finalizer Monitor"
-                      : "Expand Auto Finalizer Monitor"
-                  }
-                  sx={ADMIN_COLLAPSE_BUTTON_SX}
-                >
-                  <KeyboardArrowDownIcon
-                    sx={{
-                      transform: autoFinalizerOpen
-                        ? "rotate(180deg)"
-                        : "rotate(0deg)",
-                      transition: ADMIN_COLLAPSE_ARROW_TRANSITION,
-                    }}
-                  />
-                </IconButton>
-              </Box>
-
-              <Collapse
-                id="auto-finalizer-monitor-panel"
-                in={autoFinalizerOpen}
-                timeout={ADMIN_COLLAPSE_TIMEOUT_MS}
-                unmountOnExit={false}
-              >
-                <Box
-                  sx={{
-                    pt: 2,
-                    opacity: autoFinalizerOpen ? 1 : 0,
-                    transition: ADMIN_COLLAPSE_INNER_TRANSITION,
-                  }}
-                >
-                  <AutoFinalizerMonitor marketOptions={marketOptions} />
-                </Box>
-              </Collapse>
-            </Box>
-
-            <Box
-              sx={{
-                width: "100%",
-                mt: 3,
-                p: { xs: 1.5, sm: 2 },
-                border: "1px solid #d9dff2",
-                borderRadius: 3,
-                ...getAdminGlossCardSx(botCommandCenterOpen),
-              }}
-            >
-              <Box
-                sx={{
-                  display: "grid",
-                  gridTemplateColumns: "minmax(0, 1fr) auto",
-                  alignItems: "start",
-                  gap: 2,
-                }}
-              >
-                <Box sx={{ minWidth: 0 }}>
-                  <Typography variant="h6">Bot Command Center</Typography>
-                  <Typography
-                    variant="body2"
-                    color="text.secondary"
-                    sx={{ mt: 0.5, maxWidth: 680 }}
-                  >
-                    Monitor and control the absorbed auction bot fleet from the
-                    in-repo botnet service. Private keys stay on the botnet API
-                    side and are never stored in the browser.
-                  </Typography>
-                </Box>
-                <IconButton
-                  onClick={() =>
-                    setBotCommandCenterOpen((current) => !current)
-                  }
-                  aria-expanded={botCommandCenterOpen}
-                  aria-controls="bot-command-center-panel"
-                  aria-label={
-                    botCommandCenterOpen
-                      ? "Collapse Bot Command Center"
-                      : "Expand Bot Command Center"
-                  }
-                  title={
-                    botCommandCenterOpen
-                      ? "Collapse Bot Command Center"
-                      : "Expand Bot Command Center"
-                  }
-                  sx={ADMIN_COLLAPSE_BUTTON_SX}
-                >
-                  <KeyboardArrowDownIcon
-                    sx={{
-                      transform: botCommandCenterOpen
-                        ? "rotate(180deg)"
-                        : "rotate(0deg)",
-                      transition: ADMIN_COLLAPSE_ARROW_TRANSITION,
-                    }}
-                  />
-                </IconButton>
-              </Box>
-
-              <Collapse
-                id="bot-command-center-panel"
-                in={botCommandCenterOpen}
-                timeout={ADMIN_COLLAPSE_TIMEOUT_MS}
-                unmountOnExit
-              >
-                <Box
-                  sx={{
-                    pt: 2,
-                    opacity: botCommandCenterOpen ? 1 : 0,
-                    transition: ADMIN_COLLAPSE_INNER_TRANSITION,
-                  }}
-                >
+              <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1.5 }}>
+                Monitor and control the absorbed auction bot fleet from the in-repo botnet service. Private keys stay on the botnet API side and are never stored in the browser.
+              </Typography>
                   <Suspense
                     fallback={
                       <Box sx={{ py: 2, color: "text.secondary", fontSize: 14 }}>
@@ -2236,135 +1699,16 @@ const ManageBudgetPage = () => {
                   >
                     <BotnetControlPanel schedulerEnabled={false} />
                   </Suspense>
-                </Box>
-              </Collapse>
-            </Box>
+            </AdminCard>
 
-            <Box
-              sx={{
-                width: "100%",
-                mt: 3,
-                p: { xs: 1.5, sm: 2 },
-                border: "1px solid #d9dff2",
-                borderRadius: 3,
-                ...getAdminGlossCardSx(experimentEvidenceOpen),
-              }}
+            <AdminCard
+              title="Batch Auction Studio"
+              open={batchStudioOpen}
+              onToggle={() => setBatchStudioOpen((current) => !current)}
             >
-              <Box
-                sx={{
-                  display: "grid",
-                  gridTemplateColumns: "minmax(0, 1fr) auto",
-                  alignItems: "start",
-                  gap: 2,
-                }}
-              >
-                <Box sx={{ minWidth: 0 }}>
-                  <Typography variant="h6">Experiment Evidence</Typography>
-                  <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, maxWidth: 680 }}>
-                    Load a public protocol manifest and runner evidence into reports. Wallet secrets are rejected.
-                  </Typography>
-                </Box>
-                <IconButton
-                  onClick={() => setExperimentEvidenceOpen((current) => !current)}
-                  aria-expanded={experimentEvidenceOpen}
-                  aria-controls="experiment-evidence-panel"
-                  aria-label={experimentEvidenceOpen ? "Collapse Experiment Evidence" : "Expand Experiment Evidence"}
-                  title={experimentEvidenceOpen ? "Collapse Experiment Evidence" : "Expand Experiment Evidence"}
-                  sx={ADMIN_COLLAPSE_BUTTON_SX}
-                >
-                  <KeyboardArrowDownIcon
-                    sx={{
-                      transform: experimentEvidenceOpen ? "rotate(180deg)" : "rotate(0deg)",
-                      transition: ADMIN_COLLAPSE_ARROW_TRANSITION,
-                    }}
-                  />
-                </IconButton>
-              </Box>
-              <Collapse
-                id="experiment-evidence-panel"
-                in={experimentEvidenceOpen}
-                timeout={ADMIN_COLLAPSE_TIMEOUT_MS}
-                unmountOnExit
-              >
-                <Box sx={{ pt: 2, opacity: experimentEvidenceOpen ? 1 : 0, transition: ADMIN_COLLAPSE_INNER_TRANSITION }}>
-                  <Suspense fallback={<Box sx={{ py: 2, color: "text.secondary", fontSize: 14 }}>Preparing experiment evidence...</Box>}>
-                    <ExperimentEvidencePanel />
-                  </Suspense>
-                </Box>
-              </Collapse>
-            </Box>
-
-            <Divider flexItem sx={{ my: 4 }} />
-
-            <Box
-              sx={{
-                width: "100%",
-                p: { xs: 1.5, sm: 2 },
-                border: "1px solid #d9dff2",
-                borderRadius: 3,
-                ...getAdminGlossCardSx(batchStudioOpen),
-              }}
-            >
-              <Box
-                sx={{
-                  display: "grid",
-                  gridTemplateColumns: "minmax(0, 1fr) auto",
-                  alignItems: "start",
-                  gap: 2,
-                }}
-              >
-                <Box sx={{ minWidth: 0 }}>
-                  <Typography variant="h6">Batch Auction Studio</Typography>
-                  <Typography
-                    variant="body2"
-                    color="text.secondary"
-                    sx={{ mt: 0.5, maxWidth: 680 }}
-                  >
-                    Pick a template, fine tune the rows, then create the batch.
-                  </Typography>
-                </Box>
-                <Box display="flex" gap={1} alignItems="center" justifyContent="flex-end">
-                  <IconButton
-                    onClick={() => setBatchStudioOpen((current) => !current)}
-                    aria-expanded={batchStudioOpen}
-                    aria-controls="batch-auction-studio-panel"
-                    aria-label={
-                      batchStudioOpen
-                        ? "Collapse Batch Auction Studio"
-                        : "Expand Batch Auction Studio"
-                    }
-                    title={
-                      batchStudioOpen
-                        ? "Collapse Batch Auction Studio"
-                        : "Expand Batch Auction Studio"
-                    }
-                    sx={ADMIN_COLLAPSE_BUTTON_SX}
-                  >
-                    <KeyboardArrowDownIcon
-                      sx={{
-                        transform: batchStudioOpen
-                          ? "rotate(180deg)"
-                          : "rotate(0deg)",
-                        transition: ADMIN_COLLAPSE_ARROW_TRANSITION,
-                      }}
-                    />
-                  </IconButton>
-                </Box>
-              </Box>
-
-              <Collapse
-                id="batch-auction-studio-panel"
-                in={batchStudioOpen}
-                timeout={ADMIN_COLLAPSE_TIMEOUT_MS}
-                unmountOnExit={false}
-              >
-              <Box
-                sx={{
-                  pt: 2,
-                  opacity: batchStudioOpen ? 1 : 0,
-                  transition: ADMIN_COLLAPSE_INNER_TRANSITION,
-                }}
-              >
+              <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1.5 }}>
+                Pick a template, fine tune the rows, then create the batch.
+              </Typography>
               <Box display="flex" justifyContent="flex-end" sx={{ mb: 1.25 }}>
                 <Button
                   variant="contained"
@@ -2451,6 +1795,9 @@ const ManageBudgetPage = () => {
                 <Box>
                   <Typography variant="caption" color="text.secondary">
                     Start with
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary" display="block">
+                    Limited by block gas: at most {BULK_MAX_AUCTIONS} auctions per batch.
                   </Typography>
                   <Box display="flex" gap={1} flexWrap="wrap" sx={{ mt: 0.75 }}>
                     {[3, 5, 10, 20].map((count) => (
@@ -2909,81 +2256,18 @@ const ManageBudgetPage = () => {
                   ))}
                 </Box>
               )}
-              </Box>
-              </Collapse>
-            </Box>
+            </AdminCard>
 
-            <Divider flexItem sx={{ my: 4 }} />
-
-            <Box
-              sx={{
-                width: "100%",
-                p: { xs: 1.5, sm: 2 },
-                border: "1px solid #d9dff2",
-                borderRadius: 3,
-                ...getAdminGlossCardSx(auctionReportsOpen),
-              }}
+            <ActiveAuctionListCard canWrite={Boolean(adminAccess.canWrite)} />
+            <AuctionListHistoryCard />
+            <AdminCard
+              title="Auction Reports"
+              open={auctionReportsOpen}
+              onToggle={() => setAuctionReportsOpen((current) => !current)}
             >
-              <Box
-                sx={{
-                  display: "grid",
-                  gridTemplateColumns: "minmax(0, 1fr) auto",
-                  alignItems: "start",
-                  gap: 2,
-                }}
-              >
-                <Box sx={{ minWidth: 0 }}>
-                  <Typography variant="h6">Auction Reports</Typography>
-                  <Typography
-                    variant="body2"
-                    color="text.secondary"
-                    sx={{ mt: 1, maxWidth: 760 }}
-                  >
-                    Build a focused export from selected auctions. Choose the date
-                    range, optional auction list, report tabs, diagnostics, and file
-                    type before downloading.
-                  </Typography>
-                </Box>
-                <IconButton
-                  onClick={() => setAuctionReportsOpen((current) => !current)}
-                  aria-expanded={auctionReportsOpen}
-                  aria-controls="auction-reports-panel"
-                  aria-label={
-                    auctionReportsOpen
-                      ? "Collapse Auction Reports"
-                      : "Expand Auction Reports"
-                  }
-                  title={
-                    auctionReportsOpen
-                      ? "Collapse Auction Reports"
-                      : "Expand Auction Reports"
-                  }
-                  sx={ADMIN_COLLAPSE_BUTTON_SX}
-                >
-                  <KeyboardArrowDownIcon
-                    sx={{
-                      transform: auctionReportsOpen
-                        ? "rotate(180deg)"
-                        : "rotate(0deg)",
-                      transition: ADMIN_COLLAPSE_ARROW_TRANSITION,
-                    }}
-                  />
-                </IconButton>
-              </Box>
-
-              <Collapse
-                id="auction-reports-panel"
-                in={auctionReportsOpen}
-                timeout={ADMIN_COLLAPSE_TIMEOUT_MS}
-                unmountOnExit={false}
-              >
-              <Box
-                  sx={{
-                    pt: 2,
-                    opacity: auctionReportsOpen ? 1 : 0,
-                    transition: ADMIN_COLLAPSE_INNER_TRANSITION,
-                  }}
-                >
+              <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1.5 }}>
+                Build a focused export from selected auctions. Choose the date range, optional auction list, report tabs, diagnostics, and file type before downloading.
+              </Typography>
               <Box
                 sx={{
                   display: "grid",
@@ -3404,7 +2688,7 @@ const ManageBudgetPage = () => {
                               sx={{ mt: 0.5 }}
                             >
                               <Typography variant="caption" color="text.secondary">
-                                Bid {option.highestBid} wei
+                                Bid {option.highestBid}
                               </Typography>
                               <Typography variant="caption" color="text.secondary">
                                 Seller {shortAddress(option.seller)}
@@ -3792,9 +3076,271 @@ const ManageBudgetPage = () => {
                   </Box>
                 </Box>
               )}
-              </Box>
-              </Collapse>
-            </Box>
+            </AdminCard>
+
+            <AuditEventsCard />
+
+            <Typography component="h2" variant="h5" sx={{ width: "100%", mt: 2, mb: 2, color: "#002884", fontWeight: 700 }}>
+              Blockchain tools
+            </Typography>
+            <AdminSessionControls />
+            <AdminsCard isOwner={Boolean(adminAccess.isOwner)} />
+            <FaucetCard />
+            <ParticipantsGasCard />
+            <FaucetFundsCard />
+            <AdminCard
+              title="Contract manager"
+              open={contractManagerOpen}
+              onToggle={() => setContractManagerOpen((current) => !current)}
+              action={
+                contractManagerOpen ? (
+                  <AdminRefreshButton
+                    label="Inspect"
+                    onClick={() => handleInspectContracts()}
+                    loading={contractManagerLoading}
+                  />
+                ) : null
+              }
+            >
+              <Typography variant="body1" sx={{ fontWeight: 800 }}>
+                Environment: {activeMarket.environmentLabel || activeMarket.label}
+              </Typography>
+              <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1.5 }}>
+                This build uses one factory contract. Production and testing live in separate branches, so users cannot switch markets inside the app.
+              </Typography>
+                <Box
+                  sx={{
+                    display: "grid",
+                    gridTemplateColumns: "1fr",
+                    gap: 1.5,
+                  }}
+                >
+                  {marketOptions.map((market) => {
+                    const isActive = activeMarket.id === market.id;
+                    const stats = contractStats[market.id] || {};
+                    const draft = contractDrafts[market.id] || "";
+                    const labelDraft = marketLabelDrafts[market.id] || "";
+                    const draftLooksValid = !draft || /^0x[a-fA-F0-9]{40}$/.test(draft);
+                    const labelLooksValid =
+                      labelDraft.trim().length > 0 && labelDraft.trim().length <= 18;
+
+                    return (
+                      <Box
+                        key={market.id}
+                        className={`${componentStyles.contractCard} ${
+                          isActive ? componentStyles.contractCardActive : ""
+                        } ${
+                          switchingMarketId === market.id
+                            ? componentStyles.contractCardSwitching
+                            : ""
+                        }`}
+                        sx={{
+                          p: 1.5,
+                          borderRadius: 2,
+                          backgroundColor: "#ffffff",
+                          border: isActive
+                            ? "1px solid #9fb0ef"
+                            : "1px solid #e5e9f8",
+                          boxShadow: isActive
+                            ? "0 8px 24px rgba(16, 48, 144, 0.08)"
+                            : "none",
+                        }}
+                      >
+                      <Box
+                        display="flex"
+                        justifyContent="space-between"
+                        alignItems="center"
+                        gap={1}
+                      >
+                        <Box>
+                          <Typography variant="subtitle2" sx={{ fontWeight: 800 }}>
+                            {market.label}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            {market.description}
+                          </Typography>
+                        </Box>
+                        <Typography
+                          variant="caption"
+                          className={`${componentStyles.marketStatusPill} ${
+                            isActive ? componentStyles.marketStatusPillActive : ""
+                          }`}
+                          sx={{
+                            px: 1,
+                            py: 0.35,
+                            borderRadius: 999,
+                            backgroundColor: isActive ? "#e8efff" : "#f1f3f9",
+                            color: isActive ? "#103090" : "#69708c",
+                            fontWeight: 800,
+                          }}
+                        >
+                          {switchingMarketId === market.id
+                            ? "Switching"
+                            : market.environmentLabel || "Active"}
+                        </Typography>
+                      </Box>
+
+                      <TextField
+                        label="Market name"
+                        value={labelDraft}
+                        onChange={(event) =>
+                          handleMarketLabelDraftChange(market.id, event.target.value)
+                        }
+                        error={!labelLooksValid}
+                        helperText={
+                          labelLooksValid
+                            ? "Optional display name for reports and admin views."
+                            : "Use 1-18 characters."
+                        }
+                        size="small"
+                        fullWidth
+                        sx={{ mt: 1.25 }}
+                      />
+
+                      <TextField
+                        label="Factory address"
+                        value={draft}
+                        onChange={(event) =>
+                          handleContractDraftChange(market.id, event.target.value)
+                        }
+                        error={!draftLooksValid}
+                        helperText={
+                          draftLooksValid
+                            ? "Saved in this browser as a local override."
+                            : "Use a valid 0x contract address."
+                        }
+                        size="small"
+                        fullWidth
+                        sx={{ mt: 1.25 }}
+                        InputProps={{
+                          sx: {
+                            fontFamily: "monospace",
+                            fontSize: 13,
+                          },
+                        }}
+                      />
+
+                      <Box
+                        display="flex"
+                        gap={1}
+                        flexWrap="wrap"
+                        sx={{ mt: 1.25 }}
+                      >
+                        <Button
+                          variant="outlined"
+                          size="small"
+                          onClick={() => handleSaveMarketLabel(market.id)}
+                          disabled={!labelLooksValid || labelDraft.trim() === market.label}
+                          sx={{ borderRadius: 999 }}
+                        >
+                          Save Name
+                        </Button>
+                        <Button
+                          variant="outlined"
+                          size="small"
+                          onClick={() => handleSaveContractAddress(market.id)}
+                          disabled={!draftLooksValid || !draft}
+                          sx={{ borderRadius: 999 }}
+                        >
+                          Save Address
+                        </Button>
+                        <Button
+                          variant="text"
+                          size="small"
+                          onClick={() => handleClearMarketLabel(market.id)}
+                          disabled={market.label === market.defaultLabel}
+                        >
+                          Reset Name
+                        </Button>
+                        <Button
+                          variant="text"
+                          size="small"
+                          onClick={() => handleClearContractAddress(market.id)}
+                        >
+                          Clear
+                        </Button>
+                        <Button
+                          variant="text"
+                          size="small"
+                          onClick={() => handleInspectContracts(market.id)}
+                          disabled={!market.address || contractManagerLoading}
+                        >
+                          Inspect
+                        </Button>
+                      </Box>
+
+                      <Box
+                        sx={{
+                          mt: 1.25,
+                          p: 1,
+                          borderRadius: 2,
+                          backgroundColor: "#fbfcff",
+                          border: "1px solid #edf0fb",
+                        }}
+                      >
+                        {stats.loading ? (
+                          <>
+                            <LinearProgress />
+                            <Typography variant="caption" color="text.secondary">
+                              Reading contract...
+                            </Typography>
+                          </>
+                        ) : stats.error ? (
+                          <Typography variant="caption" color="error">
+                            {stats.error}
+                          </Typography>
+                        ) : stats.updatedAt ? (
+                          <>
+                            <Typography variant="caption" sx={{ fontWeight: 800 }}>
+                              {stats.count} auction{stats.count === 1 ? "" : "s"}
+                            </Typography>
+                            <Typography
+                              variant="caption"
+                              color="text.secondary"
+                              display="block"
+                            >
+                              Latest:{" "}
+                              {stats.latestAuction?.dataDescription || "No auctions yet"}
+                            </Typography>
+                          </>
+                        ) : (
+                          <Typography variant="caption" color="text.secondary">
+                            Not inspected yet.
+                          </Typography>
+                        )}
+                      </Box>
+                      </Box>
+                    );
+                  })}
+                </Box>
+            </AdminCard>
+
+            <AdminCard
+              title="Auto Finalizer Monitor"
+              open={autoFinalizerOpen}
+              onToggle={() => setAutoFinalizerOpen((current) => !current)}
+            >
+              <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1.5 }}>
+                Watch GitHub Actions health, scan configured markets for ended auctions, and quickly re-run the finalizer if something is stuck.
+              </Typography>
+                  <AutoFinalizerMonitor marketOptions={marketOptions} />
+            </AdminCard>
+
+            <AdminCard
+              title="Experiment Evidence"
+              open={experimentEvidenceOpen}
+              onToggle={() => setExperimentEvidenceOpen((current) => !current)}
+              unmountOnExit
+            >
+              <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1.5 }}>
+                Load a public protocol manifest and runner evidence into reports. Wallet secrets are rejected.
+              </Typography>
+                  <Suspense fallback={<Box sx={{ py: 2, color: "text.secondary", fontSize: 14 }}>Preparing experiment evidence...</Box>}>
+                    <ExperimentEvidencePanel />
+                  </Suspense>
+            </AdminCard>
+
+            <AuctionControlsCard canWrite={Boolean(adminAccess.canWrite)} />
           </>
         ) : (
           <AdminGatePrompt access={adminAccess} shortAddress={shortAddress} />

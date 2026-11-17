@@ -2,6 +2,7 @@ import React from "react";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { parseNative } from "../../real_ethereum/wallets/nativeBalance";
 import ParticipantsGasCard from "./ParticipantsGasCard";
+import { clearSessionPassword } from "./faucetSessionPassword";
 
 const mockAccess = { account: "" };
 jest.mock("../../real_ethereum/walletAccess", () => ({
@@ -30,6 +31,7 @@ beforeEach(() => {
   process.env.REACT_APP_FAUCET_URL = "https://faucet.example";
   mockAccess.account = ADMIN;
   window.localStorage.clear();
+  clearSessionPassword();
 });
 afterEach(() => { delete process.env.REACT_APP_ADMIN_ADDRESSES; delete process.env.REACT_APP_FAUCET_URL; });
 
@@ -42,7 +44,7 @@ test("the card has Auto-return and Returned columns, 'none' until the list is lo
       sweep(3, { status: "stale" }),
     ],
   }));
-  render(<ParticipantsGasCard deps={makeDeps({ fetchSweeps })} />);
+  render(<ParticipantsGasCard defaultOpen deps={makeDeps({ fetchSweeps })} />);
   await waitFor(() => expect(screen.getAllByTestId("participant-row")).toHaveLength(3));
   expect(screen.getByText("Auto-return")).toBeTruthy();
   expect(screen.getByText("Returned")).toBeTruthy();
@@ -54,7 +56,8 @@ test("the card has Auto-return and Returned columns, 'none' until the list is lo
   fireEvent.click(screen.getByRole("button", { name: "Load auto-return" }));
   await waitFor(() => expect(within(rowFor(a(1))).getByTestId("auto-return-status").textContent).toMatch(/^armed \(0\.4000 TEST\)/));
   expect(fetchSweeps).toHaveBeenCalledWith(expect.objectContaining({ password: "pw" }));
-  expect(password.value).toBe(""); // the password is not kept
+  expect(screen.queryByLabelText("Auto-return admin password")).toBeNull(); // remembered for the session: no field any more
+  expect(password.isConnected).toBe(false);
   expect(within(rowFor(a(2))).getByTestId("auto-return-status").textContent).toBe("sent");
   expect(within(rowFor(a(2))).getByTestId("auto-return-returned").textContent).toBe("0.2500 TEST");
   expect(within(rowFor(a(3))).getByTestId("auto-return-status").textContent).toBe("stale");
@@ -65,7 +68,7 @@ test("the card has Auto-return and Returned columns, 'none' until the list is lo
 test("the idle minutes can be changed with the password; a wrong password is reported", async () => {
   const saveSweepIdleMinutes = jest.fn(async ({ idleMinutes }) => idleMinutes);
   const fetchSweeps = jest.fn(async () => ({ idleMinutes: 30, sweeps: [] }));
-  render(<ParticipantsGasCard deps={makeDeps({ fetchSweeps, saveSweepIdleMinutes })} />);
+  render(<ParticipantsGasCard defaultOpen deps={makeDeps({ fetchSweeps, saveSweepIdleMinutes })} />);
   await waitFor(() => expect(screen.getAllByTestId("participant-row")).toHaveLength(3));
   fireEvent.change(screen.getByLabelText("Auto-return admin password"), { target: { value: "pw" } });
   fireEvent.change(screen.getByLabelText("Idle minutes"), { target: { value: "90" } });
@@ -73,15 +76,17 @@ test("the idle minutes can be changed with the password; a wrong password is rep
   await waitFor(() => expect(saveSweepIdleMinutes).toHaveBeenCalledWith(expect.objectContaining({ idleMinutes: 90, password: "pw" })));
   await waitFor(() => expect(screen.getByLabelText("Idle minutes").value).toBe("90"));
 
+  // The save worked, so the password is remembered; a refusal drops it and the field comes back.
   fetchSweeps.mockRejectedValueOnce(Object.assign(new Error("Wrong password."), { code: "unauthorized" }));
-  fireEvent.change(screen.getByLabelText("Auto-return admin password"), { target: { value: "bad" } });
+  await waitFor(() => expect(screen.getByRole("button", { name: "Load auto-return" }).disabled).toBe(false));
   fireEvent.click(screen.getByRole("button", { name: "Load auto-return" }));
   await waitFor(() => expect(screen.getByText("Wrong password.")).toBeTruthy());
+  expect(screen.getByLabelText("Auto-return admin password")).toBeTruthy();
 });
 
 test("without a faucet URL the auto-return controls stay hidden but the card still works", async () => {
   delete process.env.REACT_APP_FAUCET_URL;
-  render(<ParticipantsGasCard deps={makeDeps({})} />);
+  render(<ParticipantsGasCard defaultOpen deps={makeDeps({})} />);
   await waitFor(() => expect(screen.getAllByTestId("participant-row")).toHaveLength(3));
   expect(screen.queryByTestId("auto-return-controls")).toBeNull();
 });

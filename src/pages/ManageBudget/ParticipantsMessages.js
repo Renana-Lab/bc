@@ -1,9 +1,11 @@
 // "Send message" part of the admin Participants gas card: a dialog to write to one participant (or all of them) and to
-// review what was sent and whether it was read. The faucet admin password is typed in the dialog, used for each
-// request and dropped when the dialog closes.
-import { useCallback, useState } from "react";
+// review what was sent and whether it was read. The faucet admin password is asked for once per session
+// (faucetSessionPassword.js); with a session password the dialog has no password field.
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, TextField, Typography } from "@mui/material";
 import { fetchAdminMessages, MAX_MESSAGE_CHARS, sendAdminMessage } from "../../real_ethereum/wallets/inboxClient.mjs";
+import { useFaucetSessionPassword } from "./faucetSessionPassword";
+import { INBOX_POLL_SECONDS } from "../../real_ethereum/wallets/AdminMessageHost";
 
 const defaultApi = { fetchAdminMessages, sendAdminMessage };
 const when = (iso) => { try { return new Date(iso).toLocaleString(); } catch { return ""; } };
@@ -20,38 +22,66 @@ export const historyEntries = ({ data, pidHash }) => {
   return entries.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
 };
 
-// target: { pidHash, label } for one participant, or { all: true }.
+// target: { pidHash, label, resolvePidHash?(password) } for one participant, or { all: true }.
+// resolvePidHash looks the pid hash up when it was not loaded yet (the auto-return list has it).
 export const SendMessageDialog = ({ target, faucetUrl = process.env.REACT_APP_FAUCET_URL, api: apiOverride, onClose }) => {
   const api = { ...defaultApi, ...apiOverride };
+  const session = useFaucetSessionPassword();
   const [password, setPassword] = useState("");
   const [body, setBody] = useState("");
   const [data, setData] = useState(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState({ text: "", error: false });
-  const pidHash = target.all ? undefined : target.pidHash;
+  const pidRef = useRef(target.all ? undefined : target.pidHash);
+  const pidHash = pidRef.current;
 
   const run = useCallback(async (action) => {
     setBusy(true);
-    try { await action(); } catch (error) { setNotice({ text: error?.message || "Request failed.", error: true }); } finally { setBusy(false); }
+    try { return await action(); } catch (error) { setNotice({ text: error?.message || "Request failed.", error: true }); return undefined; } finally { setBusy(false); }
   }, []);
-  const load = () => run(async () => { setData(await api.fetchAdminMessages({ faucetUrl, password, pidHash })); setNotice({ text: "", error: false }); });
-  const send = () => run(async () => {
-    await api.sendAdminMessage({ faucetUrl, password, pidHash, all: Boolean(target.all), body: body.trim() });
+  const ensurePid = async (pw) => {
+    if (target.all || pidRef.current) return pidRef.current;
+    const resolved = await target.resolvePidHash?.(pw);
+    if (!resolved) throw new Error("This participant is not known to the faucet yet.");
+    pidRef.current = resolved;
+    return resolved;
+  };
+  const fetchHistory = (pw) => ensurePid(pw).then((pid) => api.fetchAdminMessages({ faucetUrl, password: pw, pidHash: pid }));
+  const load = () => run(() => session.run(password, async (pw) => {
+    setData(await fetchHistory(pw));
+    setNotice({ text: "", error: false });
+    setPassword("");
+  }));
+  const send = () => run(() => session.run(password, async (pw) => {
+    const pid = await ensurePid(pw);
+    await api.sendAdminMessage({ faucetUrl, password: pw, pidHash: pid, all: Boolean(target.all), body: body.trim() });
     setBody("");
+    setPassword("");
     setNotice({ text: target.all ? "Message sent to all participants." : "Message sent.", error: false });
-    setData(await api.fetchAdminMessages({ faucetUrl, password, pidHash }).catch(() => data));
-  });
+    setData(await api.fetchAdminMessages({ faucetUrl, password: pw, pidHash: pid }).catch(() => data));
+  }));
+
+  // With a session password the history loads by itself when the dialog opens.
+  const autoLoaded = useRef(false);
+  useEffect(() => {
+    if (autoLoaded.current || !session.hasPassword) return;
+    autoLoaded.current = true;
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.hasPassword]);
 
   const entries = historyEntries({ data, pidHash });
   return (
     <Dialog open onClose={onClose} fullWidth maxWidth="sm" data-testid="send-message-dialog">
       <DialogTitle>{target.all ? "Message all participants" : `Send message to ${target.label || "participant"}`}</DialogTitle>
       <DialogContent>
-        {target.all ? <Typography variant="body2" color="text.secondary">Shown once to every participant who has been funded, the next time their page checks for messages (within about 30 seconds).</Typography> : null}
-        <Box sx={{ display: "flex", gap: 1, alignItems: "center", mt: 1 }}>
-          <TextField size="small" type="password" autoComplete="new-password" label="Faucet admin password" value={password} onChange={(e) => setPassword(e.target.value)} inputProps={{ "aria-label": "Message admin password" }} />
-          <Button size="small" variant="outlined" disabled={!password || busy} onClick={load}>Load history</Button>
-        </Box>
+        {target.all ? <Typography variant="body2" color="text.secondary">{`Shown once to every participant who has been funded, the next time their page checks for messages (within about ${INBOX_POLL_SECONDS} seconds).`}</Typography> : null}
+        {session.hasPassword ? null : (
+          <Box sx={{ display: "flex", gap: 1, alignItems: "center", mt: 1 }}>
+            <TextField size="small" type="password" autoComplete="new-password" label="Faucet admin password" value={password} onChange={(e) => setPassword(e.target.value)} inputProps={{ "aria-label": "Message admin password" }} />
+            <Button size="small" variant="outlined" disabled={!password || busy} onClick={load}>Load history</Button>
+          </Box>
+        )}
         <TextField label="Message" value={body} onChange={(e) => setBody(e.target.value)} fullWidth multiline minRows={3} margin="dense"
           inputProps={{ maxLength: MAX_MESSAGE_CHARS, "aria-label": "Message text" }} helperText={`${body.length}/${MAX_MESSAGE_CHARS}`} />
         {notice.text ? <Typography color={notice.error ? "error" : "success.main"} variant="body2" role={notice.error ? "alert" : "status"}>{notice.text}</Typography> : null}
@@ -69,7 +99,7 @@ export const SendMessageDialog = ({ target, faucetUrl = process.env.REACT_APP_FA
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>Close</Button>
-        <Button variant="contained" disabled={!password || !body.trim() || busy} onClick={send}>Send</Button>
+        <Button variant="contained" disabled={(!password && !session.hasPassword) || !body.trim() || busy} onClick={send}>Send</Button>
       </DialogActions>
     </Dialog>
   );

@@ -13,6 +13,7 @@ import PresenceCoordinator from "./telemetry/PresenceCoordinator.js";
 import BotnetRuntimeHost from "./botnet/BotnetRuntimeHost.js";
 import WalletModePanel from "./real_ethereum/wallets/WalletModePanel.js";
 import { getWalletCopy } from "./real_ethereum/wallets/walletCopy.js";
+import { getWalletMode } from "./real_ethereum/wallets/walletMode.mjs";
 
 const HomePage = lazy(() => import("./pages/Home/HomePage.js"));
 const NewAuctionPage = lazy(() => import("./pages/NewAuction/NewAuctionPage.js"));
@@ -198,12 +199,16 @@ function App() {
     return () => mediaQuery.removeListener?.(handleChange);
   }, []);
 
+  // Phones cannot run the MetaMask extension flow, so only that mode shows the "not supported" screen. The local and
+  // embedded wallets live in the page itself and work on small screens.
+  const mobileBlocked = isMobile && getWalletMode() === "metamask";
+
   return (
     <MetaMaskProvider>
       <WalletModePanel />
       <BotnetRuntimeHost />
       <PresenceCoordinator />
-      {isMobile ? (
+      {mobileBlocked ? (
         <>
           <style>
             {`

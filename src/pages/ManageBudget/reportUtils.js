@@ -74,6 +74,86 @@ export const toDateInputValue = (seconds) => {
 export const shortAddress = (address) =>
   address ? `${address.slice(0, 6)}...${address.slice(-4)}` : "";
 
+// ---- derived status, sales summary, user budget history and audit rows --------------------------------
+
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+
+// Same vocabulary as the Admin Zone: active, ended, sold, unsold, cancelled.
+//   sold = finalized with a winner; unsold = finalized or ended without bids; ended = ended with bids, not finalized.
+export const deriveAuctionStatus = (auction = {}, { ended = false, cancelled = false } = {}) => {
+  if (cancelled) return "cancelled";
+  const hasBids =
+    Number(auction.approversCount || 0) > 0 ||
+    (Boolean(auction.highestBidder) && String(auction.highestBidder).toLowerCase() !== ZERO_ADDRESS);
+  if (auction.closed) return hasBids ? "sold" : "unsold";
+  if (!ended) return "active";
+  return hasBids ? "ended" : "unsold";
+};
+
+// reports: [{ auction, ended }]; cancelled: a Set of lowercase auction addresses.
+export const buildSalesSummary = (reports = [], cancelled = new Set()) => {
+  const summary = { sold: 0, unsold: 0, cancelled: 0, active: 0, ended: 0, totalSalesWei: 0n };
+  reports.forEach(({ auction, ended }) => {
+    const status = deriveAuctionStatus(auction, { ended, cancelled: cancelled.has(String(auction.address).toLowerCase()) });
+    summary[status] += 1;
+    if (status === "sold") summary.totalSalesWei += toBigIntSafe(auction.highestBid);
+  });
+  return { ...summary, totalSalesWei: summary.totalSalesWei.toString() };
+};
+
+export const toSalesSummaryRows = (summary) =>
+  ["sold", "unsold", "cancelled"].map((status) => ({
+    Description: "Sales summary",
+    Status: status,
+    "Number Of Auctions": summary[status],
+    "Total Sales (wei)": status === "sold" ? summary.totalSalesWei : "",
+  }));
+
+// events: normalized BudgetChanged / UserBudgetSet events (see adminCardData.normalizeAuditEvent).
+// admins: Set of lowercase admin addresses; bots: Set of lowercase bot wallets; labels: lowercase address -> name.
+export const toUserHistoryRows = ({ addresses = [], budgets = {}, held = {}, disabled = new Set(), events = [], labels = {}, bots = new Set(), admins = new Set() }) => {
+  const lastChange = new Map();
+  [...events]
+    .filter((event) => ["BudgetChanged", "UserBudgetSet"].includes(event.name))
+    .sort((a, b) => b.blockNumber - a.blockNumber || b.logIndex - a.logIndex)
+    .forEach((event) => {
+      if (!lastChange.has(event.actor)) lastChange.set(event.actor, event);
+    });
+  return addresses.map((address) => {
+    const key = String(address).toLowerCase();
+    const available = budgets[key] ?? "";
+    const heldValue = held[key] ?? "0";
+    const total = /^\d+$/.test(String(available)) && /^\d+$/.test(String(heldValue)) ? (BigInt(available) + BigInt(heldValue)).toString() : "";
+    const last = lastChange.get(key);
+    return {
+      Address: address,
+      Label: labels[key] || "",
+      Role: admins.has(key) ? "admin" : bots.has(key) ? "bot" : "participant",
+      Available: available,
+      Held: heldValue,
+      Total: total,
+      Disabled: disabled.has(key) ? "Yes" : "No",
+      "Last Change Type": last?.name || "",
+      "Last Change": last?.summary || "",
+      "Last Change Block": last ? last.blockNumber : "",
+      "Last Change Transaction": last?.transactionHash || "",
+    };
+  });
+};
+
+// The same rows as the Audit events card, newest first.
+export const toAuditRows = (events = []) =>
+  [...events]
+    .sort((a, b) => b.blockNumber - a.blockNumber || b.logIndex - a.logIndex)
+    .map((event) => ({
+      Event: event.name,
+      Block: event.blockNumber,
+      Transaction: event.transactionHash,
+      Auction: event.auction,
+      Actor: event.actor,
+      Summary: event.summary,
+    }));
+
 export const getReportDateRangeMs = (filters = {}) => {
   const fromMs = filters.from
     ? new Date(`${filters.from}T00:00:00`).getTime()
@@ -1488,6 +1568,7 @@ const buildReportAnalysis = (reports, errors, options = {}) => {
 };
 
 const buildCoreReportTables = (reports, errors, generatedAt, options = {}) => {
+  const cancelledSet = new Set((options.cancelledAddresses || []).map((address) => String(address).toLowerCase()));
   const experimentManifest = options.experimentManifest || null;
   const participantByAddress = new Map(
     (experimentManifest?.participants || []).map((participant) => [
@@ -1562,9 +1643,12 @@ const buildCoreReportTables = (reports, errors, generatedAt, options = {}) => {
     "Auction Status": ended ? "Closed" : "Open",
     "Payment Finalized": auction.closed ? "Yes" : "No",
     "Payment State": getSellerPaymentState(auction, ended),
+    Status: deriveAuctionStatus(auction, { ended, cancelled: cancelledSet.has(String(auction.address).toLowerCase()) }),
     "Payment Status Read Error": auction.closedReadError,
     "Generated At": generatedAt,
   }));
+  const salesSummary = buildSalesSummary(reports, cancelledSet);
+  const salesSummaryRows = toSalesSummaryRows(salesSummary);
   const allBidRows = reports.flatMap(({ auction, ended, transactions }) => {
     const auctionFields = {
       "Auction #": auction.index,
@@ -1698,6 +1782,8 @@ const buildCoreReportTables = (reports, errors, generatedAt, options = {}) => {
   return {
     generatedAt,
     summaryRows,
+    salesSummary,
+    salesSummaryRows,
     allBidRows,
     timelineRows,
     analysis: buildReportAnalysis(reports, errors, options),
@@ -1708,6 +1794,7 @@ export const buildReportSheets = (reports, errors, options = {}) => {
   const generatedAt = new Date().toLocaleString();
   const {
     summaryRows,
+    salesSummaryRows,
     allBidRows,
     timelineRows,
     analysis,
@@ -1852,13 +1939,55 @@ export const buildReportSheets = (reports, errors, options = {}) => {
         ? `${options.listStateRange.from} through ${options.listStateRange.to}`
         : "Times use ISO 8601 UTC format.",
     },
+    {
+      Order: 20,
+      Section: "Report Info",
+      Term: "Status",
+      Definition:
+        "Derived auction status shown in Auction Summary: active (open for bids), ended (bidding over, has bids, not finalized yet), sold (finalized with a winner), unsold (finalized or ended without bids), cancelled (closed and marked cancelled by an admin).",
+      "Where It Appears": "README, Auction Summary",
+      "Why It Matters": "Same vocabulary as the Admin Zone, so a report row matches what the admin saw.",
+      Example: "A finalized auction with a winning bid is sold.",
+    },
+    {
+      Order: 21,
+      Section: "Report Info",
+      Term: "Sales summary",
+      Definition:
+        "Rows at the end of Auction Summary: how many auctions are sold, unsold and cancelled, and the total sales (sum of the highest bid of every sold auction).",
+      "Where It Appears": "README, Auction Summary",
+      "Why It Matters": "Gives the headline result without a spreadsheet formula.",
+      Example: "3 sold with total sales 450.",
+    },
+    {
+      Order: 22,
+      Section: "Report Info",
+      Term: "Users and budget history",
+      Definition:
+        "One row per registered wallet: label and role (admin, bot or participant), available and held budget, total, whether it is disabled, and its last budget change from the BudgetChanged and UserBudgetSet events within the audit lookback.",
+      "Where It Appears": "README, Users and budget history",
+      "Why It Matters": "Shows who could bid and with how much, and who changed it.",
+      Example: "Total = available + held by leading bids.",
+    },
+    {
+      Order: 23,
+      Section: "Report Info",
+      Term: "Audit events",
+      Definition:
+        "The factory and recent campaign events shown in the Admin Zone Audit events card (budget resets, minimum edits, early closes, cancellations, hide changes, admin changes, payments), newest first, within the audit lookback.",
+      "Where It Appears": "README, Audit events",
+      "Why It Matters": "Evidence of every admin action and money movement.",
+      Example: "AuctionCancelled by an admin at block 12345.",
+    },
     ...analysis.dictionaryRows,
   ];
 
   return filterSheets(
     [
       { key: "readme", name: "README", rows: readmeRows },
-      { key: "summary", name: "Auction Summary", rows: summaryRows },
+      { key: "summary", name: "Auction Summary", rows: [...summaryRows, ...salesSummaryRows] },
+      { key: "users", name: "Users and budget history", rows: options.userHistoryRows || [] },
+      { key: "audit", name: "Audit events", rows: options.auditRows || [] },
       { key: "bids", name: "All Bids", rows: allBidRows },
       { key: "timeline", name: "Timeline", rows: timelineRows },
       { key: "payments", name: "Payment Review", rows: analysis.paymentRows },
@@ -1900,7 +2029,11 @@ export const buildReportPayload = (reports, errors, options = {}) => {
   const tables = buildCoreReportTables(reports, errors, generatedAt, options);
   const includeSection = (key) => options.sections?.[key] !== false;
   const selectedTables = {
-    ...(includeSection("summary") ? { summaryRows: tables.summaryRows } : {}),
+    ...(includeSection("summary")
+      ? { summaryRows: tables.summaryRows, salesSummaryRows: tables.salesSummaryRows }
+      : {}),
+    ...(includeSection("users") ? { userHistoryRows: options.userHistoryRows || [] } : {}),
+    ...(includeSection("audit") ? { auditRows: options.auditRows || [] } : {}),
     ...(includeSection("bids") ? { allBidRows: tables.allBidRows } : {}),
     ...(includeSection("timeline") ? { timelineRows: tables.timelineRows } : {}),
     ...(includeSection("activity")
@@ -1936,6 +2069,8 @@ export const buildReportPayload = (reports, errors, options = {}) => {
   let totalHighestBid = 0n;
   let bidRows = 0;
   const payloadOptions = { ...options };
+  delete payloadOptions.userHistoryRows;
+  delete payloadOptions.auditRows;
   delete payloadOptions.activityRows;
   delete payloadOptions.listStateRows;
   delete payloadOptions.experimentRows;
@@ -1964,6 +2099,7 @@ export const buildReportPayload = (reports, errors, options = {}) => {
       uniqueBidders: uniqueBidders.size,
       totalBidValueWei: totalBidValue.toString(),
       totalHighestBidWei: totalHighestBid.toString(),
+      sales: tables.salesSummary,
       pendingSellerPayments: tables.analysis.flagRows.filter(
         (row) => row.Flag === "Seller payment pending"
       ).length,
@@ -2069,6 +2205,9 @@ export const downloadHtmlReport = (payload) => {
   ${showSection("participants") ? renderHtmlTable("Participant Analysis", tables.analysis.participantRows, 40) : ""}
   ${showSection("payments") ? renderHtmlTable("Payment Review", tables.analysis.paymentRows, 40) : ""}
   ${showSection("summary") ? renderHtmlTable("Auction Summary", tables.summaryRows, 50) : ""}
+  ${showSection("summary") ? renderHtmlTable("Sales summary", tables.salesSummaryRows, 10) : ""}
+  ${showSection("users") ? renderHtmlTable("Users and budget history", tables.userHistoryRows, 500) : ""}
+  ${showSection("audit") ? renderHtmlTable("Audit events", tables.auditRows, 500) : ""}
   ${showSection("timeline") ? renderHtmlTable("Timeline", tables.timelineRows, 50) : ""}
   ${showSection("bids") ? renderHtmlTable("All Bids", tables.allBidRows, 50) : ""}
 </body>
