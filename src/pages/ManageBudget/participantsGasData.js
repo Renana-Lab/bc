@@ -29,7 +29,9 @@ export const saveManualAddresses = (list, storage) => saveSetting("manual", JSON
 export const addressesFromEvents = (events = []) => {
   const found = new Map(); // address -> latest block seen
   events.forEach((event) => {
-    const candidates = [event.actor, event.args?.user, event.args?.seller, event.args?.contributor];
+    // normalizeAuditEvent falls back to args.admin / args.by for the actor: that is an admin acting, not a participant.
+    const adminActor = [event.args?.by, event.args?.admin].map(lower).includes(lower(event.actor));
+    const candidates = [adminActor ? "" : event.actor, event.args?.user, event.args?.seller, event.args?.contributor, event.args?.bidder];
     candidates.map(lower).filter(isAddressLike).forEach((address) => {
       const block = Number(event.blockNumber) || 0;
       if (!found.has(address) || block > found.get(address)) found.set(address, block);

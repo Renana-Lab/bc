@@ -1,8 +1,9 @@
 // Network readers for the Participants gas card. Reads are batched (25 addresses per JSON-RPC batch) and go through
 // readOnlyExecute, i.e. through the shared RPC lanes/rate limiter, never one request per address.
-import { readOnlyBatchCall, readOnlyExecute, readOnlyCall } from "../../real_ethereum/readOnly";
+import { readOnlyBatchCall, readOnlyExecute } from "../../real_ethereum/readOnly";
 import { getActiveFactoryAddress } from "../../real_ethereum/marketConfig";
-import { getAuditSnapshot, readAllUsers } from "./adminAuditReader";
+import { getAuditSnapshot } from "./adminAuditReader";
+import { readUsersList } from "./usersChainReaders";
 
 const READ_OPTIONS = { preferInjected: false, allowInjectedFallback: false };
 const BATCH = 25;
@@ -57,8 +58,7 @@ export const readBudgets = async (addresses) => {
 // factory.allUsers + the shared audit snapshot (bidders / sellers with their latest block).
 export const readParticipantSources = async ({ force = false } = {}) => {
   const factoryAddress = getActiveFactoryAddress();
-  const options = { ...READ_OPTIONS, factoryAddress };
-  const users = await readAllUsers((index) => readOnlyCall(({ factory }) => factory.methods.allUsers(index), 1, options));
+  const users = await readUsersList({ factoryAddress });
   let audit = null;
   try { audit = await getAuditSnapshot(factoryAddress, { force }); } catch { audit = null; }
   return { users: users.addresses, events: audit?.events || [], latestBlock: audit?.latest ?? null, warning: users.warning };

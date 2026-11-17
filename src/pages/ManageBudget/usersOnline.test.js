@@ -22,6 +22,7 @@ jest.mock("./participantsGasReaders", () => ({ readNativeBalances: jest.fn(), re
 jest.mock("./adminTransfer", () => ({ sendNativeFromAdmin: jest.fn(), waitForReceipt: jest.fn(), readAdminBalance: jest.fn(), explorerTxUrl: (hash) => hash }));
 
 /* eslint-disable import/first */
+import { chainImplementations } from "./chainTestHelpers";
 import { readOnlyCall, readOnlyBatchCall } from "../../real_ethereum/readOnly";
 import { getAuditSnapshot } from "./adminAuditReader";
 import { fetchSweeps } from "../../real_ethereum/wallets/sweepClient.mjs";
@@ -38,18 +39,20 @@ const SWEEP_ONLY = a(3);
 const BASE = Date.parse("2026-01-01T12:00:00Z");
 const iso = (minutesAgo) => new Date(BASE - minutesAgo * 60_000).toISOString();
 
-const mockChain = ({ users = [USER] } = {}) =>
-  readOnlyCall.mockImplementation(async (fn) => {
-    const spec = fn({ factory: { methods: new Proxy({}, { get: (_, method) => (...args) => ({ method, args }) }) } });
-    if (spec.method === "allUsers") {
-      if (spec.args[0] < users.length) return users[spec.args[0]];
-      throw new Error("execution reverted");
-    }
-    if (spec.method === "getBudget") return "777";
-    if (spec.method === "heldBy") return "0";
-    if (spec.method === "disabled") return false;
+const mockChain = ({ users = [USER], rawBudget = "0", owner = "0xowner" } = {}) => {
+  const chain = chainImplementations((method, args) => {
+    if (method === "allUsersCount") return String(users.length);
+    if (method === "allUsers") { if (args[0] < users.length) return users[args[0]]; throw new Error("execution reverted"); }
+    if (method === "usersBudget") return rawBudget; // the raw mapping: 0 for unregistered users
+    if (method === "getBudget") return "777";
+    if (method === "heldBy") return "0";
+    if (method === "disabled" || method === "isAdmin") return false;
+    if (method === "owner") return owner;
     return null;
   });
+  readOnlyCall.mockImplementation(chain.call);
+  readOnlyBatchCall.mockImplementation(chain.batch);
+};
 
 const created = (seller) => ({ name: "AuctionCreatedDetailed", actor: seller.toLowerCase(), blockNumber: 5, args: { seller, campaignAddress: a(9) } });
 const mockAudit = (events = []) => getAuditSnapshot.mockResolvedValue({ events, latest: 10, lookback: 1000, failedRanges: [] });
@@ -103,6 +106,100 @@ describe("Users and budgets: every participant", () => {
     openCard();
     await waitFor(() => expect(rowCount()).toBe(3));
     expect(screen.getByText("Online now: 3")).toBeInTheDocument();
+  });
+});
+
+describe("progressive first paint", () => {
+  test("allUsers rows appear before the audit snapshot resolves, with getBudget (not usersBudget 0)", async () => {
+    getAuditSnapshot.mockReturnValue(new Promise(() => {})); // never resolves
+    render(<UsersBudgetsCard />);
+    openCard();
+    const row = (await screen.findByTitle(USER)).closest("tr");
+    expect(within(row).getAllByText("777").length).toBeGreaterThan(0);
+    expect(within(row).getByText("loading...")).toBeInTheDocument();
+    expect(readOnlyBatchCall.mock.calls.length).toBeGreaterThan(0);
+  });
+
+  test("the card loads on mount while collapsed, so opening it is instant", async () => {
+    render(<UsersBudgetsCard />);
+    await waitFor(() => expect(getAuditSnapshot).toHaveBeenCalled());
+    await waitFor(() => expect(fetchSweeps).toHaveBeenCalled());
+    openCard();
+    expect(await screen.findByTitle(USER)).toBeInTheDocument();
+  });
+
+  test("a seller and a sweeps-only wallet are merged in later; a never-resolving sweeps call does not block rows", async () => {
+    let resolveAudit;
+    getAuditSnapshot.mockReturnValue(new Promise((resolve) => { resolveAudit = resolve; }));
+    fetchSweeps.mockReturnValue(new Promise(() => {}));
+    render(<UsersBudgetsCard />);
+    openCard();
+    await screen.findByTitle(USER);
+    expect(screen.queryByTitle(SELLER)).toBeNull();
+    await act(async () => { resolveAudit({ events: [created(SELLER)], latest: 10, lookback: 1000, failedRanges: [] }); });
+    const seller = (await screen.findByTitle(SELLER)).closest("tr");
+    expect(within(seller).getAllByText("777").length).toBeGreaterThan(0);
+    expect(rowCount()).toBe(2);
+  });
+
+  test("usersBudget is never read: the batch uses getBudget only", async () => {
+    mockChain({ rawBudget: "0" });
+    render(<UsersBudgetsCard />);
+    openCard();
+    await screen.findByTitle(USER);
+    const methods = [];
+    readOnlyBatchCall.mock.calls.forEach(([build]) => {
+      const factory = { methods: new Proxy({}, { get: (_, method) => () => ({ call: { request: () => { methods.push(method); return {}; } } }) }) };
+      build({ factory }).forEach((item) => item.request(() => {}));
+    });
+    expect(methods).toContain("getBudget");
+    expect(methods).not.toContain("usersBudget");
+  });
+
+  test("allUsersCount is used and allUsers is read in one batch (no 10-wide probe)", async () => {
+    mockChain({ users: [USER, SELLER] });
+    render(<UsersBudgetsCard />);
+    openCard();
+    await waitFor(() => expect(rowCount()).toBe(2));
+    const singleMethods = readOnlyCall.mock.calls.map(([fn]) => fn({ factory: { methods: new Proxy({}, { get: (_, m) => () => ({ method: m }) }) } }).method);
+    expect(singleMethods).toEqual(["allUsersCount"]);
+  });
+});
+
+describe("admin wallets", () => {
+  const ADMIN = a(4);
+  const byEvent = (name, by) => ({ name, actor: by.toLowerCase(), blockNumber: 6, args: { by, campaign: a(9) } });
+
+  test("an event whose actor is only args.by adds no row", async () => {
+    mockAudit([byEvent("AuctionCancelled", ADMIN), byEvent("MinimumChanged", ADMIN)]);
+    render(<UsersBudgetsCard canWrite actions={{ setUserBudget: jest.fn(), setDisabled: jest.fn() }} />);
+    openCard();
+    await waitFor(() => expect(screen.getByTitle(USER)).toBeInTheDocument());
+    expect(screen.queryByTitle(ADMIN)).toBeNull();
+    expect(rowCount()).toBe(1);
+  });
+
+  test("a seller who is also an admin keeps the row and gets an admin chip", async () => {
+    mockAudit([created(SELLER), byEvent("AuctionCancelled", SELLER)]);
+    render(<UsersBudgetsCard canWrite actions={{ setUserBudget: jest.fn(), setDisabled: jest.fn() }} />);
+    openCard();
+    const row = (await screen.findByTitle(SELLER)).closest("tr");
+    expect(within(row).getByText("admin")).toBeInTheDocument();
+    expect(within(row).getByRole("button", { name: "Set budget" })).toBeEnabled();
+    expect(within(screen.getByTitle(USER).closest("tr")).queryByText("admin")).toBeNull();
+  });
+
+  test("Online now ignores admin-only addresses", async () => {
+    jest.useFakeTimers("modern");
+    jest.setSystemTime(BASE);
+    mockChain({ owner: ADMIN });
+    mockSweeps([{ address: ADMIN, lastSeen: iso(1) }, { address: USER, lastSeen: iso(1) }]);
+    render(<UsersBudgetsCard canWrite actions={{ setUserBudget: jest.fn(), setDisabled: jest.fn() }} />);
+    openCard();
+    const row = (await screen.findByTitle(ADMIN)).closest("tr");
+    expect(within(row).getByText("admin")).toBeInTheDocument();
+    expect(within(row).getByRole("button", { name: "Set budget" })).toBeDisabled();
+    expect(screen.getByText("Online now: 1")).toBeInTheDocument();
   });
 });
 

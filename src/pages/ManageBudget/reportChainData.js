@@ -3,7 +3,7 @@
 import { readOnlyCall } from "../../real_ethereum/readOnly";
 import { getActiveFactoryAddress } from "../../real_ethereum/marketConfig";
 import { readCancelledSet } from "../../real_ethereum/adminChain";
-import { getAuditSnapshot, readAllUsers } from "./adminAuditReader";
+import { getAuditSnapshot, readFactoryUsers } from "./adminAuditReader";
 import { mapBotConfig } from "./adminCardData";
 import { getAdminAddresses } from "./adminGate";
 import { LOCAL_BOTS_KEY } from "../../telemetry/botPresence";
@@ -58,7 +58,10 @@ export const loadReportChainData = async ({
 
   if (wantUsers) {
     try {
-      const users = await readAllUsers((index) => api.call(({ factory }) => factory.methods.allUsers(index), 1, options));
+      const users = await readFactoryUsers({
+        readCount: () => api.call(({ factory }) => factory.methods.allUsersCount(), 1, options),
+        readIndex: (index) => api.call(({ factory }) => factory.methods.allUsers(index), 1, options),
+      });
       if (users.warning) result.warnings.push(users.warning);
       const held = {};
       const budgets = {};

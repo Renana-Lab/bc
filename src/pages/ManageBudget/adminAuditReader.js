@@ -177,7 +177,8 @@ export const getAuditSnapshot = (factoryAddress, { force = false, reader = readA
 
 // ---- allUsers --------------------------------------------------------------------------------
 
-// allUsers is a public array with no length getter. readIndex(i) resolves to an address or throws.
+// Legacy probe: allUsers is a public array, readIndex(i) resolves to an address or throws. Used only as the fallback of
+// readFactoryUsers when allUsersCount() is unavailable (older factories).
 // Only an error whose message says "revert" (index out of range) means "end of list". Any other error
 // (RPC failure, timeout, anything unfamiliar) is NOT the end: the list stops there as incomplete with a
 // warning so the UI never silently truncates.
@@ -243,4 +244,44 @@ export const createChainLogReader = (factoryAddress) => {
         options
       ),
   };
+};
+
+export const USER_BATCH = 25;
+
+// Preferred reader: allUsersCount() first, then allUsers(0..count-1) in JSON-RPC batches of 25 (readBatch(indexes) resolves
+// to [{status, value|reason}], like readOnlyBatchCall). If the count cannot be read it falls back to the probe above
+// (revert = end of list, any other error = incomplete + warning). Without readBatch the indexes are read one by one.
+export const readFactoryUsers = async ({ readCount, readIndex, readBatch, batch = USER_BATCH, cap = USER_READ_CAP }) => {
+  let count = null;
+  try {
+    const raw = await readCount();
+    const parsed = Number(raw);
+    if (raw !== null && raw !== undefined && raw !== "" && Number.isInteger(parsed) && parsed >= 0) count = parsed;
+  } catch (_) {
+    count = null;
+  }
+  if (count === null) return readAllUsers(readIndex);
+  const limit = Math.min(count, cap);
+  const addresses = [];
+  for (let start = 0; start < limit; start += batch) {
+    const indexes = Array.from({ length: Math.min(batch, limit - start) }, (_, offset) => start + offset);
+    let results;
+    try {
+      results = readBatch
+        ? await readBatch(indexes)
+        : await Promise.all(indexes.map((index) => readIndex(index).then((value) => ({ status: "fulfilled", value }), (reason) => ({ status: "rejected", reason }))));
+    } catch (error) {
+      results = indexes.map(() => ({ status: "rejected", reason: error }));
+    }
+    for (let offset = 0; offset < indexes.length; offset += 1) {
+      const result = results[offset];
+      if (result?.status !== "fulfilled") {
+        const reason = result?.reason;
+        return { addresses, complete: false, warning: `Error while reading user #${indexes[offset]}: the list may be incomplete (${reason?.message || reason || "no result"}).` };
+      }
+      addresses.push(result.value);
+    }
+  }
+  if (count > cap) return { addresses, complete: false, warning: `Stopped at the ${cap}-user read cap: the list may be incomplete.` };
+  return { addresses, complete: true, warning: "" };
 };
