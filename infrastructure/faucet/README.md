@@ -129,6 +129,9 @@ Every `/admin/*` route (`state`, `status`, `max-payouts`, `sweeps`, `sweep-setti
 * **Password (fallback).** Unchanged: `x-admin-password` header or `password` in the body, scrypt hash in Secrets Manager. Used when no `x-admin-proof` is sent, or when `FACTORY_ADDRESS` is empty (wallet auth disabled).
 * Proof failures count in the same `admf:` failure limit as wrong passwords (5 per caller, then 429). Logs: `admin_auth { method: "wallet"|"password", address? }`; `admin_state_changed` and `admin_max_payouts_changed` include `admin` (the wallet address) for wallet auth.
   The proof, signature and password are never logged.
+* **`--origins` must include the https Amplify origin of the app** (for example `https://<branch>.<app-id>.amplifyapp.com`): it feeds both the CORS rules and `ALLOWED_ORIGINS`, and a wallet proof is only accepted when it was signed for one of these `https://` origins (a `http://localhost` origin cannot be used for wallet auth).
+* **`--region` must be the stack's region** (`us-east-2` for `test-bc-faucet`); deploying with another region creates a second stack instead of updating the existing one.
+* **Redeploy the faucet right after merging.** Until then the Function URL CORS rules do not allow the `x-admin-proof` header, so the browser reports the proof request as a network error; the Admin Zone then treats the proof as refused and falls back to the password.
 * CORS `AllowHeaders` include `x-admin-proof`. Deploying this needs the new option `--factory-address` (template change: new `FACTORY_ADDRESS` / `ALLOWED_ORIGINS` env vars and CORS header).
 
 ### Payout limit (admins)

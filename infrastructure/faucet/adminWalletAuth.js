@@ -22,11 +22,6 @@ const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 
 const fail = (reason) => ({ ok: false, reason });
 
-const field = (message, label) => {
-  const match = String(message).match(new RegExp(`^${label}: (.+)$`, "m"));
-  return match ? match[1].trim() : "";
-};
-
 const decodeProof = (header) => {
   if (typeof header !== "string" || !header || header.length > Math.ceil((MAX_PROOF_BYTES * 4) / 3) + 4) return null;
   if (!/^[A-Za-z0-9_-]+={0,2}$/.test(header)) return null;
@@ -46,20 +41,34 @@ const createAdminWalletAuth = ({ chain, factoryAddress, chainId, allowedOrigins 
   const origins = new Set((allowedOrigins || []).map((origin) => String(origin).trim().replace(/\/+$/, "")));
   const roleCache = new Map(); // lowercased address -> { value, until }
 
+  // Strict structure: exactly the 11 lines buildSiweMessage (src/real_ethereum/siwe.mjs) produces for the Admin Zone gate,
+  // then a byte-for-byte comparison with the message rebuilt from the parsed fields. Nothing extra, duplicated or reordered passes.
+  const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
   const checkMessage = (address, message) => {
     const lines = String(message).split("\n");
-    const match = /^(\S+) wants you to sign in with your Ethereum account:$/.exec(lines[0] || "");
-    if (!match) return "bad-message";
-    const origin = `https://${match[1]}`;
+    if (lines.length !== 11) return "bad-message";
+    const head = /^([A-Za-z0-9.-]+(?::[0-9]+)?) wants you to sign in with your Ethereum account:$/.exec(lines[0]);
+    const uri = /^URI: (\S+)$/.exec(lines[5]);
+    const chain = /^Chain ID: (\d+)$/.exec(lines[7]);
+    const nonce = /^Nonce: ([A-Za-z0-9]{8,})$/.exec(lines[8]);
+    const issued = /^Issued At: (\S+)$/.exec(lines[9]);
+    const expires = /^Expiration Time: (\S+)$/.exec(lines[10]);
+    if (!head || !uri || !chain || !nonce || !issued || !expires) return "bad-message";
+    if (lines[1].toLowerCase() !== address.toLowerCase() || lines[2] !== "" || lines[3] !== ADMIN_GATE_STATEMENT || lines[4] !== "" || lines[6] !== "Version: 1") return "bad-message";
+    if (!ISO.test(issued[1]) || !ISO.test(expires[1])) return "bad-message";
+    const rebuilt = [
+      `${head[1]} wants you to sign in with your Ethereum account:`, lines[1], "", ADMIN_GATE_STATEMENT, "",
+      `URI: ${uri[1]}`, "Version: 1", `Chain ID: ${chain[1]}`, `Nonce: ${nonce[1]}`, `Issued At: ${issued[1]}`, `Expiration Time: ${expires[1]}`,
+    ].join("\n");
+    if (rebuilt !== message) return "bad-message";
+    const origin = `https://${head[1]}`;
     if (!origins.has(origin)) return "wrong-origin";
-    if (field(message, "URI") !== origin) return "wrong-uri";
-    if (String(lines[1] ?? "").toLowerCase() !== address.toLowerCase()) return "bad-message";
-    if (!String(message).includes(ADMIN_GATE_STATEMENT)) return "bad-message";
-    if (field(message, "Chain ID") !== String(chainId)) return "wrong-chain";
-    const issuedAt = Date.parse(field(message, "Issued At"));
-    const expiresAt = Date.parse(field(message, "Expiration Time"));
-    const t = now();
+    if (uri[1] !== origin) return "wrong-uri";
+    if (chain[1] !== String(chainId)) return "wrong-chain";
+    const issuedAt = Date.parse(issued[1]);
+    const expiresAt = Date.parse(expires[1]);
     if (!Number.isFinite(issuedAt) || !Number.isFinite(expiresAt)) return "bad-message";
+    const t = now();
     if (issuedAt > t + SKEW_MS) return "future";
     if (t - issuedAt > MAX_AGE_MS) return "expired";
     if (expiresAt <= t) return "expired";

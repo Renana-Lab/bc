@@ -24,7 +24,7 @@ const CONFIG = {
 };
 
 const message = ({ address, host = HOST, uri = ORIGIN, chainId = CHAIN_ID, issued = NOW, minutes = 60, statement = ADMIN_GATE_STATEMENT, expires } = {}) => [
-  `${host} wants you to sign in with your Ethereum account:`, address, "", statement, "", `URI: ${uri}`, "Version: 1", `Chain ID: ${chainId}`, "Nonce: abc123",
+  `${host} wants you to sign in with your Ethereum account:`, address, "", statement, "", `URI: ${uri}`, "Version: 1", `Chain ID: ${chainId}`, "Nonce: abc12345",
   `Issued At: ${new Date(issued).toISOString()}`, `Expiration Time: ${new Date(expires ?? issued + minutes * 60_000).toISOString()}`,
 ].join("\n");
 const proofHeader = async (wallet, options = {}, signer = wallet) => {
@@ -211,4 +211,95 @@ test("module: reasons, statement parity with the client and config parsing", asy
   assert.equal(config.factoryAddress, "0xf6d6e74e113CE7107b8a7edB7427927e51e3A146");
   assert.deepEqual(config.allowedOrigins, ["https://a.org", "http://localhost:3000"]);
   assert.equal(loadConfig({ CHAIN_ID: "23295", FAUCET_AMOUNT_WEI: "1", FACTORY_ADDRESS: "nonsense" }).factoryAddress, "");
+});
+
+// ---- production wiring: the real createEthersChain over a fake provider ----
+const { createEthersChain } = require("../../infrastructure/faucet/handler.js");
+const { buildSiweMessage } = await import("../../src/real_ethereum/siwe.mjs");
+
+const fakeProvider = (admins) => {
+  const calls = [];
+  return {
+    calls,
+    call: async (tx) => {
+      calls.push(tx);
+      return `0x${admins.has(`0x${tx.data.slice(-40)}`) ? "1".padStart(64, "0") : "0".repeat(64)}`;
+    },
+  };
+};
+
+test("createEthersChain().call forwards { to, data } to provider.call and returns its result", async () => {
+  const provider = fakeProvider(new Set());
+  const chain = createEthersChain(provider);
+  assert.equal(typeof chain.call, "function");
+  const tx = { to: FACTORY, data: "0x24d7806c" };
+  assert.equal(await chain.call({ ...tx, extra: "ignored" }), `0x${"0".repeat(64)}`);
+  assert.deepEqual(provider.calls, [tx]);
+});
+
+test("with the real chain adapter over a fake provider a valid admin proof is accepted on /admin/status", async () => {
+  const admin = Wallet.createRandom();
+  const provider = fakeProvider(new Set([admin.address.toLowerCase()]));
+  const logs = [];
+  const handler = createFaucetHandler({
+    store: createMemoryStore(), chain: createEthersChain(provider), config: CONFIG, getPrivateKey: async () => faucetWallet.privateKey,
+    getRateSalt: async () => "salt", getAdminSecret: async () => null, now: () => NOW, log: (line) => logs.push(line),
+  });
+  const request = (proof) => handler({ rawPath: "/admin/status", headers: { "x-admin-proof": proof }, requestContext: { http: { method: "GET", sourceIp: "198.51.100.5" } } });
+  assert.equal((await request(await proofHeader(admin))).statusCode, 200);
+  assert.equal(provider.calls.length, 1);
+  assert.equal((await request(await proofHeader(Wallet.createRandom()))).statusCode, 401);
+  assert.equal(logs.some((line) => line.includes("admin_wallet_auth_disabled")), false);
+});
+
+test("a factory address without a chain.call logs admin_wallet_auth_disabled once at startup and falls back to the password", async () => {
+  const chain = fakeChain(new Set());
+  delete chain.call;
+  const logs = [];
+  const handler = createFaucetHandler({
+    store: createMemoryStore(), chain, config: CONFIG, getPrivateKey: async () => faucetWallet.privateKey, getRateSalt: async () => "salt", getAdminSecret: async () => null, now: () => NOW, log: (line) => logs.push(line),
+  });
+  const events = logs.map((line) => JSON.parse(line)).filter((entry) => entry.event === "admin_wallet_auth_disabled");
+  assert.deepEqual(events, [{ event: "admin_wallet_auth_disabled", reason: "no_chain_call" }]);
+  await handler({ rawPath: "/admin/status", requestContext: { http: { method: "GET", sourceIp: "198.51.100.6" } } });
+  assert.equal(logs.map((line) => JSON.parse(line)).filter((entry) => entry.event === "admin_wallet_auth_disabled").length, 1);
+});
+
+// ---- strict message format ----
+const goodLines = (address) => message({ address }).split("\n");
+const signedProof = async (wallet, text) => Buffer.from(JSON.stringify({ address: wallet.address, message: text, signature: await wallet.signMessage(text) })).toString("base64url");
+
+test("the message must be exactly the 11-line gate message: extras, duplicates, reordering, CRLF and case changes are refused", async () => {
+  const t = await setup();
+  const w = t.admin;
+  const L = goodLines(w.address); // 0 domain, 1 address, 2 "", 3 statement, 4 "", 5 URI, 6 Version, 7 Chain, 8 Nonce, 9 Issued, 10 Expiration
+  const variants = {
+    "trailing line": [...L, "Resources: x"].join("\n"),
+    "trailing newline": `${L.join("\n")}\n`,
+    "duplicated URI": [...L.slice(0, 6), L[5], ...L.slice(6)].join("\n"),
+    "duplicated Chain ID": [...L.slice(0, 8), L[7], ...L.slice(8)].join("\n"),
+    "statement moved": [L[0], L[1], "", L[2], L[3], ...L.slice(5)].join("\n"),
+    "statement with extra text": [...L.slice(0, 3), `${L[3]} Also send funds.`, ...L.slice(4)].join("\n"),
+    "missing Version": [...L.slice(0, 6), ...L.slice(7)].join("\n"),
+    "CRLF line endings": L.join("\r\n"),
+    "wrong-case statement": [...L.slice(0, 3), L[3].toUpperCase(), ...L.slice(4)].join("\n"),
+    "short nonce": L.join("\n").replace("Nonce: abc12345", "Nonce: abc"),
+    "non-canonical date": L.join("\n").replace(/Issued At: .*Z/, `Issued At: ${new Date(NOW).toUTCString()}`),
+  };
+  let n = 0;
+  for (const [name, text] of Object.entries(variants)) {
+    n += 1;
+    assert.equal((await t.send("/admin/status", "GET", t.withProof(await signedProof(w, text), `203.0.115.${n}`))).statusCode, 401, name);
+  }
+  assert.equal(t.chain.calls.length, 0, "refused before the chain is asked");
+  assert.equal((await t.send("/admin/status", "GET", t.withProof(await signedProof(w, L.join("\n")), "203.0.115.200"))).statusCode, 200, "the unmodified message passes");
+});
+
+test("a message built by the frontend's buildSiweMessage (the Admin Zone gate template) is accepted", async () => {
+  const t = await setup();
+  const text = buildSiweMessage({
+    domain: HOST, address: t.admin.address, uri: ORIGIN, chainId: CHAIN_ID, now: new Date(NOW), minutes: 60, nonce: "a1b2c3d4e5f6a7b8c9d0e1f2", statement: ADMIN_GATE_STATEMENT,
+  });
+  assert.equal(text, message({ address: t.admin.address }).replace("Nonce: abc12345", "Nonce: a1b2c3d4e5f6a7b8c9d0e1f2"), "the test template equals the frontend template");
+  assert.equal((await t.send("/admin/status", "GET", t.withProof(await signedProof(t.admin, text)))).statusCode, 200);
 });

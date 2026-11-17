@@ -39,7 +39,10 @@ export const isUnauthorizedError = (error) => error?.code === "unauthorized" || 
 
 // Wallet proofs the faucet refused (401, 503 or "not supported" on an older faucet): not tried again until a new proof is signed.
 const refusedProofs = new Set();
-const isRefusal = (error) => error?.code === "unauthorized" || error?.code === "unavailable";
+// A network-type failure (FaucetError "network", or the TypeError fetch throws) counts as a refusal too: until the faucet is
+// redeployed its CORS rules reject the x-admin-proof header, which the browser reports as a plain network error.
+const isNetworkError = (error) => error?.code === "network" || error instanceof TypeError;
+const isRefusal = (error) => error?.code === "unauthorized" || error?.code === "unavailable" || isNetworkError(error);
 
 // { password, hasPassword, usesWallet, hasCredential, remember(pw), forget(), run(typed, action) }
 //   run(typedOrEmpty, action) calls action({ password }) with the typed password, else action({ proof }) with the signed-in admin

@@ -237,3 +237,75 @@ describe("Auto-return controls", () => {
     expect(await screen.findByLabelText("Auto-return admin password")).toBeInTheDocument();
   });
 });
+
+describe("rollout: a faucet that is not redeployed yet rejects x-admin-proof in CORS (network error)", () => {
+  const networkError = () => Object.assign(new Error("Could not reach the test-funds service."), { code: "network" });
+  const proofOnlyFails = (error) => jest.fn(async ({ proof }) => { if (proof) throw error; return "ok"; });
+
+  test.each([
+    ["FaucetError network", networkError],
+    ["fetch TypeError", () => new TypeError("Failed to fetch")],
+  ])("%s: the proof is treated as refused and the password field appears", async (name, make) => {
+    await signIn();
+    const { result } = renderHook(() => useFaucetSessionPassword());
+    expect(result.current.hasCredential).toBe(true);
+    const action = proofOnlyFails(make());
+    await act(async () => { await expect(result.current.run("", action)).rejects.toThrow(/did not accept your admin wallet/); });
+    expect(result.current.usesWallet).toBe(false);
+    expect(result.current.hasCredential).toBe(false);
+    expect(action).toHaveBeenCalledTimes(1);
+  });
+
+  test("with a session password the password request is made right away", async () => {
+    await signIn();
+    setSessionPassword("saved");
+    const { result } = renderHook(() => useFaucetSessionPassword());
+    const action = proofOnlyFails(networkError());
+    await act(async () => { expect(await result.current.run("", action)).toBe("ok"); });
+    expect(action.mock.calls.map(([auth]) => Object.keys(auth)[0])).toEqual(["proof", "password"]);
+    expect(action).toHaveBeenLastCalledWith({ password: "saved" });
+  });
+
+  test("a later, freshly signed proof is tried again", async () => {
+    const first = await signIn();
+    const { result } = renderHook(() => useFaucetSessionPassword());
+    const action = proofOnlyFails(networkError());
+    await act(async () => { await expect(result.current.run("", action)).rejects.toThrow(); });
+    await act(async () => { await expect(result.current.run("", action)).rejects.toThrow(/Enter the faucet admin password/); });
+    expect(action).toHaveBeenCalledTimes(1); // the refused proof is not sent again
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const second = await signIn();
+    expect(second.signature).not.toBe(first.signature);
+    await act(async () => { await expect(result.current.run("", action)).rejects.toThrow(); });
+    expect(action).toHaveBeenCalledTimes(2);
+    expect(action.mock.calls[1][0].proof).toBe(getAdminProofHeader(admin.address));
+  });
+
+  test("Faucet funds auto-load on mount: the network error shows the password field instead of a stuck error", async () => {
+    await signIn();
+    const deps = {
+      readBalances: jest.fn(async () => ({})), fetchPublicStatus: jest.fn(async () => ({ open: true })), setState: jest.fn(), setMax: jest.fn(),
+      fetchStatus: jest.fn(async ({ proof, password }) => { if (proof) throw networkError(); return { payoutsUsed: 0, maxPayouts: 5, faucetAddress: FAUCET, payoutAmount: "1", open: true, password }; }),
+    };
+    render(<FaucetFundsCardBody faucetUrl={URL_BASE} envAddress={FAUCET} adminAccount={admin.address} showStateSwitch deps={deps} />);
+    const field = await screen.findByLabelText("Faucet admin password");
+    expect(deps.fetchStatus).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("wallet-auth-note")).toBeNull();
+    fireEvent.change(field, { target: { value: "pw" } });
+    fireEvent.click(screen.getByRole("button", { name: "Load status" }));
+    await waitFor(() => expect(deps.fetchStatus).toHaveBeenLastCalledWith(expect.objectContaining({ password: "pw" })));
+    await waitFor(() => expect(screen.getByTestId("faucet-payouts")).toBeInTheDocument());
+  });
+
+  test("with a session password the auto-load falls back to it and shows the status", async () => {
+    await signIn();
+    setSessionPassword("saved");
+    const deps = {
+      readBalances: jest.fn(async () => ({})), fetchPublicStatus: jest.fn(async () => ({ open: true })), setState: jest.fn(), setMax: jest.fn(),
+      fetchStatus: jest.fn(async ({ proof }) => { if (proof) throw new TypeError("Failed to fetch"); return { payoutsUsed: 2, maxPayouts: 5, faucetAddress: FAUCET, payoutAmount: "1", open: true }; }),
+    };
+    render(<FaucetFundsCardBody faucetUrl={URL_BASE} envAddress={FAUCET} adminAccount={admin.address} showStateSwitch deps={deps} />);
+    expect(await screen.findByTestId("faucet-payouts")).toHaveTextContent("2 of 5 payouts used");
+    expect(deps.fetchStatus).toHaveBeenLastCalledWith(expect.objectContaining({ password: "saved" }));
+  });
+});

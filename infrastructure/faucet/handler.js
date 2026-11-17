@@ -130,6 +130,8 @@ const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, getAdminSecret
     return run;
   };
   const event = (name, fields = {}) => log(JSON.stringify({ event: name, ...fields }));
+  // A configured factory address with no way to call the chain would silently leave wallet auth off: say so once.
+  if (config.factoryAddress && !walletAuth.enabled) event("admin_wallet_auth_disabled", { reason: "no_chain_call" });
   // Secret salt (Secrets Manager); a random per-process salt if none is available. Never logged.
   let salt = null;
   const callerKey = async (ip, windowId) => {
@@ -813,6 +815,8 @@ const createEthersChain = (provider) => ({
   sendRaw: (raw) => provider.broadcastTransaction(raw),
   getReceipt: (hash) => provider.getTransactionReceipt(hash),
   getTransaction: (hash) => provider.getTransaction(hash),
+  // eth_call (read-only): used by admin wallet auth for factory.isAdmin(address).
+  call: ({ to, data }) => provider.call({ to, data }),
 });
 
 // ---- Lambda entry point (real AWS clients, created lazily so tests never load the SDK) ----
