@@ -27,7 +27,11 @@ jest.mock("../../real_ethereum/walletAccess", () => ({
 jest.mock("../../telemetry/presenceClient", () => ({ getLivePresence: jest.fn(), isPresenceConfigured: () => false }));
 
 // eslint-disable-next-line import/first
-import { AdminOpsCards, AdminsCard, AuctionControlsCard, MarketSettingsCard } from "./AdminOpsCards";
+import { MemoryRouter } from "react-router-dom";
+// eslint-disable-next-line import/first
+import { AdminOpsCards, AdminsCard, AuctionControlsCard, MarketSettingsCard, UsersBudgetsCard } from "./AdminOpsCards";
+// eslint-disable-next-line import/first
+import { readOnlyCall } from "../../real_ethereum/readOnly";
 
 const A1 = "0x1111111111111111111111111111111111111111";
 const A2 = "0x2222222222222222222222222222222222222222";
@@ -41,16 +45,21 @@ const summary = ({ min = 10, bidder = ZERO, end = NOW + 600, closed = false } = 
 describe("pure admin row logic", () => {
   test("status and available actions mirror the contract preconditions", () => {
     const live = mapAuctionAdminRow({ address: A1, summary: summary() });
-    expect(getAdminActionAvailability(live, NOW)).toMatchObject({ status: "live", editMinimum: true, closeNow: true, cancel: true });
+    expect(getAdminActionAvailability(live, NOW)).toMatchObject({ status: "active", editMinimum: true, closeNow: true, cancel: true });
 
     const bid = mapAuctionAdminRow({ address: A1, summary: summary({ bidder: A2 }) });
     expect(getAdminActionAvailability(bid, NOW)).toMatchObject({ editMinimum: false, closeNow: true });
 
     const ended = mapAuctionAdminRow({ address: A1, summary: summary({ end: NOW - 1 }) });
-    expect(getAdminActionAvailability(ended, NOW)).toMatchObject({ status: "ended", editMinimum: false, closeNow: false, cancel: true });
+    // ended without bids counts as unsold; ended with bids waits for finalization
+    expect(getAdminActionAvailability(ended, NOW)).toMatchObject({ status: "unsold", editMinimum: false, closeNow: false, cancel: true });
+    const endedWithBid = mapAuctionAdminRow({ address: A1, summary: summary({ end: NOW - 1, bidder: A2 }) });
+    expect(getAdminActionAvailability(endedWithBid, NOW)).toMatchObject({ status: "ended", closeNow: false, cancel: true });
 
-    const finalized = mapAuctionAdminRow({ address: A1, summary: summary({ end: NOW - 1, closed: true }) });
-    expect(getAdminActionAvailability(finalized, NOW)).toMatchObject({ status: "finalized", cancel: true, cancelHidesOnly: true });
+    const sold = mapAuctionAdminRow({ address: A1, summary: summary({ end: NOW - 1, closed: true, bidder: A2 }) });
+    expect(getAdminActionAvailability(sold, NOW)).toMatchObject({ status: "sold", cancel: true, cancelHidesOnly: true });
+    const unsold = mapAuctionAdminRow({ address: A1, summary: summary({ end: NOW - 1, closed: true }) });
+    expect(getAdminActionAvailability(unsold, NOW)).toMatchObject({ status: "unsold", cancelHidesOnly: true });
 
     const cancelled = mapAuctionAdminRow({ address: A1, summary: summary({ closed: true }), cancelled: true });
     expect(getAuctionAdminStatus(cancelled, NOW)).toBe("cancelled");
@@ -130,22 +139,30 @@ const openCard = async (title) => {
   fireEvent.click(screen.getByRole("button", { name: new RegExp(`Expand ${title}`, "i") }));
 };
 
+const renderControls = ({ canWrite, actions }) =>
+  render(
+    <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <AuctionControlsCard canWrite={canWrite} actions={actions} reader={rowsReader()} />
+    </MemoryRouter>
+  );
+
 describe("Auction controls card", () => {
   test("non-admin: every write button is disabled and a read-only notice shows", async () => {
     const actions = makeActions();
-    render(<AuctionControlsCard canWrite={false} actions={actions} reader={rowsReader()} />);
+    renderControls({ canWrite: false, actions });
     await openCard("Auction controls");
     await waitFor(() => expect(screen.getByTestId(`auction-row-${A1}`)).toBeInTheDocument());
     expect(screen.getByTestId("admin-write-disabled")).toBeInTheDocument();
     within(screen.getByTestId(`auction-row-${A1}`))
       .getAllByRole("button")
+      .filter((button) => button.textContent !== "Record") // viewing the record is read-only
       .forEach((button) => expect(button).toBeDisabled());
     expect(actions.closeNow).not.toHaveBeenCalled();
   });
 
   test("admin: edit minimum, close now, hide/unhide and cancel with a note call the contract actions", async () => {
     const actions = makeActions();
-    render(<AuctionControlsCard canWrite actions={actions} reader={rowsReader()} />);
+    renderControls({ canWrite: true, actions });
     await openCard("Auction controls");
     const row1 = await screen.findByTestId(`auction-row-${A1}`);
 
@@ -171,15 +188,16 @@ describe("Auction controls card", () => {
     await screen.findByText("Unhide: done");
 
     fireEvent.click(within(row2).getByRole("button", { name: "Cancel" }));
-    fireEvent.change(screen.getByLabelText("Note"), { target: { value: "wrong data" } });
-    fireEvent.click(screen.getByRole("button", { name: "Confirm cancel" }));
+    expect(await screen.findByText("Cancel auction?")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Note (optional)"), { target: { value: "wrong data" } });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel auction" }));
     await waitFor(() => expect(actions.cancelAuction).toHaveBeenCalledWith(A2, "wrong data"));
   });
 
   test("a failed transaction is reported, not swallowed", async () => {
     const actions = makeActions();
     actions.closeNow.mockRejectedValueOnce(new Error("Only admin"));
-    render(<AuctionControlsCard canWrite actions={actions} reader={rowsReader()} />);
+    renderControls({ canWrite: true, actions });
     await openCard("Auction controls");
     const row1 = await screen.findByTestId(`auction-row-${A1}`);
     fireEvent.click(within(row1).getByRole("button", { name: "Close now" }));
@@ -203,9 +221,14 @@ describe("Admins and settings cards", () => {
   });
 
   test("AdminOpsCards shows the Admins card only to the owner", () => {
-    const { rerender } = render(<AdminOpsCards access={{ canWrite: true, isOwner: false }} />);
+    const ui = (isOwner) => (
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <AdminOpsCards access={{ canWrite: true, isOwner }} />
+      </MemoryRouter>
+    );
+    const { rerender } = render(ui(false));
     expect(screen.queryByText("Admins")).toBeNull();
-    rerender(<AdminOpsCards access={{ canWrite: true, isOwner: true }} />);
+    rerender(ui(true));
     expect(screen.getByText("Admins")).toBeInTheDocument();
   });
 
@@ -221,5 +244,36 @@ describe("Admins and settings cards", () => {
     await waitFor(() => expect(screen.getByRole("checkbox")).toBeEnabled());
     fireEvent.click(screen.getByRole("checkbox"));
     await waitFor(() => expect(actions.setAllowSellerEdit).toHaveBeenCalledWith(false));
+  });
+});
+
+describe("Users and budgets confirmations", () => {
+  const U1 = "0x5555555555555555555555555555555555555555";
+  const mockUsers = () =>
+    readOnlyCall.mockImplementation(async (fn) => {
+      const spec = fn({ factory: { methods: new Proxy({}, { get: (_, method) => (...args) => ({ method, args }) }) } });
+      if (spec.method === "allUsers") {
+        if (spec.args[0] === 0) return U1;
+        throw new Error("execution reverted");
+      }
+      if (spec.method === "getBudget") return "100";
+      if (spec.method === "heldBy") return "0";
+      if (spec.method === "disabled") return false;
+      return null;
+    });
+
+  test("Disable asks for confirmation first and does nothing when declined", async () => {
+    mockUsers();
+    const actions = makeActions();
+    const confirm = jest.spyOn(window, "confirm").mockReturnValue(false);
+    render(<UsersBudgetsCard canWrite actions={actions} />);
+    await openCard("Users and budgets");
+    fireEvent.click(await screen.findByRole("button", { name: "Disable" }));
+    expect(confirm).toHaveBeenCalledWith(expect.stringMatching(/^Disable .+\?$/));
+    expect(actions.setDisabled).not.toHaveBeenCalled();
+    confirm.mockReturnValue(true);
+    fireEvent.click(screen.getByRole("button", { name: "Disable" }));
+    await waitFor(() => expect(actions.setDisabled).toHaveBeenCalledWith(U1, true));
+    confirm.mockRestore();
   });
 });

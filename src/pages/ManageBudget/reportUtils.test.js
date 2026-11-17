@@ -1,4 +1,8 @@
 import {
+  buildSalesSummary,
+  deriveAuctionStatus,
+  toAuditRows,
+  toUserHistoryRows,
   buildReportPayload,
   buildReportSheets,
   compareWeiDesc,
@@ -172,5 +176,89 @@ describe("report generation stress cases", () => {
     });
     expect(rows).toHaveLength(1);
     expect(rows[0].Status).toBe("No observations");
+  });
+});
+
+describe("status, sales summary, users and audit tabs", () => {
+  const BIDDER = "0x2222222222222222222222222222222222222222";
+  const tx = [{ bidderKey: BIDDER, transactionAmountWei: "5" }];
+  const soldReport = (index, highestBid) => {
+    const report = makeReport({ index, transactions: tx, highestBid });
+    report.auction.closed = true;
+    return report;
+  };
+
+  test("derives the Admin Zone status vocabulary", () => {
+    const open = makeReport({ transactions: tx }).auction;
+    expect(deriveAuctionStatus(open, { ended: false })).toBe("active");
+    expect(deriveAuctionStatus(open, { ended: true })).toBe("ended");
+    expect(deriveAuctionStatus(makeReport().auction, { ended: true })).toBe("unsold");
+    expect(deriveAuctionStatus({ ...open, closed: true }, { ended: true })).toBe("sold");
+    expect(deriveAuctionStatus({ ...makeReport().auction, closed: true }, { ended: true })).toBe("unsold");
+    expect(deriveAuctionStatus({ ...open, closed: true }, { ended: true, cancelled: true })).toBe("cancelled");
+  });
+
+  test("sales summary counts sold, unsold and cancelled and sums the highest bid of sold auctions only", () => {
+    const sold1 = soldReport(1, "100");
+    const sold2 = soldReport(2, "250");
+    const unsold = makeReport({ index: 3 });
+    const cancelled = soldReport(4, "999");
+    const summary = buildSalesSummary([sold1, sold2, unsold, cancelled], new Set([cancelled.auction.address]));
+    expect(summary).toMatchObject({ sold: 2, unsold: 1, cancelled: 1, totalSalesWei: "350" });
+  });
+
+  test("Auction Summary gets a Status column and sales summary rows; JSON totals carry the sales", () => {
+    const reports = [soldReport(1, "100"), makeReport({ index: 2 })];
+    const sheets = buildReportSheets(reports, []);
+    const summary = sheets.find((sheet) => sheet.name === "Auction Summary").rows;
+    expect(summary.filter((row) => row["Auction Address"]).map((row) => row.Status)).toEqual(["sold", "unsold"]);
+    const sales = summary.filter((row) => row.Description === "Sales summary");
+    expect(sales.map((row) => [row.Status, row["Number Of Auctions"], row["Total Sales (wei)"]])).toEqual([
+      ["sold", 1, "100"], ["unsold", 1, ""], ["cancelled", 0, ""],
+    ]);
+    const payload = buildReportPayload(reports, []);
+    expect(payload.totals.sales).toMatchObject({ sold: 1, unsold: 1, totalSalesWei: "100" });
+    expect(payload.tables.salesSummaryRows).toHaveLength(3);
+  });
+
+  test("users and audit rows are built from normalized events", () => {
+    const A = "0x00000000000000000000000000000000000000a1";
+    const B = "0x00000000000000000000000000000000000000b2";
+    const ADMIN = "0x00000000000000000000000000000000000000ad";
+    const event = (name, blockNumber, actor, summary) => ({ name, blockNumber, logIndex: 0, transactionHash: `0x${blockNumber}`, actor, summary, auction: "" });
+    const events = [
+      event("BudgetChanged", 5, A, "A: -10 (100 -> 90)"),
+      event("UserBudgetSet", 9, A, "A: total 500, available 500 by admin"),
+      event("MinimumChanged", 7, "", "min"),
+    ];
+    const rows = toUserHistoryRows({
+      addresses: [A, B, ADMIN], budgets: { [A]: "90", [B]: "100", [ADMIN]: "5" }, held: { [A]: "10" },
+      disabled: new Set([B]), events, labels: { [A]: "Alice" }, bots: new Set([B]), admins: new Set([ADMIN]),
+    });
+    expect(rows.map((row) => [row.Label, row.Role, row.Available, row.Held, row.Total, row.Disabled])).toEqual([
+      ["Alice", "participant", "90", "10", "100", "No"], ["", "bot", "100", "0", "100", "Yes"], ["", "admin", "5", "0", "5", "No"],
+    ]);
+    expect(rows[0]["Last Change Type"]).toBe("UserBudgetSet"); // the newest of BudgetChanged / UserBudgetSet
+    expect(rows[1]["Last Change"]).toBe("");
+    expect(toAuditRows(events).map((row) => row.Block)).toEqual([9, 7, 5]);
+  });
+
+  test("the new tabs appear in sheets, README and JSON, and honor the section selection", () => {
+    const options = {
+      userHistoryRows: [{ Address: "0xa", Role: "admin" }],
+      auditRows: [{ Event: "AuctionCancelled", Block: 3 }],
+    };
+    const sheets = buildReportSheets([makeReport()], [], options);
+    expect(sheets.find((sheet) => sheet.name === "Users and budget history").rows).toEqual(options.userHistoryRows);
+    expect(sheets.find((sheet) => sheet.name === "Audit events").rows).toEqual(options.auditRows);
+    const terms = sheets.find((sheet) => sheet.name === "README").rows.map((row) => row.Term);
+    expect(terms).toEqual(expect.arrayContaining(["Status", "Sales summary", "Users and budget history", "Audit events"]));
+    const payload = buildReportPayload([makeReport()], [], options);
+    expect(payload.tables.userHistoryRows).toEqual(options.userHistoryRows);
+    expect(payload.tables.auditRows).toEqual(options.auditRows);
+    expect(payload.options.userHistoryRows).toBeUndefined();
+    const off = buildReportSheets([makeReport()], [], { ...options, sections: { users: false, audit: false } });
+    expect(off.some((sheet) => sheet.name === "Audit events")).toBe(false);
+    expect(buildReportPayload([makeReport()], [], { ...options, sections: { users: false, audit: false } }).tables.auditRows).toBeUndefined();
   });
 });

@@ -69,6 +69,7 @@ import { buildMarketWorkbook, formatReportValue } from './reportExport';
 import { analyzeMarketReport } from './analysis';
 import { synchronizeMarketClock, useMarketNow } from './clock';
 import './backend.css';
+import '../styles/admin.css';
 import { marketApi as api } from './api';
 import homeStyles from '../pages/Home/home.module.scss';
 import shellStyles from '../styles/components.module.scss';

@@ -39,16 +39,16 @@ afterEach(() => { delete process.env.REACT_APP_ADMIN_ADDRESSES; });
 test("a non-admin (or no wallet) never sees the card", () => {
   mockAccess.account = a(9);
   const deps = makeDeps();
-  const view = render(<ParticipantsGasCard deps={deps} />);
+  const view = render(<ParticipantsGasCard defaultOpen deps={deps} />);
   expect(view.container.textContent).toBe("");
   expect(deps.readSources).not.toHaveBeenCalled();
   view.unmount();
   mockAccess.account = "";
-  expect(render(<ParticipantsGasCard deps={deps} />).container.textContent).toBe("");
+  expect(render(<ParticipantsGasCard defaultOpen deps={deps} />).container.textContent).toBe("");
 });
 
 test("lists every participant with full address, balance, budget and last activity; low rows are highlighted", async () => {
-  render(<ParticipantsGasCard deps={makeDeps()} />);
+  render(<ParticipantsGasCard defaultOpen deps={makeDeps()} />);
   await waitFor(() => expect(screen.getAllByTestId("participant-row")).toHaveLength(3));
   const rows = screen.getAllByTestId("participant-row");
   expect(rows.map((row) => row.getAttribute("data-low"))).toEqual(["true", "true", "false"]); // sorted by balance: 0.02, 0.09, 0.5
@@ -60,7 +60,7 @@ test("lists every participant with full address, balance, budget and last activi
 });
 
 test("the threshold is editable, re-evaluates highlighting and is saved in localStorage", async () => {
-  render(<ParticipantsGasCard deps={makeDeps()} />);
+  render(<ParticipantsGasCard defaultOpen deps={makeDeps()} />);
   await waitFor(() => expect(screen.getAllByTestId("participant-row")).toHaveLength(3));
   fireEvent.change(screen.getByLabelText("Threshold"), { target: { value: "0.6" } });
   expect(screen.getAllByTestId("participant-row").map((row) => row.getAttribute("data-low"))).toEqual(["true", "true", "true"]);
@@ -69,7 +69,7 @@ test("the threshold is editable, re-evaluates highlighting and is saved in local
 
 test("Top up all needs a confirmation dialog first; then it sends exactly the low rows, sequentially, with live statuses", async () => {
   const deps = makeDeps();
-  render(<ParticipantsGasCard deps={deps} />);
+  render(<ParticipantsGasCard defaultOpen deps={deps} />);
   await waitFor(() => expect(screen.getAllByTestId("participant-row")).toHaveLength(3));
   fireEvent.click(screen.getByRole("button", { name: /Top up all below threshold \(2\)/ }));
   const summary = await screen.findByTestId("confirm-summary");
@@ -87,7 +87,7 @@ test("Top up all needs a confirmation dialog first; then it sends exactly the lo
 
 test("cancelling the confirmation sends nothing", async () => {
   const deps = makeDeps();
-  render(<ParticipantsGasCard deps={deps} />);
+  render(<ParticipantsGasCard defaultOpen deps={deps} />);
   await waitFor(() => expect(screen.getAllByTestId("participant-row")).toHaveLength(3));
   fireEvent.click(within(rowFor(a(1))).getByRole("button", { name: "Top up" }));
   await screen.findByTestId("confirm-summary");
@@ -98,7 +98,7 @@ test("cancelling the confirmation sends nothing", async () => {
 
 test("a bulk run stops when the admin balance runs out and marks the rest skipped", async () => {
   const deps = makeDeps({ adminBalance: T("0.6") });
-  render(<ParticipantsGasCard deps={deps} />);
+  render(<ParticipantsGasCard defaultOpen deps={deps} />);
   await waitFor(() => expect(screen.getAllByTestId("participant-row")).toHaveLength(3));
   fireEvent.click(screen.getByRole("button", { name: /Top up all below threshold/ }));
   await screen.findByText(/does not cover every transfer/);
@@ -110,7 +110,7 @@ test("a bulk run stops when the admin balance runs out and marks the rest skippe
 
 test("the top-up amount is editable (default 0.5) and a manually added address (a bot) gets a row", async () => {
   const deps = makeDeps();
-  render(<ParticipantsGasCard deps={deps} />);
+  render(<ParticipantsGasCard defaultOpen deps={deps} />);
   await waitFor(() => expect(screen.getAllByTestId("participant-row")).toHaveLength(3));
   expect(screen.getByLabelText("Top-up amount").value).toBe("0.5");
   fireEvent.change(screen.getByLabelText("Top-up amount"), { target: { value: "2" } });
@@ -126,7 +126,7 @@ test("auto-refreshes every 60 s while visible (and not while the tab is hidden)"
   jest.useFakeTimers("modern");
   try {
     const deps = makeDeps();
-    render(<ParticipantsGasCard deps={deps} refreshMs={60_000} />);
+    render(<ParticipantsGasCard defaultOpen deps={deps} refreshMs={60_000} />);
     await waitFor(() => expect(deps.readSources).toHaveBeenCalledTimes(1));
     await act(async () => { jest.advanceTimersByTime(60_000); });
     await waitFor(() => expect(deps.readSources).toHaveBeenCalledTimes(2));
@@ -147,7 +147,7 @@ test("bidders and sellers that only appear in events are read, flagged low and i
     latestBlock: 100, warning: "",
   }));
   deps.readBalances = jest.fn(async (addresses) => Object.fromEntries(addresses.map((address) => [address, address === a(5) ? T("0.01") : T("1")])));
-  render(<ParticipantsGasCard deps={deps} />);
+  render(<ParticipantsGasCard defaultOpen deps={deps} />);
   await waitFor(() => expect(screen.getAllByTestId("participant-row")).toHaveLength(3));
   const requested = deps.readBalances.mock.calls[0][0];
   expect(requested).toEqual(expect.arrayContaining([a(1), a(5), a(6)]));
@@ -165,7 +165,7 @@ test("bidders and sellers that only appear in events are read, flagged low and i
 test("the connected admin address is excluded from Top up all (but can still be topped up row by row)", async () => {
   const deps = makeDeps({ balances: { [a(1)]: T("0.02"), [a(2)]: T("0.5"), [a(3)]: T("0.09"), [ADMIN]: T("0.01") } });
   deps.readSources = jest.fn(async () => ({ users: [a(1), a(2), a(3), ADMIN], events: [], latestBlock: 100, warning: "" }));
-  render(<ParticipantsGasCard deps={deps} />);
+  render(<ParticipantsGasCard defaultOpen deps={deps} />);
   await waitFor(() => expect(screen.getAllByTestId("participant-row")).toHaveLength(4));
   expect(rowFor(ADMIN).getAttribute("data-low")).toBe("true");
   fireEvent.click(screen.getByRole("button", { name: /Top up all below threshold \(2\)/ }));
@@ -180,7 +180,7 @@ test("the connected admin address is excluded from Top up all (but can still be 
 test("a confirmation that times out is shown as 'Unconfirmed (check explorer)', not Failed", async () => {
   const deps = makeDeps();
   deps.waitFor = jest.fn(async () => null);
-  render(<ParticipantsGasCard deps={deps} />);
+  render(<ParticipantsGasCard defaultOpen deps={deps} />);
   await waitFor(() => expect(screen.getAllByTestId("participant-row")).toHaveLength(3));
   fireEvent.click(within(rowFor(a(1))).getByRole("button", { name: "Top up" }));
   await screen.findByTestId("confirm-summary");

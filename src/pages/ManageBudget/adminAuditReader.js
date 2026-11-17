@@ -210,3 +210,37 @@ export const readAllUsers = async (readIndex, { chunk = USER_READ_CHUNK, cap = U
   }
   return { addresses, complete: false, warning: `Stopped at the ${cap}-user read cap: the list may be incomplete.` };
 };
+
+// ---- generic chunked log reader (used by the auction record dialog and the list-history card) ------
+
+// Returns { getLatestBlock(), readLogs({ address, kind: "factory" | "campaign", names, from, to }) } where
+// readLogs resolves to decoded events ({ event, address, blockNumber, logIndex, transactionHash, returnValues }).
+// `address` may be one address or an array (eth_getLogs accepts both). Tests inject their own reader.
+export const createChainLogReader = (factoryAddress) => {
+  const options = { ...READ_OPTIONS, factoryAddress };
+  const abiFor = (kind) => (kind === "campaign" ? Campaign.abi : CampaignFactory.abi);
+  return {
+    getLatestBlock: async () => Number(await readOnlyExecute(({ web3 }) => web3.eth.getBlockNumber(), undefined, options)),
+    // Block time in seconds, used to map a chosen date to a block number.
+    getBlockTimestamp: async (blockNumber) =>
+      Number((await readOnlyExecute(({ web3 }) => web3.eth.getBlock(blockNumber), undefined, options))?.timestamp),
+    readLogs: ({ address, kind, names, from, to }) =>
+      readOnlyExecute(
+        async ({ web3 }) => {
+          const items = eventItems(abiFor(kind), names).filter(Boolean);
+          return decodeLogs(
+            web3,
+            items,
+            await web3.eth.getPastLogs({
+              address,
+              topics: [items.map((item) => web3.eth.abi.encodeEventSignature(item))],
+              fromBlock: from,
+              toBlock: to,
+            })
+          );
+        },
+        undefined,
+        options
+      ),
+  };
+};

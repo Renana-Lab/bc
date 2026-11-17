@@ -72,3 +72,24 @@ test("lock event removes the protected content", async () => {
 test.each([["/", "Welcome"], ["/metamask-guide", "Wallet guide"]])("public route %s stays accessible", async (path, title) => {
   open(path); await screen.findByText(title);
 });
+
+describe("small screens", () => {
+  const smallScreen = () => { window.matchMedia = jest.fn(() => ({ matches: true, addEventListener: jest.fn(), removeEventListener: jest.fn() })); };
+  afterEach(() => { delete process.env.REACT_APP_WALLET_MODE; });
+
+  test("MetaMask mode shows the Mobile Access Not Supported screen", async () => {
+    smallScreen();
+    process.env.REACT_APP_WALLET_MODE = "metamask";
+    open("/");
+    expect(await screen.findByText("Mobile Access Not Supported")).toBeTruthy();
+    expect(screen.queryByText("Welcome")).toBeNull();
+  });
+
+  test("local (embedded) wallet mode renders the normal app on a small screen", async () => {
+    smallScreen();
+    process.env.REACT_APP_WALLET_MODE = "local";
+    open("/");
+    expect(await screen.findByText("Welcome")).toBeTruthy();
+    expect(screen.queryByText("Mobile Access Not Supported")).toBeNull();
+  });
+});

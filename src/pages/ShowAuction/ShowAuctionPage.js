@@ -61,6 +61,7 @@ import {
 } from "../AuctionsList/AuctionsListPage";
 import { getActiveFactoryAddress } from "../../real_ethereum/marketConfig";
 import { notifyBudgetChanged } from "../../real_ethereum/budget";
+import { getBotBidderNames } from "../../telemetry/botPresence";
 import { markAuctionClosed } from "../../real_ethereum/activeAuctionRegistry";
 import { useAdminAccess } from "../ManageBudget/useAdminAccess";
 import {
@@ -1072,6 +1073,9 @@ function AuctionPageContent() {
       </Layout>
     );
 
+  const bidderNames = getBotBidderNames();
+  const bidderLabel = (wallet) => bidderNames.get(String(wallet || "").toLowerCase()) || showAddress(wallet);
+
   return (
     <Layout>
       <h1 className={showPageStyles.heading}>{state.dataDescription}</h1>
@@ -1290,7 +1294,7 @@ function AuctionPageContent() {
               className={showPageStyles.subTitle}
               style={{ wordBreak: "break-all" }}
             >
-              Highest bidder: {state.highestBidder ? showAddress(state.highestBidder) : "None"}
+              Highest bidder: {state.highestBidder ? bidderLabel(state.highestBidder) : "None"}
             </p>
             <div style={{ display: "flex", justifyContent: "center" }}>
               <Button
@@ -1312,7 +1316,7 @@ function AuctionPageContent() {
                     <TableHead>
                       <TableRow>
                         <TableCell className={showPageStyles.headerCell}>
-                          Bidder Address
+                          Bidder Identifier
                         </TableCell>
                         <TableCell
                           className={showPageStyles.headerCell}
@@ -1350,7 +1354,7 @@ function AuctionPageContent() {
                               : undefined
                           }
                         >
-                          <TableCell align="center">{showAddress(row.bidder)}</TableCell>
+                          <TableCell align="center">{bidderLabel(row.bidder)}</TableCell>
                           <TableCell align="center">
                             {row.transactionAmount}
                           </TableCell>

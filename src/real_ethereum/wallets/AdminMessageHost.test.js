@@ -15,7 +15,7 @@ const msg = (id, body) => ({ id, body, createdAt: 1 });
 let wallet;
 let hidden;
 
-const mount = (props = {}) => render(<AdminMessageHost wallet={wallet} address={ADDRESS} faucetUrl="https://faucet.example" strictPid={PID} openPid={PID} {...props} />);
+const mount = (props = {}) => render(<AdminMessageHost wallet={wallet} address={ADDRESS} faucetUrl="https://faucet.example" strictPid={PID} openPid={PID} random={() => 0} {...props} />);
 const setHidden = (value) => { hidden = value; document.dispatchEvent(new Event("visibilitychange")); };
 const tick = async (ms) => { act(() => { jest.advanceTimersByTime(ms); }); await flush(); };
 
@@ -44,7 +44,7 @@ test("a message opens a blocking popup; Got it acknowledges it and closes it", a
   fetchInbox.mockResolvedValueOnce({ ok: true, messages: [msg("m1-aaaaaaaa", "Please come to the front desk.")], serverTime: null });
   mount();
   await flush();
-  expect(screen.getByText("Message from the experiment team")).toBeTruthy();
+  expect(screen.getByText("Message from the administrator")).toBeTruthy();
   expect(screen.getByTestId("admin-message-body").textContent).toBe("Please come to the front desk.");
   fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
   expect(screen.getByRole("dialog")).toBeTruthy(); // Escape does not dismiss it
@@ -128,7 +128,7 @@ test("silent when the server is unreachable or the config cannot be read (it ret
   const { container } = mount();
   await flush();
   expect(fetchInbox).not.toHaveBeenCalled();
-  await tick(30_000);
+  await tick(30_000); // the config retry is slower than the inbox poll
   expect(fetchInbox).toHaveBeenCalledTimes(1);
   fetchInbox.mockResolvedValue({ ok: false, messages: [], serverTime: null });
   await tick(30_000);
@@ -163,4 +163,29 @@ test("stops polling when it unmounts", async () => {
   view.unmount();
   await tick(90_000);
   expect(fetchInbox).toHaveBeenCalledTimes(1);
+});
+
+test("the first poll waits a random 0-5 s, then polls every 30 s", async () => {
+  mount({ random: () => 0.5 }); // 2.5 s
+  await flush();
+  expect(fetchInbox).not.toHaveBeenCalled();
+  await tick(2_499);
+  expect(fetchInbox).not.toHaveBeenCalled();
+  await tick(1);
+  expect(fetchInbox).toHaveBeenCalledTimes(1);
+  await tick(29_999);
+  expect(fetchInbox).toHaveBeenCalledTimes(1);
+  await tick(1);
+  expect(fetchInbox).toHaveBeenCalledTimes(2);
+});
+
+test("the jitter never exceeds 5 s and returning to the tab still polls immediately", async () => {
+  mount({ random: () => 0.999999 });
+  await flush();
+  await tick(5_000);
+  expect(fetchInbox).toHaveBeenCalledTimes(1);
+  setHidden(true);
+  setHidden(false);
+  await flush();
+  expect(fetchInbox).toHaveBeenCalledTimes(2);
 });

@@ -112,6 +112,7 @@ const normalizeAuction = (auction = {}) => ({
   manager: String(auction.manager || ""),
   highestBid: String(auction.highestBid || "0"),
   highestBidder: String(auction.highestBidder || ""),
+  description: String(auction.description || auction.dataDescription || ""),
   endTimeSec: Math.floor(
     Number(
       auction.endTimeSec ||
@@ -123,12 +124,19 @@ const normalizeAuction = (auction = {}) => ({
   closed: Boolean(auction.closed),
 });
 
+// The description stays on the live snapshot only; persisted history and its signature must not grow with it.
+const withoutDescription = ({ description, ...rest }) => rest; // eslint-disable-line no-unused-vars
+
 const mergeAuctions = (...groups) => {
   const byAddress = new Map();
   groups.flat().forEach((auction) => {
     const normalized = normalizeAuction(auction);
     const key = normalizeAddress(normalized.address);
-    if (key) byAddress.set(key, normalized);
+    if (!key) return;
+    const existing = byAddress.get(key);
+    // A later entry without a description (e.g. from a cache) must not blank one we already have.
+    if (existing?.description && !normalized.description) normalized.description = existing.description;
+    byAddress.set(key, normalized);
   });
   return [...byAddress.values()];
 };
@@ -181,11 +189,13 @@ const snapshotStateSignature = (snapshot = {}) =>
     unreadableCount: Number(snapshot.unreadableCount || 0),
     activeAuctions: (snapshot.activeAuctions || [])
       .map(normalizeAuction)
+      .map(withoutDescription)
       .sort((left, right) =>
         normalizeAddress(left.address).localeCompare(normalizeAddress(right.address)),
       ),
     finalizableAuctions: (snapshot.finalizableAuctions || [])
       .map(normalizeAuction)
+      .map(withoutDescription)
       .sort((left, right) =>
         normalizeAddress(left.address).localeCompare(normalizeAddress(right.address)),
       ),
@@ -269,8 +279,8 @@ const recordSnapshotHistory = (snapshot) => {
     eventCursor: Number(snapshot.eventCursor || 0),
     knownAddressCount: Number(snapshot.knownAddressCount || 0),
     unreadableCount: Number(snapshot.unreadableCount || 0),
-    activeAuctions: (snapshot.activeAuctions || []).map(normalizeAuction),
-    finalizableAuctions: (snapshot.finalizableAuctions || []).map(normalizeAuction),
+    activeAuctions: (snapshot.activeAuctions || []).map(normalizeAuction).map(withoutDescription),
+    finalizableAuctions: (snapshot.finalizableAuctions || []).map(normalizeAuction).map(withoutDescription),
     signature,
   };
   const oldestAllowed = observedAt - HISTORY_MAX_AGE_MS;
@@ -681,6 +691,7 @@ const getCreatedAuctionEvents = async (factoryAddress, eventCursor = 0) =>
             manager: values.seller || values[1],
             minimumContribution: values.minimum || values[2],
             endTimeSec: values.endTime || values[3],
+            description: values.dataDescription || values[4],
             closed: false,
           });
         }),
@@ -733,6 +744,7 @@ const readAuctionSummaries = async (addresses, factoryAddress) => {
           manager: details[3],
           highestBid: details[4],
           highestBidder: details[6],
+          description: details[5],
           endTimeSec: details[7],
           closed: details[8],
         }),

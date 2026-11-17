@@ -209,3 +209,51 @@ describe("market parity rows and empty state", () => {
     } finally { delete process.env.REACT_APP_WALLET_MODE; }
   });
 });
+
+describe("admin icons on a row", () => {
+  const auction = {
+    address: "0xabc", dataDescription: "shoe size", endTime: Date.now() + 600000, minimumContribution: "10",
+    highestBid: "0", approversCount: 0, highestBidder: "0x0", manager: "0x2", addresses: [], closed: false,
+  };
+  const renderRow = (props) => {
+    const { AuctionTableRow } = jest.requireActual("./AuctionsListPage");
+    const onOpen = jest.fn();
+    render(
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <table><tbody><AuctionTableRow auction={auction} currentUserAddress="0x3" boundaryClock={Date.now()} onOpen={onOpen} {...props} /></tbody></table>
+      </MemoryRouter>,
+    );
+    return onOpen;
+  };
+
+  test("participants never see the admin icons or a status label", () => {
+    renderRow({ adminTools: null });
+    expect(screen.queryByRole("button", { name: /Manage record/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Cancel auction/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Close auction early" })).toBeNull();
+    expect(screen.queryByTestId("auction-status")).toBeNull();
+  });
+
+  test("admins get a status chip and the record, cancel and close icons; icons do not open the row", () => {
+    const adminTools = { canWrite: true, openRecord: jest.fn(), openCancel: jest.fn(), closeEarly: jest.fn() };
+    const onOpen = renderRow({ adminTools });
+    expect(screen.getByTestId("auction-status")).toHaveTextContent("active");
+    fireEvent.click(screen.getByRole("button", { name: "Manage record: shoe size" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel auction: shoe size" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close auction early" }));
+    expect(adminTools.openRecord).toHaveBeenCalledWith("0xabc");
+    expect(adminTools.openCancel).toHaveBeenCalledWith({ address: "0xabc", description: "shoe size" });
+    expect(adminTools.closeEarly).toHaveBeenCalledWith("0xabc");
+    expect(onOpen).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "View Auction" }));
+    expect(onOpen).toHaveBeenCalledWith("0xabc");
+  });
+
+  test("an ended auction cannot be closed early and a cancelled one cannot be cancelled again", () => {
+    const adminTools = { canWrite: true, openRecord: jest.fn(), openCancel: jest.fn(), closeEarly: jest.fn() };
+    renderRow({ adminTools, auction: { ...auction, endTime: Date.now() - 1000 }, cancelled: true });
+    expect(screen.getByTestId("auction-status")).toHaveTextContent("cancelled");
+    expect(screen.getByRole("button", { name: "Close auction early" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Cancel auction: shoe size" })).toBeDisabled();
+  });
+});

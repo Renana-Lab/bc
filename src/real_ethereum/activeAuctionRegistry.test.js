@@ -351,3 +351,46 @@ describe("active auction registry", () => {
       .toBe(true);
   });
 });
+
+describe("auction descriptions in the registry", () => {
+  const FACTORY = "0x00000000000000000000000000000000000000f1";
+  const auction = (n, extra = {}) => ({ address: `0x${String(n).padStart(40, "0")}`, minimumContribution: "5", approversCount: 0, manager: "0x1", highestBid: "0", highestBidder: "", endTimeSec: Math.floor(Date.now() / 1000) + 600, closed: false, ...extra });
+
+  beforeEach(() => { window.localStorage.clear(); __resetActiveAuctionRegistryForTests(); });
+
+  test("the live snapshot keeps the description; history entries and signatures do not", () => {
+    publishActiveAuctions(FACTORY, [auction(1, { description: "Dataset A" })], "test");
+    expect(getActiveAuctionSnapshot(FACTORY).activeAuctions[0].description).toBe("Dataset A");
+    const history = getActiveAuctionStateHistory(FACTORY, { includeBaseline: false });
+    expect(history.length).toBeGreaterThan(0);
+    history.forEach((entry) => {
+      expect(JSON.stringify(entry)).not.toContain("Dataset A");
+      [...entry.activeAuctions, ...entry.finalizableAuctions].forEach((item) => expect(item).not.toHaveProperty("description"));
+    });
+  });
+
+  test("an auction discovered from AuctionCreatedDetailed keeps its dataDescription", async () => {
+    let captured = null;
+    const found = auction(9);
+    readOnlyCall.mockResolvedValue([]);
+    readOnlyBatchCall.mockResolvedValue([]);
+    readOnlyExecute.mockImplementation(async (fn) => {
+      const result = await fn({
+        web3: { eth: { getBlockNumber: async () => 100 } },
+        factory: { getPastEvents: async () => [{ returnValues: { campaignAddress: found.address, seller: "0x1", minimum: "5", endTime: String(found.endTimeSec), dataDescription: "Found by event" } }] },
+      });
+      if (result.auctions.length) captured = result;
+      return result;
+    });
+    publishActiveAuctions(FACTORY, [auction(1)], "test");
+    await refreshActiveAuctionRegistry(FACTORY, { force: true });
+    await refreshActiveAuctionRegistry(FACTORY, { force: true });
+    expect(captured?.auctions[0]).toMatchObject({ address: found.address, description: "Found by event" });
+  });
+
+  test("a later entry without a description does not blank an existing one", () => {
+    publishActiveAuctions(FACTORY, [auction(2, { description: "Keep me" })], "test");
+    publishActiveAuctions(FACTORY, [auction(2, { description: "" })], "test");
+    expect(getActiveAuctionSnapshot(FACTORY).activeAuctions[0].description).toBe("Keep me");
+  });
+});

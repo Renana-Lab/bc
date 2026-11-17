@@ -163,6 +163,34 @@ describe("seller bidding history", () => {
     expect(scanParticipantView(dialog)).toEqual({ words: [], addresses: [] });
   });
 
+  describe("bidder labels in the history", () => {
+    const BOT = "0x00000000000000000000000000000000000000ee";
+    const openHistory = async () => {
+      getEthereumAccounts.mockResolvedValue([seller]);
+      mockChain({ transactions: [{ bidderAddress: BOT, value: "5", time: "1700000000" }, ...TX], highestBidder: BOT });
+      renderPage(); await flush();
+      await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Display Bidding History" })); });
+      return screen.getByRole("dialog");
+    };
+    afterEach(() => { delete process.env.REACT_APP_BIDDER_NAMES; });
+
+    test("a configured bot name replaces the address, an unnamed bidder is shortened in local mode", async () => {
+      process.env.REACT_APP_BIDDER_NAMES = JSON.stringify({ [BOT]: "Bot Alpha" });
+      const dialog = await openHistory();
+      expect(within(dialog).getAllByText(/Bot Alpha/).length).toBeGreaterThanOrEqual(2); // highest bidder line and table row
+      expect(within(dialog).getAllByText("0x0000...00cc").length).toBeGreaterThan(0);
+      expect(within(dialog).queryByText(other)).toBeNull();
+    });
+
+    test("MetaMask mode shows the full address for an unnamed bidder and still the bot name", async () => {
+      process.env.REACT_APP_WALLET_MODE = "metamask";
+      process.env.REACT_APP_BIDDER_NAMES = JSON.stringify({ [BOT]: "Bot Alpha" });
+      const dialog = await openHistory();
+      expect(within(dialog).getAllByText(/Bot Alpha/).length).toBeGreaterThan(0);
+      expect(within(dialog).getByText(other)).toBeTruthy();
+    });
+  });
+
   test("a bidder never sees the button and the ledger is not read while the auction is open", async () => {
     mockChain({ transactions: TX });
     renderPage(); await flush();
