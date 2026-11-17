@@ -23,6 +23,8 @@ const MetamaskTutorialPage = lazy(() =>
 );
 const WalletUnlockPage = lazy(() => import("./pages/WalletUnlock/WalletUnlockPage.js"));
 const MetamaskGuidePage = lazy(() => import("./pages/MetamaskGuide/MetamaskGuidePage.js"));
+const AccountPage = lazy(() => import("./pages/Account/AccountPage.js"));
+const GuidePage = lazy(() => import("./pages/Guide/GuidePage.js"));
 const ManageBudgetPage = lazy(() => import("./pages/ManageBudget/ManageBudgetPage.js"));
 const ShowAuctionPage = lazy(() => import("./pages/ShowAuction/ShowAuctionPage.js"));
 const AdminLoginPage = lazy(() => import("./pages/AdminWallet/AdminLoginPage.js")); // hidden route: MetaMask admin sign-in in local wallet mode
@@ -384,6 +386,15 @@ function App() {
                   }
                 />
                 <Route
+                  path="/account"
+                  element={
+                    <RequireWallet>
+                      <AccountPage />
+                    </RequireWallet>
+                  }
+                />
+                <Route path="/guide" element={<GuidePage />} />
+                <Route
                   path="/manage-budget"
                   element={
                     <RequireWallet>
@@ -395,6 +406,10 @@ function App() {
                 />
                 <Route path="/admin/faucet" element={<FaucetAdminPage />} />
                 <Route path="/admin/wallet" element={<AdminWalletPage />} />
+                <Route
+                  path="/admin"
+                  element={<Navigate replace to={getWalletCopy().embedded ? "/admin-login" : "/manage-budget"} />}
+                />
                 <Route path="/admin-login" element={<AdminLoginPage />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>

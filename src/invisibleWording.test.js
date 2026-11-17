@@ -41,9 +41,9 @@ describe("participant-facing messages in invisible mode", () => {
   test("NewAuctionPage routes that error through participantMessage (ManageBudgetPage is admin-only and untouched)", () => {
     expect(read("pages/NewAuction/NewAuctionPage.js")).toMatch(/new Error\(participantMessage\("No wallet account is connected\."\)\)/);
   });
-  test("the auctions search placeholder no longer mentions a wallet", () => {
+  test("the auctions search placeholder never mentions a wallet and comes from participantText", () => {
     const source = read("pages/AuctionsList/AuctionsListPage.js");
-    expect(source).toMatch(/placeholder="Search auctions by description, address, or exact bid"/);
+    expect(source).toMatch(/placeholder=\{participantText\("searchPlaceholder"\)\}/);
     expect(source).not.toMatch(/by description, wallet/);
   });
 });

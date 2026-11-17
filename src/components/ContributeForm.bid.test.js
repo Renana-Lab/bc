@@ -123,3 +123,35 @@ test("the bid tooltip and errors no longer repeat 'in wei'", async () => {
   await bid("1.5");
   expect(screen.getByRole("alert").textContent).toBe("Bid amount must be a whole number");
 });
+
+test("the bid field is a required field of a real form: Enter submits it", async () => {
+  mockSummary(10, 50);
+  setup();
+  const input = screen.getByLabelText("Total Bid");
+  expect(input.required).toBe(true);
+  const form = input.closest("form");
+  expect(form).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Submit your bid" }).type).toBe("submit");
+  fireEvent.change(input, { target: { value: "60" } });
+  await act(async () => { fireEvent.submit(form); }); // what the browser fires when Enter is pressed in the field
+  for (let i = 0; i < 20; i += 1) await act(async () => { await Promise.resolve(); });
+  expect(mockSend).toHaveBeenCalledWith({ from: me, value: "60" });
+});
+
+test("native validation never replaces the existing messages (empty field)", async () => {
+  mockSummary(10, 50);
+  setup();
+  const form = screen.getByLabelText("Total Bid").closest("form");
+  expect(form.noValidate).toBe(true);
+  await act(async () => { fireEvent.submit(form); });
+  for (let i = 0; i < 20; i += 1) await act(async () => { await Promise.resolve(); });
+  expect(screen.getByRole("alert").textContent).toBe("Bid amount must be a whole number");
+  expect(mockSend).not.toHaveBeenCalled();
+});
+
+test("the submit button has no fixed minimum width that could push it out of the card", () => {
+  setup();
+  const button = screen.getByRole("button", { name: "Submit your bid" });
+  expect(button.style.minWidth).toBe("");
+  expect(button.style.width).toBe("100%");
+});

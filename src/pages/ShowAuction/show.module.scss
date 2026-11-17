@@ -11,12 +11,53 @@ $border-radius: 2rem;
   font-weight: $weight;
 }
 
+.heading {
+  margin: 1.5rem 0 0.5rem;
+  text-align: center;
+  color: $primary-blue;
+  font-size: 2.5rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+// Small grey line under the heading. The long address can never widen the cards.
+.subtitle {
+  margin: 0 0 1rem;
+  text-align: center;
+  color: #5e638a;
+  font-size: 1rem;
+  overflow-wrap: anywhere;
+}
+
+// Details card on the left (flexible), bid card on the right (about 340px).
 .page {
-  height: 100%;
   display: flex;
   justify-content: center;
+  align-items: flex-start;
   gap: 20px;
+  width: 100%;
   animation: softFadeUp 240ms var(--motion-ease, ease) both;
+}
+
+.infoColumn {
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: 50rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.sideColumn {
+  flex: 0 0 340px;
+  width: 340px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+
+  &:empty {
+    display: none;
+  }
 }
 
 .campaignInfo,
@@ -66,15 +107,43 @@ $border-radius: 2rem;
 }
 
 .campaignInfo {
-  width: 50rem;
+  width: 100%;
+  box-sizing: border-box;
+  overflow-wrap: anywhere;
+}
+
+.detailsTitle {
+  margin: 0 0 1rem;
+  color: $primary-blue;
+}
+
+.remainingBudget {
+  margin: 0 0 1rem !important;
+  white-space: nowrap;
+  font-size: 1.1rem !important;
+  font-weight: 700 !important;
+  color: $primary-blue;
+}
+
+.marketBidPosition {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  margin: 5px 8px 0;
+  vertical-align: middle;
+  color: #176b3a;
+  font-size: 0.78rem;
+  font-weight: 600;
 }
 
 .contributeForm {
   background:
     linear-gradient(145deg, #f4bc34 0%, $accent-yellow 52%, #e9a420 100%);
-  width: 25rem;
-  margin-left: 20px;
-  padding: 3rem;
+  width: 100%;
+  box-sizing: border-box;
+  margin-left: 0;
+  padding: 1.5rem;
   height: min-content;
   display: flex;
   flex-direction: column;
@@ -213,6 +282,7 @@ $border-radius: 2rem;
 
 .finalizedPaymentBadge {
   width: 24rem;
+  max-width: 100%;
   min-height: 2.7rem;
   margin-top: 2rem;
   border-radius: 1.3rem;
@@ -302,6 +372,34 @@ $border-radius: 2rem;
 .subTitle {
   @include text-style($deep-blue, 0.9rem, 500);
   text-align: center;
+}
+
+// Narrow screens: details card above the bid card, both full width.
+@media (max-width: 860px) {
+  .page {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .infoColumn,
+  .sideColumn {
+    flex: 0 0 auto;
+    width: 100%;
+    max-width: none;
+  }
+
+  .heading {
+    font-size: 1.7rem;
+  }
+
+  .campaignInfo,
+  .contributeForm {
+    padding: 1.25rem;
+  }
+
+  .finalizedPaymentBadge {
+    width: 100%;
+  }
 }
 
 @media (prefers-reduced-motion: reduce), (update: slow) {

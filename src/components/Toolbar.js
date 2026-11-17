@@ -17,6 +17,8 @@ import {
 import { getEthereumAccounts } from "../real_ethereum/ethereumProvider";
 import { useMetaMask } from "../Context/Context";
 import componentStyles from "./../styles/components.module.scss";
+import { participantText } from "../real_ethereum/wallets/participantCopy";
+import { isInvisibleWalletMode } from "../real_ethereum/wallets/walletMode.mjs";
 
 const ClockDisplay = memo(() => {
   const [currentTime, setCurrentTime] = useState(() => new Date());
@@ -173,7 +175,7 @@ const ToolbarComponent = (props) => {
             alignItems: "center",
           }}
         >
-          <div style={{ display: "flex", gap: "1rem", alignItems: "center" }}>
+          <div className={componentStyles.toolbarLeft} style={{ display: "flex", gap: "1rem", alignItems: "center" }}>
             <Button
               variant="text"
               className={componentStyles.toolbarIconButton}
@@ -196,11 +198,12 @@ const ToolbarComponent = (props) => {
               component="div"
               className={`${componentStyles.bigTitle} ${componentStyles.toolbarTitle}`}
             >
-              Blockchain Data Market
+              {participantText("brand")}
             </Typography>
           </div>
 
           <div
+            className={componentStyles.toolbarRight}
             style={{
               display: "flex",
               gap: "1rem",
@@ -214,7 +217,11 @@ const ToolbarComponent = (props) => {
                   ? componentStyles.environmentPillLive
                   : componentStyles.environmentPillDevelopment
               }`}
-              title={`${activeMarket.description}: ${activeMarket.address || "No factory address configured"}`}
+              title={
+                isInvisibleWalletMode()
+                  ? `${environmentStatusText} environment`
+                  : `${activeMarket.description}: ${activeMarket.address || "No factory address configured"}`
+              }
               aria-label={`${environmentStatusText} environment`}
             >
               {isProductionEnvironment && (

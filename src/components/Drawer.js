@@ -4,8 +4,8 @@ import { makeStyles } from "@mui/styles";
 import styles1 from "./../styles/components.module.scss";
 import { useLocation, useNavigate } from "react-router-dom";
 import { getWalletCopy } from "../real_ethereum/wallets/walletCopy";
-import { clearWalletOverrides, hasWalletOverride } from "../real_ethereum/wallets/walletMode.mjs";
-import { useAdminAccess } from "../pages/ManageBudget/useAdminAccess";
+import { clearWalletOverrides, hasWalletOverride, isInvisibleWalletMode } from "../real_ethereum/wallets/walletMode.mjs";
+import { useAdminEntry } from "./adminEntry";
 
 const useStyles = makeStyles({
   paper: {
@@ -146,9 +146,8 @@ const useStyles = makeStyles({
 
 const DrawerComponent = (props) => {
   const nav = useNavigate();
-  // Admin sign-in / wallet restore links are for admins only (participants can still type the URL).
-  const adminAccess = useAdminAccess();
-  const showAdminLinks = adminAccess.isAdmin || adminAccess.onAllowlist;
+  // Admin items follow any valid admin signal (see adminEntry.js); participants never see them.
+  const { showAdminZone, showAdminSignIn } = useAdminEntry();
   const location = useLocation();
   const classes = useStyles();
 
@@ -192,6 +191,23 @@ const DrawerComponent = (props) => {
           <ListItemText>Start An Auction</ListItemText>
         </ListItemButton>
 
+        {isInvisibleWalletMode() && (
+          <>
+            <ListItemButton className={itemClassName("/account")} onClick={() => nav("/account")}>
+              <span className={classes.iconTile}>
+                <span className={styles1.metamaskIcon}></span>
+              </span>
+              <ListItemText>Account Profile</ListItemText>
+            </ListItemButton>
+            <ListItemButton className={itemClassName("/guide")} onClick={() => nav("/guide")}>
+              <span className={classes.iconTile}>
+                <span className={styles1.metamaskIcon}></span>
+              </span>
+              <ListItemText>Platform Guide</ListItemText>
+            </ListItemButton>
+          </>
+        )}
+
         {getWalletCopy().showTutorial && (
         <ListItemButton className={`${classes.item} ${classes.primaryText}`}>
           <span className={classes.iconTile}>
@@ -212,14 +228,16 @@ const DrawerComponent = (props) => {
       </div>
 
       <div className={classes.adminSection}>
-        <ListItemButton
-          className={`${itemClassName("/manage-budget")} ${classes.adminItem}`}
-          dense
-          onClick={() => nav("/manage-budget")}
-        >
-          <ListItemText>-- Admin Zone --</ListItemText>
-        </ListItemButton>
-        {showAdminLinks && getWalletCopy().embedded && !hasWalletOverride() && (
+        {showAdminZone && (
+          <ListItemButton
+            className={`${itemClassName("/manage-budget")} ${classes.adminItem}`}
+            dense
+            onClick={() => nav("/manage-budget")}
+          >
+            <ListItemText>-- Admin Zone --</ListItemText>
+          </ListItemButton>
+        )}
+        {showAdminSignIn && (
           <ListItemButton
             className={`${itemClassName("/admin-login")} ${classes.adminItem}`}
             dense
@@ -237,7 +255,7 @@ const DrawerComponent = (props) => {
             <ListItemText>Switch back to participant wallet</ListItemText>
           </ListItemButton>
         )}
-        {showAdminLinks && getWalletCopy().embedded && (
+        {showAdminZone && getWalletCopy().embedded && (
           <ListItemButton
             className={`${itemClassName("/admin/wallet")} ${classes.adminItem}`}
             dense

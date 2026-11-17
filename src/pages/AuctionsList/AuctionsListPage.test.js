@@ -129,6 +129,87 @@ test("budget 0 is a real budget, not unknown or unlimited", () => {
   expect(normalizeRemainingBudget(undefined)).toBe(Infinity);
 });
 
+describe("market parity rows and empty state", () => {
+  const ME = "0x00000000000000000000000000000000000000bb";
+  const SELLER = "0x00000000000000000000000000000000000000aa";
+  const OTHER = "0x00000000000000000000000000000000000000cc";
+  const baseAuction = {
+    address: "0xabc", dataDescription: "shoe size", minimumContribution: "10", highestBid: "60", approversCount: 2,
+    highestBidder: OTHER, manager: SELLER, addresses: [ME, OTHER], closed: false,
+  };
+  const renderRow = (overrides) => {
+    const { AuctionTableRow } = jest.requireActual("./AuctionsListPage");
+    return render(
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <table><tbody>
+          <AuctionTableRow auction={{ ...baseAuction, ...overrides }} currentUserAddress={ME} boundaryClock={Date.now()} onOpen={() => {}} />
+        </tbody></table>
+      </MemoryRouter>,
+    );
+  };
+  const open = () => ({ endTime: Date.now() + 600000 });
+  const ended = (closed = true) => ({ endTime: Date.now() - 60000, closed });
+
+  test("the seller is shown shortened under the description, full value in the title", () => {
+    renderRow(open());
+    const line = screen.getByText("0x0000...00aa");
+    expect(line.tagName).toBe("SMALL");
+    expect(line.getAttribute("title")).toBe(SELLER);
+  });
+
+  test("leading: 'You are leading' with the green row colour", () => {
+    renderRow({ ...open(), highestBidder: ME });
+    expect(screen.getByText("You are leading")).toBeTruthy();
+    expect(getComputedStyle(screen.getAllByRole("cell")[0]).color).toBe("rgba(17, 168, 17, 1)");
+  });
+
+  test("won: 'You won' once the auction is closed, nothing while it only ended", () => {
+    const first = renderRow({ ...ended(true), highestBidder: ME });
+    expect(screen.getByText("You won")).toBeTruthy();
+    first.unmount();
+    renderRow({ ...ended(false), highestBidder: ME });
+    expect(screen.queryByText("You won")).toBeNull();
+  });
+
+  test("outbid: no marker, the existing red colour stays", () => {
+    renderRow(open());
+    expect(screen.queryByText("You are leading")).toBeNull();
+    expect(screen.queryByText("You won")).toBeNull();
+    expect(getComputedStyle(screen.getAllByRole("cell")[0]).color).toBe("rgba(218, 12, 12, 1)");
+  });
+
+  test("the Closed label uses the market orange", () => {
+    renderRow(ended(true));
+    const cell = screen.getByText("Closed").closest("td");
+    expect(getComputedStyle(cell).color).toBe("rgb(239, 108, 0)");
+  });
+
+  test("zero auctions: 'No auctions found.' after loading, replaced by the search message when filtering", async () => {
+    renderPage();
+    expect(screen.queryByText("No auctions found.")).toBeNull(); // still loading
+    await flush();
+    expect(screen.getByText("No auctions found.")).toBeTruthy();
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "zzz" } });
+    await flush();
+    expect(screen.queryByText("No auctions found.")).toBeNull();
+    expect(screen.getByText("No auctions match your search.")).toBeTruthy();
+  });
+
+  test.each([
+    ["local", "Search auctions by description, seller identifier, or exact bid", "Welcome to the Data Marketplace Platform"],
+    ["metamask", "Search auctions by description, address, or exact bid", "Welcome to the Blockchain Data Market Platform"],
+  ])("%s mode wording", async (mode, placeholder, hero) => {
+    process.env.REACT_APP_WALLET_MODE = mode;
+    try {
+      renderPage();
+      await flush();
+      expect(screen.getByPlaceholderText(placeholder)).toBeTruthy();
+      expect(screen.getByRole("heading", { name: hero })).toBeTruthy();
+      expect(screen.getAllByRole("columnheader").map((cell) => cell.textContent)).toContain("Payment Status");
+    } finally { delete process.env.REACT_APP_WALLET_MODE; }
+  });
+});
+
 describe("admin icons on a row", () => {
   const auction = {
     address: "0xabc", dataDescription: "shoe size", endTime: Date.now() + 600000, minimumContribution: "10",

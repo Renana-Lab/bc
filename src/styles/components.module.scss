@@ -824,3 +824,56 @@ $tooltip-color: #3f50b5;
     }
   }
 }
+
+
+// -------------------------
+// Market look (invisible-wallet participants) and narrow screens
+// -------------------------
+.marketBackground {
+  background: linear-gradient(180deg, #f4d982 0%, #f0d070 48%, #edc75c 100%) !important;
+}
+
+.toolbarLeft {
+  min-width: 0;
+}
+
+@media (max-width: 767.98px) {
+  // Two rows: title row (menu, home, title), then LIVE, Budget and the clock.
+  .appToolbar {
+    flex-wrap: wrap !important;
+    height: auto;
+    padding: 6px 8px !important;
+    row-gap: 4px;
+  }
+
+  .toolbarLeft {
+    width: 100%;
+    gap: 0.4rem !important;
+  }
+
+  .toolbarRight {
+    width: 100%;
+    margin-right: 0 !important;
+    gap: 0.4rem !important;
+    flex-wrap: wrap;
+    justify-content: space-between;
+  }
+
+  .toolbarRight .toolbarPill {
+    min-width: 0;
+    padding: 0.25rem 0.5rem;
+    font-size: 0.78rem;
+  }
+
+  .toolbarRight .clockPill .toolbarPillValue {
+    min-width: 0;
+  }
+
+  .toolbarTitle {
+    white-space: normal;
+  }
+
+  .pageData {
+    width: 94%;
+  }
+}

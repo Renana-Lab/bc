@@ -38,7 +38,8 @@ import {
   validateAuctionForm,
 } from "./auctionLimits";
 import { getWalletCopy } from "../../real_ethereum/wallets/walletCopy";
-import { participantMessage } from "../../real_ethereum/wallets/participantCopy";
+import { participantMessage, participantText } from "../../real_ethereum/wallets/participantCopy";
+import { isInvisibleWalletMode } from "../../real_ethereum/wallets/walletMode.mjs";
 import "./new.module.scss";
 
 const requestConnectedAccount = async () => {
@@ -85,6 +86,7 @@ function NewAuctionPage() {
   const [loading, setLoading] = useState(false);
   const [activeMarket, setActiveMarketState] = useState(getActiveMarket());
   const [, setMarketOptions] = useState(getMarketOptions());
+  const [allowSellerEdit, setAllowSellerEdit] = useState(false);
   const submittingRef = useRef(false);
   const navigate = useNavigate();
 
@@ -102,6 +104,24 @@ function NewAuctionPage() {
     };
 
   }, [navigate]);
+
+  // Only the market wording mentions the seller edit window, and only while the factory allows it.
+  useEffect(() => {
+    if (!isInvisibleWalletMode()) return undefined;
+    let cancelled = false;
+    // Loaded on demand: MetaMask-mode participants never need the read-only client on this page.
+    import("../../real_ethereum/readOnly")
+      .then(({ readOnlyCall }) =>
+        readOnlyCall(({ factory: readFactory }) => readFactory.methods.allowSellerEdit(), 1, {
+          preferInjected: false,
+          allowInjectedFallback: false,
+          factoryAddress: activeMarket.address,
+        }),
+      )
+      .then((value) => { if (!cancelled) setAllowSellerEdit(Boolean(value)); })
+      .catch(() => { if (!cancelled) setAllowSellerEdit(false); });
+    return () => { cancelled = true; };
+  }, [activeMarket.address]);
 
   useEffect(() => {
     return subscribeToMarketChanges((market) => {
@@ -182,7 +202,7 @@ function NewAuctionPage() {
 
   const renderTooltip = (field, text, help = text) => (
     <div className={styles.tooltip}>
-      <label className={styles.tooltipLabel}>
+      <label className={isInvisibleWalletMode() ? styles.tooltiplabe : styles.tooltipLabel}>
         {text}
         <button
           type="button"
@@ -206,7 +226,7 @@ function NewAuctionPage() {
         <img
           className={styles.Image}
           src={picSrc}
-          alt="Create a blockchain data auction"
+          alt={participantText("createImageAlt")}
         />
         <FormControl
           component="form"
@@ -309,7 +329,7 @@ function NewAuctionPage() {
           {renderTooltip(
             "minBid",
             "Minimum Bid",
-            "The lowest price you are willing to accept for selling your information (in wei).",
+            participantText("minBidTooltip", { allowSellerEdit }),
           )}
           <TextField
             type="number"
@@ -355,6 +375,7 @@ function NewAuctionPage() {
                 borderRadius: "20px",
                 padding: "10px 20px",
                 width: "300px",
+                maxWidth: "100%",
                 fontWeight: 700,
               }}
               type="submit"
@@ -384,6 +405,8 @@ function NewAuctionPage() {
             borderRadius: "20px",
             padding: "10px 20px",
             width: "650px",
+            maxWidth: "100%",
+            boxSizing: "border-box",
           }}
           onClick={() => navigate("/auctions-list")}
         >
