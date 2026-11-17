@@ -35,6 +35,7 @@ export const readNativeBalances = async (addresses, { execute = readOnlyExecute 
   return balances;
 };
 
+// getBudget (not the raw usersBudget mapping): it is non-zero for unregistered users and applies a pending global reset.
 export const readBudgets = async (addresses) => {
   const factoryAddress = getActiveFactoryAddress();
   const out = {};
@@ -42,7 +43,7 @@ export const readBudgets = async (addresses) => {
     const chunk = addresses.slice(start, start + BATCH);
     try {
       const results = await readOnlyBatchCall(
-        ({ factory }) => chunk.map((address) => ({ request: (callback) => factory.methods.usersBudget(address).call.request({}, callback) })),
+        ({ factory }) => chunk.map((address) => ({ request: (callback) => factory.methods.getBudget(address).call.request({}, callback) })),
         undefined, { ...READ_OPTIONS, factoryAddress },
       );
       chunk.forEach((address, index) => { out[address.toLowerCase()] = results[index]?.status === "fulfilled" ? String(results[index].value) : "unavailable"; });
