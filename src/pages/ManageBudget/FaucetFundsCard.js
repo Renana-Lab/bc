@@ -1,10 +1,10 @@
 // Faucet funds & payout limit. Shown (a) in the Admin Zone for admin wallets, with "Top up faucet", and (b) on the
 // password-protected /admin/faucet page without the wallet part. Nothing here is automatic.
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle, TextField, Typography } from "@mui/material";
 import { getTargetNetwork } from "../../real_ethereum/sapphireNetworks";
 import { ADMIN_GAS_RESERVE_WEI, formatNative, parseNative } from "../../real_ethereum/wallets/nativeBalance";
-import { fetchFaucetAdminStatus, setFaucetMaxPayouts } from "../../real_ethereum/wallets/faucetClient.mjs";
+import { fetchFaucetAdminStatus, fetchFaucetStatus, setFaucetMaxPayouts, setFaucetState } from "../../real_ethereum/wallets/faucetClient.mjs";
 import { useIsAdminWallet } from "../../real_ethereum/wallets/useIsAdminWallet";
 import AdminCard, { AdminRefreshButton, adminPrimaryButtonSx } from "./AdminCard";
 import { useFaucetSessionPassword } from "./faucetSessionPassword";
@@ -33,11 +33,11 @@ export const payoutWarnings = ({ status, balanceWei }) => {
 };
 
 const mono = { fontFamily: "monospace", fontSize: 13, wordBreak: "break-all" };
-const defaultDeps = { readBalances: readNativeBalances, fetchStatus: fetchFaucetAdminStatus, setMax: setFaucetMaxPayouts, send: sendNativeFromAdmin, waitFor: waitForReceipt, readAdminBalance };
+const defaultDeps = { readBalances: readNativeBalances, fetchStatus: fetchFaucetAdminStatus, fetchPublicStatus: fetchFaucetStatus, setState: setFaucetState, setMax: setFaucetMaxPayouts, send: sendNativeFromAdmin, waitFor: waitForReceipt, readAdminBalance };
 
 export const FaucetFundsCardBody = ({
   faucetUrl = process.env.REACT_APP_FAUCET_URL, envAddress = process.env.REACT_APP_FAUCET_ADDRESS,
-  adminAccount = "", allowTopUp = false, deps: depsOverride, fetchImpl, refreshMs = FAUCET_REFRESH_MS, defaultOpen = true,
+  adminAccount = "", allowTopUp = false, showStateSwitch = false, deps: depsOverride, fetchImpl, refreshMs = FAUCET_REFRESH_MS, defaultOpen = true,
 }) => {
   const deps = useMemo(() => ({ ...defaultDeps, ...depsOverride }), [depsOverride]);
   const symbol = getTargetNetwork().nativeCurrency?.symbol || "TEST";
@@ -46,6 +46,7 @@ export const FaucetFundsCardBody = ({
   const [password, setPassword] = useState("");
   const [dialogPassword, setDialogPassword] = useState(""); // typed inside the Add payouts dialog
   const [balanceWei, setBalanceWei] = useState(null);
+  const [faucetOpen, setFaucetOpen] = useState(null); // true | false | null (unknown)
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [addConfirm, setAddConfirm] = useState(null); // number of payouts to add
@@ -78,11 +79,39 @@ export const FaucetFundsCardBody = ({
     try { await session.run(typed, action); } catch (error) { setMessage(error.message); }
     finally { clear(""); setBusy(false); }
   };
-  const loadStatus = () => withPassword(password, setPassword, async (pw) => setStatus(await deps.fetchStatus({ faucetUrl, password: pw, fetchImpl })));
+  const loadStatus = () => withPassword(password, setPassword, async (auth) => {
+    const next = await deps.fetchStatus({ faucetUrl, ...auth, fetchImpl });
+    setStatus(next);
+    setFaucetOpen(next.open);
+  });
+  // The open/closed state is public (GET /status); the switch writes it with the wallet proof (or the password fallback).
+  useEffect(() => {
+    if (!showStateSwitch || !faucetUrl) return undefined;
+    let cancelled = false;
+    deps.fetchPublicStatus({ faucetUrl, fetchImpl }).then((next) => { if (!cancelled && typeof next?.open === "boolean") setFaucetOpen(next.open); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [deps, faucetUrl, fetchImpl, showStateSwitch]);
+  const toggleFaucet = () => {
+    const target = !faucetOpen;
+    if (!target && !window.confirm("Close the faucet? New participants will not receive funds.")) return;
+    withPassword(password, setPassword, async (auth) => {
+      const result = await deps.setState({ faucetUrl, open: target, ...auth, fetchImpl });
+      setFaucetOpen(result.open);
+      setMessage(result.open ? "The faucet is open." : "The faucet is closed.");
+    });
+  };
+  // With the admin wallet the status loads by itself; without it the password is typed (or remembered) first.
+  const autoLoaded = useRef(false);
+  useEffect(() => {
+    if (autoLoaded.current || !session.usesWallet || !faucetUrl) return;
+    autoLoaded.current = true;
+    loadStatus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.usesWallet, faucetUrl]);
   const closeAdd = () => { setAddConfirm(null); setDialogPassword(""); };
-  const addPayouts = () => withPassword(dialogPassword, setDialogPassword, async (pw) => {
+  const addPayouts = () => withPassword(dialogPassword, setDialogPassword, async (auth) => {
     const value = status.maxPayouts + addConfirm;
-    const result = await deps.setMax({ faucetUrl, value, password: pw, fetchImpl });
+    const result = await deps.setMax({ faucetUrl, value, ...auth, fetchImpl });
     setStatus((current) => ({ ...current, maxPayouts: result.maxPayouts, payoutsUsed: result.payoutsUsed }));
     setMessage(`Payout limit is now ${result.maxPayouts}.`);
     closeAdd();
@@ -142,12 +171,14 @@ export const FaucetFundsCardBody = ({
           ) : null}
           {warnings.map((warning) => <Typography key={warning} variant="body2" sx={{ color: "#8a5a00" }} data-testid="faucet-warning">{warning}</Typography>)}
           <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1, alignItems: "center", mt: 1 }}>
-            {session.hasPassword ? (
+            {session.usesWallet ? (
+              <Typography variant="caption" color="text.secondary" data-testid="wallet-auth-note">Using your admin wallet.</Typography>
+            ) : session.hasPassword ? (
               <Typography variant="caption" color="text.secondary">Faucet admin password saved for this session. <Button size="small" onClick={session.forget}>Forget</Button></Typography>
             ) : (
               <TextField size="small" type="password" autoComplete="new-password" label="Faucet admin password" value={password} onChange={(e) => setPassword(e.target.value)} inputProps={{ "aria-label": "Faucet admin password" }} />
             )}
-            <Button size="small" variant="outlined" onClick={loadStatus} disabled={(!password && !session.hasPassword) || busy}>{status ? "Reload status" : "Load status"}</Button>
+            <Button size="small" variant="outlined" onClick={loadStatus} disabled={(!password && !session.hasCredential) || busy}>{status ? "Reload status" : "Load status"}</Button>
           </Box>
           {status && left !== null ? (
             <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1, alignItems: "center", mt: 1 }}>
@@ -155,6 +186,14 @@ export const FaucetFundsCardBody = ({
               <Button size="small" variant="outlined" onClick={() => setAddConfirm(50)}>+50</Button>
               <TextField size="small" label="Custom" value={customAdd} onChange={(e) => setCustomAdd(e.target.value)} inputProps={{ "aria-label": "Custom payouts" }} sx={{ width: 110 }} />
               <Button size="small" variant="outlined" disabled={!customCount} onClick={() => setAddConfirm(customCount)}>Add payouts</Button>
+            </Box>
+          ) : null}
+          {showStateSwitch ? (
+            <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1, alignItems: "center", mt: 1 }} data-testid="faucet-state-switch">
+              <Typography variant="body2" data-testid="faucet-state">Faucet is {faucetOpen === null ? "unknown" : faucetOpen ? "open" : "closed"}.</Typography>
+              <Button size="small" variant="outlined" disabled={faucetOpen === null || busy || (!password && !session.hasCredential)} onClick={toggleFaucet}>
+                {faucetOpen ? "Close faucet" : "Open faucet"}
+              </Button>
             </Box>
           ) : null}
           {message ? <Typography role="status" variant="body2" sx={{ mt: 1 }}>{message}</Typography> : null}
@@ -182,14 +221,14 @@ export const FaucetFundsCardBody = ({
         <DialogTitle>Add payouts</DialogTitle>
         <DialogContent>
           <Typography data-testid="add-confirm-text">Raise the payout limit from {status?.maxPayouts} to {status ? status.maxPayouts + (addConfirm || 0) : ""} (+{addConfirm}). The limit cannot exceed 1000.</Typography>
-          {session.hasPassword ? null : (
+          {session.hasCredential ? null : (
             <TextField size="small" fullWidth type="password" autoComplete="new-password" label="Faucet admin password" sx={{ mt: 2 }}
               value={dialogPassword} onChange={(e) => setDialogPassword(e.target.value)} inputProps={{ "aria-label": "Confirm faucet admin password" }} />
           )}
         </DialogContent>
         <DialogActions>
           <Button onClick={closeAdd}>Cancel</Button>
-          <Button variant="contained" sx={adminPrimaryButtonSx} onClick={addPayouts} disabled={(!dialogPassword && !session.hasPassword) || busy}>Confirm</Button>
+          <Button variant="contained" sx={adminPrimaryButtonSx} onClick={addPayouts} disabled={(!dialogPassword && !session.hasCredential) || busy}>Confirm</Button>
         </DialogActions>
       </Dialog>
 
@@ -216,7 +255,7 @@ export const FaucetFundsCardBody = ({
 // Admin Zone version: admin wallets only, with the wallet top-up.
 const FaucetFundsCard = (props) => {
   const { account, isAdmin } = useIsAdminWallet({ allowlist: props.allowlist });
-  return isAdmin ? <FaucetFundsCardBody adminAccount={account} allowTopUp defaultOpen={false} {...props} /> : null;
+  return isAdmin ? <FaucetFundsCardBody adminAccount={account} allowTopUp showStateSwitch defaultOpen={false} {...props} /> : null;
 };
 
 export default FaucetFundsCard;

@@ -1,3 +1,5 @@
+import { adminAuthFailure, adminAuthHeaders, adminBodyAuth } from "./adminAuthHeaders.mjs";
+
 // Browser client for the protected faucet (infrastructure/faucet). Turns every failure into a short,
 // friendly message instead of a raw "Failed to fetch" or an error code. Nothing here logs the participant id.
 
@@ -64,53 +66,53 @@ export const claimFunds = async ({
   throw new FaucetError("busy", "The faucet is busy. Try again in a minute.");
 };
 
-// POST /admin/state. The password is sent once and never kept by this module.
-export const setFaucetState = async ({ faucetUrl, open, password, fetchImpl = (...args) => fetch(...args) }) => {
+// POST /admin/state. The credential ({ proof } wallet proof header, or { password }) is sent once and never kept by this module.
+export const setFaucetState = async ({ faucetUrl, open, password, proof, fetchImpl = (...args) => fetch(...args) }) => {
   let response;
   try {
     response = await fetchImpl(`${baseUrl(faucetUrl)}/admin/state`, {
-      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ open, password }),
+      method: "POST", headers: { "content-type": "application/json", ...(proof ? adminAuthHeaders({ proof }) : {}) }, body: JSON.stringify({ open, ...adminBodyAuth({ proof, password }) }),
     });
   } catch {
     throw new FaucetError("network", NETWORK_MESSAGE);
   }
   const body = await readJson(response);
   if (response.status === 200 && typeof body.open === "boolean") return { open: body.open, updatedAt: body.updatedAt ?? null };
-  if (response.status === 401) throw new FaucetError("unauthorized", "Wrong password.");
-  if (response.status === 429) throw new FaucetError("rate_limited", "Too many attempts. Wait ten minutes and try again.");
+  const denied = adminAuthFailure(response, { proof });
+  if (denied) throw new FaucetError(denied.code, denied.message);
   throw new FaucetError("failed", "The change was not saved. Try again.");
 };
 
-// GET /admin/status. The password travels in the x-admin-password header (never the URL) and is not kept.
+// GET /admin/status. The credential travels in the x-admin-proof / x-admin-password header (never the URL) and is not kept.
 // Resolves { payoutsUsed, maxPayouts (null in allowlist mode), faucetAddress, payoutAmount (wei string), open }.
-export const fetchFaucetAdminStatus = async ({ faucetUrl, password, fetchImpl = (...args) => fetch(...args) }) => {
+export const fetchFaucetAdminStatus = async ({ faucetUrl, password, proof, fetchImpl = (...args) => fetch(...args) }) => {
   let response;
   try {
-    response = await fetchImpl(`${baseUrl(faucetUrl)}/admin/status`, { method: "GET", headers: { "x-admin-password": password } });
+    response = await fetchImpl(`${baseUrl(faucetUrl)}/admin/status`, { method: "GET", headers: adminAuthHeaders({ proof, password }) });
   } catch {
     throw new FaucetError("network", NETWORK_MESSAGE);
   }
   const body = await readJson(response);
   if (response.status === 200 && typeof body.open === "boolean") return body;
-  if (response.status === 401) throw new FaucetError("unauthorized", "Wrong password.");
-  if (response.status === 429) throw new FaucetError("rate_limited", "Too many attempts. Wait ten minutes and try again.");
+  const denied = adminAuthFailure(response, { proof });
+  if (denied) throw new FaucetError(denied.code, denied.message);
   throw new FaucetError("failed", "The status could not be read. Try again.");
 };
 
 // POST /admin/max-payouts { value, password }. Resolves { payoutsUsed, maxPayouts }.
-export const setFaucetMaxPayouts = async ({ faucetUrl, value, password, fetchImpl = (...args) => fetch(...args) }) => {
+export const setFaucetMaxPayouts = async ({ faucetUrl, value, password, proof, fetchImpl = (...args) => fetch(...args) }) => {
   let response;
   try {
     response = await fetchImpl(`${baseUrl(faucetUrl)}/admin/max-payouts`, {
-      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ value, password }),
+      method: "POST", headers: { "content-type": "application/json", ...(proof ? adminAuthHeaders({ proof }) : {}) }, body: JSON.stringify({ value, ...adminBodyAuth({ proof, password }) }),
     });
   } catch {
     throw new FaucetError("network", NETWORK_MESSAGE);
   }
   const body = await readJson(response);
   if (response.status === 200 && Number.isInteger(body.maxPayouts)) return body;
-  if (response.status === 401) throw new FaucetError("unauthorized", "Wrong password.");
-  if (response.status === 429) throw new FaucetError("rate_limited", "Too many attempts. Wait ten minutes and try again.");
+  const denied = adminAuthFailure(response, { proof });
+  if (denied) throw new FaucetError(denied.code, denied.message);
   if (body.error === "below_used") throw new FaucetError("below_used", "The limit cannot be lower than the payouts already used.");
   if (body.error === "not_applicable") throw new FaucetError("not_applicable", "This faucet has no payout limit (allowlist mode).");
   throw new FaucetError("failed", "The limit was not saved. Use a whole number up to 1000.");

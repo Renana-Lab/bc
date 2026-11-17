@@ -7,7 +7,7 @@ const buildTemplate = ({
   origins, alertEmail = "", secretArn = "", faucetAddress = "", rpcUrl, chainId, amountWei, lowBalance,
   rateLimit = "20", globalRateLimit = "600", reservedConcurrency = 1,
   pidMode = "allowlist", maxPayouts = "", requiredStudyId = "", adminSecretArn = "", faucetCodeDir, monitorCodeDir,
-  sweepAddress = "", sweepIdleMinutes = 30, sweepRateLimit = "600", sweepGlobalRateLimit = "6000",
+  factoryAddress = "", sweepAddress = "", sweepIdleMinutes = 30, sweepRateLimit = "600", sweepGlobalRateLimit = "6000",
 }) => {
 const policy = (statement) => ({ PolicyName: "inline", PolicyDocument: { Version: "2012-10-17", Statement: statement } });
   const assume = { Version: "2012-10-17", Statement: [{ Effect: "Allow", Principal: { Service: "lambda.amazonaws.com" }, Action: "sts:AssumeRole" }] };
@@ -18,6 +18,8 @@ const policy = (statement) => ({ PolicyName: "inline", PolicyDocument: { Version
   Parameters: {
     AllowedOrigins: { Type: "CommaDelimitedList", Default: origins },
     // Static shared string for the experiment link check. NoEcho hides it in the console; empty = check disabled.
+    // CampaignFactory address for admin wallet auth (isAdmin check). Empty = wallet auth disabled, password only.
+    FactoryAddress: { Type: "String", Default: factoryAddress, AllowedPattern: "^(0x[0-9a-fA-F]{40})?$" },
     ExperimentCode: { Type: "String", Default: "", NoEcho: true },
   },
   Conditions: { HasAlertEmail: { "Fn::Not": [{ "Fn::Equals": [alertEmail, ""] }] } },
@@ -73,6 +75,7 @@ const policy = (statement) => ({ PolicyName: "inline", PolicyDocument: { Version
             RATE_LIMIT_PER_WINDOW: rateLimit, GLOBAL_RATE_LIMIT_PER_WINDOW: String(globalRateLimit), RATE_WINDOW_SECONDS: "600",
             FAUCET_PID_MODE: pidMode, FAUCET_MAX_PAYOUTS: String(maxPayouts), FAUCET_REQUIRED_STUDY_ID: requiredStudyId,
             FAUCET_EXPERIMENT_CODE: { Ref: "ExperimentCode" }, FAUCET_ADMIN_SECRET_ID: adminSecretArn || "unset",
+            FACTORY_ADDRESS: { Ref: "FactoryAddress" }, ALLOWED_ORIGINS: { "Fn::Join": [",", { Ref: "AllowedOrigins" }] },
             ADMIN_RATE_LIMIT_PER_WINDOW: "5", ADMIN_GLOBAL_RATE_LIMIT_PER_WINDOW: "300", ADMIN_SECRET_TTL_SECONDS: "60",
             SWEEP_ADDRESS: sweepAddress || faucetAddress || "", SWEEP_IDLE_MINUTES: String(sweepIdleMinutes),
             // A whole lab shares one NAT address: every participant heartbeats every 2 minutes and re-arms on activity.
@@ -90,7 +93,7 @@ const policy = (statement) => ({ PolicyName: "inline", PolicyDocument: { Version
       Type: "AWS::Lambda::Url",
       Properties: {
         TargetFunctionArn: { "Fn::GetAtt": ["FaucetFunction", "Arn"] }, AuthType: "NONE", InvokeMode: "BUFFERED",
-        Cors: { AllowOrigins: { Ref: "AllowedOrigins" }, AllowMethods: ["GET", "POST"], AllowHeaders: ["content-type", "x-admin-password"], MaxAge: 86400 },
+        Cors: { AllowOrigins: { Ref: "AllowedOrigins" }, AllowMethods: ["GET", "POST"], AllowHeaders: ["content-type", "x-admin-password", "x-admin-proof"], MaxAge: 86400 },
       },
     },
     FaucetUrlPermission: {

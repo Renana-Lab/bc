@@ -1,4 +1,5 @@
 import { sha256, toUtf8Bytes } from "ethers";
+import { adminAuthFailure, adminAuthHeaders, adminBodyAuth } from "./adminAuthHeaders.mjs";
 
 // Browser client for the faucet's auto-return endpoints (/sweep/*). Every failure is silent: the participant is
 // never told, and nothing here logs the participant id or a transaction.
@@ -47,18 +48,20 @@ export const beaconSweep = ({ faucetUrl, path, payload, nav = globalThis.navigat
 };
 
 // ---- admin (password in a header, never the URL) ----
-export const fetchSweeps = async ({ faucetUrl, password, fetchImpl = defaultFetch }) => {
-  const response = await fetchImpl(`${baseUrl(faucetUrl)}/admin/sweeps`, { method: "GET", headers: { "x-admin-password": password } });
+export const fetchSweeps = async ({ faucetUrl, password, proof, fetchImpl = defaultFetch }) => {
+  const response = await fetchImpl(`${baseUrl(faucetUrl)}/admin/sweeps`, { method: "GET", headers: adminAuthHeaders({ proof, password }) });
   const body = await readJson(response);
   if (response.status === 200 && Array.isArray(body.sweeps)) return body;
-  throw Object.assign(new Error(response.status === 401 ? "Wrong password." : "The auto-return list could not be read."), { code: response.status === 401 ? "unauthorized" : "failed" });
+  const denied = adminAuthFailure(response, { proof });
+  throw Object.assign(new Error(denied ? denied.message : "The auto-return list could not be read."), { code: denied ? denied.code : "failed" });
 };
 
-export const saveSweepIdleMinutes = async ({ faucetUrl, password, idleMinutes, fetchImpl = defaultFetch }) => {
+export const saveSweepIdleMinutes = async ({ faucetUrl, password, proof, idleMinutes, fetchImpl = defaultFetch }) => {
   const response = await fetchImpl(`${baseUrl(faucetUrl)}/admin/sweep-settings`, {
-    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ idleMinutes, password }),
+    method: "POST", headers: { "content-type": "application/json", ...(proof ? adminAuthHeaders({ proof }) : {}) }, body: JSON.stringify({ idleMinutes, ...adminBodyAuth({ proof, password }) }),
   });
   const body = await readJson(response);
   if (response.status === 200 && Number.isInteger(body.idleMinutes)) return body.idleMinutes;
-  throw Object.assign(new Error(response.status === 401 ? "Wrong password." : "Use a whole number of minutes from 15 to 1440."), { code: response.status === 401 ? "unauthorized" : "failed" });
+  const denied = adminAuthFailure(response, { proof });
+  throw Object.assign(new Error(denied ? denied.message : "Use a whole number of minutes from 15 to 1440."), { code: denied ? denied.code : "failed" });
 };

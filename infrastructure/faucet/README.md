@@ -69,6 +69,8 @@ Each distinct pid is paid once (`already_paid` for the same wallet, `not_eligibl
 | `FAUCET_REQUIRED_STUDY_ID` | `--required-study-id` | Optional (prolific and open mode). If set, `body.studyId` must match (timing-safe), else `403 not_eligible` before anything is reserved. |
 | `FAUCET_EXPERIMENT_CODE` | env var `FAUCET_EXPERIMENT_CODE` when running `deployFaucet.js` | Optional static shared string; `body.experimentCode` must match (timing-safe). It is a **shared, non-secret string** (it appears in the participants' links as `?exp=`), so it only keeps out people who know the faucet URL but not the link; it is not a credential. Allowed characters: `[A-Za-z0-9_.~-]`, 1-64. `deployFaucet.js` reads it from the environment and passes it as a CloudFormation `NoEcho` parameter, which does appear in the `aws cloudformation deploy` argument list on the machine that deploys, so do not use anything sensitive. It is never logged by the Lambda. Re-set it on every deploy, otherwise it is cleared. |
 | `FAUCET_ADMIN_SECRET_ID` | `--admin-secret-arn` | Secrets Manager secret holding the admin password **hash** (scrypt + salt). Required to deploy; the Lambda role may read it. |
+| `FACTORY_ADDRESS` | `--factory-address 0x...` | CampaignFactory address used for admin **wallet auth** (`isAdmin(address)` eth_call). Empty = wallet auth disabled, password only. Also set as the `FactoryAddress` template parameter. |
+| `ALLOWED_ORIGINS` | `--origins` | The same list as the CORS origins; wallet proofs must be signed for one of these `https://` origins. |
 | `FAUCET_AMOUNT_WEI` | `--amount-wei` | Default is now `1500000000000000000` (1.5 TEST). |
 
 Endpoints (Function URL; the auto-return endpoints are listed under "Auto-return of leftover TEST"): `POST /claim`, `GET /status` (public, returns only `{ open, updatedAt, pidMode }`; the browser uses `pidMode` to decide whether non-hex ids may be sent), `POST /admin/state`, `GET /admin/status` and `POST /admin/max-payouts` (both admin-password protected, see "Payout limit").
@@ -113,6 +115,21 @@ Server side: `POST /admin/state { open, password }` compares in constant time, c
 per 10 minutes (then 429; IPv6 callers are keyed on their /64) plus a global failure budget of 300, so guessing from many addresses
 cannot block the admin's correct password until that budget is gone (it resets with the 10-minute window). It answers `401` with no detail on a wrong password, and never logs the password or body.
 Participants see "Test funds are not available right now." while the faucet is closed.
+
+### Admin authentication: wallet first, password as break-glass
+
+Every `/admin/*` route (`state`, `status`, `max-payouts`, `sweeps`, `sweep-settings`, `messages` GET and POST) accepts either credential:
+
+* **Admin wallet (preferred).** Header `x-admin-proof: base64url(JSON { address, message, signature })`, the same proof the Admin Zone gate stores after the admin signs in
+  (EIP-4361 text, `personal_sign`, valid 60 minutes). `adminWalletAuth.js` checks, in order: size <= 4 KB and shape; line 1 is `<host> wants you to sign in with your Ethereum account:` with
+  `https://<host>` in `ALLOWED_ORIGINS`; `URI` equals that origin; the address line; the exact Admin Zone statement; `Chain ID` equals `CHAIN_ID`; `Issued At` not in the future (60 s skew) and not older than 61 minutes;
+  `Expiration Time` in the future and at most 61 minutes after `Issued At`; the signature recovers the address; and finally **the address is an on-chain admin**
+  (`isAdmin(address)` on `FACTORY_ADDRESS`, one `eth_call` through `RPC_URL`; cached 60 s when true, 10 s when false, so a removed admin loses access within a minute).
+  Bad proof or not an admin: `401`. RPC unreachable: `503` (never fails open; not counted as a failed attempt).
+* **Password (fallback).** Unchanged: `x-admin-password` header or `password` in the body, scrypt hash in Secrets Manager. Used when no `x-admin-proof` is sent, or when `FACTORY_ADDRESS` is empty (wallet auth disabled).
+* Proof failures count in the same `admf:` failure limit as wrong passwords (5 per caller, then 429). Logs: `admin_auth { method: "wallet"|"password", address? }`; `admin_state_changed` and `admin_max_payouts_changed` include `admin` (the wallet address) for wallet auth.
+  The proof, signature and password are never logged.
+* CORS `AllowHeaders` include `x-admin-proof`. Deploying this needs the new option `--factory-address` (template change: new `FACTORY_ADDRESS` / `ALLOWED_ORIGINS` env vars and CORS header).
 
 ### Payout limit (admins)
 
@@ -194,6 +211,7 @@ infrastructure: items in the existing codes table, the existing Function URL, no
 
 ## Files
 
+* `adminWalletAuth.js` - verifies the `x-admin-proof` wallet proof and the on-chain admin role (cached)
 * `adminAuth.js` - scrypt hashing / constant-time checks for the admin password; `../../scripts/faucet/setAdminPassword.js` creates the hash
 * `handler.js` - Lambda logic (`createFaucetHandler` is dependency-injected; `handler` is the AWS entry point)
 * `store.js` - DynamoDB store (conditional writes). `memoryStore.js` - test double with the same semantics
@@ -214,7 +232,7 @@ conditional-expression semantics are standard DynamoDB. `scripts/faucet/dynamoSt
 3. Fund the printed faucet address with Sapphire Testnet TEST tokens (see `docs/SAPPHIRE_TESTNET_RUNBOOK.md`).
 4. Check the template offline: `node scripts/faucet/deployFaucet.js --env test --dry-run`
 5. Deploy:
-   `node scripts/faucet/deployFaucet.js --env test --region us-east-1 --artifact-bucket test-bc-artifacts-<account-id> --secret-arn <ARN> --admin-secret-arn <ADMIN_ARN> --faucet-address <0x...> --alert-email you@example.org --origins https://<test-amplify-domain>`
+   `node scripts/faucet/deployFaucet.js --env test --region us-east-1 --artifact-bucket test-bc-artifacts-<account-id> --secret-arn <ARN> --admin-secret-arn <ADMIN_ARN> --faucet-address <0x...> --factory-address <FACTORY_0x...> --alert-email you@example.org --origins https://<test-amplify-domain>`
    It prints `REACT_APP_FAUCET_URL` and the table name.
 6. Confirm the SNS subscription email.
 7. Generate participant codes (CSV with links stays local and git-ignored):

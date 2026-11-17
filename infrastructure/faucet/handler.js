@@ -22,6 +22,7 @@
 const crypto = require("crypto");
 const { verifyPassword, safeEqual } = require("./adminAuth");
 const { Wallet, Transaction, getAddress, isAddress } = require("ethers");
+const { createAdminWalletAuth } = require("./adminWalletAuth");
 const sweep = require("./sweep");
 const inbox = require("./inbox");
 
@@ -96,6 +97,9 @@ const loadConfig = (env = process.env) => {
     absentChecks: 3,
     absentDelayMs: 700,
     // Auto-return of leftover TEST (see sweep.js). The sweep address defaults to the faucet wallet.
+    // Admin wallet auth (adminWalletAuth.js): empty factory address = disabled, password only.
+    factoryAddress: env.FACTORY_ADDRESS && isAddress(env.FACTORY_ADDRESS) ? getAddress(env.FACTORY_ADDRESS) : "",
+    allowedOrigins: String(env.ALLOWED_ORIGINS || "").split(",").map((entry) => entry.trim()).filter(Boolean),
     sweepAddress: env.SWEEP_ADDRESS && isAddress(env.SWEEP_ADDRESS) ? getAddress(env.SWEEP_ADDRESS) : "",
     sweepIdleMinutes: Number(env.SWEEP_IDLE_MINUTES || 30),
     sweepRateLimit: Number(env.SWEEP_RATE_LIMIT_PER_WINDOW || 600),
@@ -116,6 +120,7 @@ const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, getAdminSecret
   const adminRateLimit = config.adminRateLimit ?? 5;
   const adminGlobalRateLimit = config.adminGlobalRateLimit ?? 300;
   const adminSecretTtlMs = config.adminSecretTtlMs ?? 60_000;
+  const walletAuth = createAdminWalletAuth({ chain, factoryAddress: config.factoryAddress, chainId: config.chainId, allowedOrigins: config.allowedOrigins, now });
   // One signer per process: signing/nonce selection must not interleave (the stack also sets
   // reserved concurrency 1 so there is a single container).
   let queue = Promise.resolve();
@@ -310,25 +315,46 @@ const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, getAdminSecret
     return json(200, publicState(await readState()));
   };
 
-  // Shared admin gate: rate limit + password check. Returns null when authorised, else the response to send.
+  // Shared admin gate for every /admin/* route: rate limit + credential check. Returns { denied: null, method, address? }
+  // when authorised, else { denied: <response> }. A wallet proof (x-admin-proof, see adminWalletAuth.js) is used when sent and
+  // wallet auth is enabled; otherwise the password is the break-glass fallback.
   // Only FAILED verifications count. Each attempt is counted up front (so parallel guesses cannot slip past the
-  // limit) and refunded when the password is right: an attacker burning failures from other IPs cannot block the
-  // admin's correct password, except by exhausting the modest global failure budget.
+  // limit) and refunded when the credential is right: an attacker burning failures from other IPs cannot block the
+  // admin, except by exhausting the modest global failure budget. An RPC outage (503) is not the caller's failure and is refunded.
   // The caller counter goes first; the global counter is only touched by callers still within their own limit,
   // so a single address hammering the endpoint adds nothing to the global budget beyond its own limit.
-  const adminGuard = async (request, password) => {
+  const adminAuth = async (request, password) => {
     const { hitCaller, hitGlobal } = await counters(request, "admf:", "admf-global");
+    const refund = () => Promise.all([hitCaller(-1), hitGlobal(-1)]).catch(() => {});
     const failures = await hitCaller(1);
-    if (failures > adminRateLimit) { event("admin_rate_limited"); return rateLimited(); }
+    if (failures > adminRateLimit) { event("admin_rate_limited"); return { denied: rateLimited() }; }
     const globalFailures = await hitGlobal(1);
-    if (globalFailures > adminGlobalRateLimit) { event("admin_rate_limited"); return rateLimited(); }
+    if (globalFailures > adminGlobalRateLimit) { event("admin_rate_limited"); return { denied: rateLimited() }; }
+    const proof = headerValue(request, "x-admin-proof");
+    if (proof !== undefined && walletAuth.enabled) {
+      const result = await walletAuth.verify(proof);
+      if (result.ok) {
+        await refund();
+        event("admin_auth", { method: "wallet", address: result.address });
+        return { denied: null, method: "wallet", address: result.address };
+      }
+      if (result.reason === "rpc") {
+        await refund();
+        event("admin_auth_unavailable", { method: "wallet" });
+        return { denied: json(503, { error: "unavailable" }) };
+      }
+      event("admin_denied", { method: "wallet", reason: result.reason });
+      return { denied: json(401, { error: "unauthorized" }) };
+    }
     let record = null;
     try { record = await adminRecord(); } catch { record = null; }
     const ok = await verifyPassword(password, record);
-    if (!ok) { event("admin_denied"); return json(401, { error: "unauthorized" }); }
-    await Promise.all([hitCaller(-1), hitGlobal(-1)]).catch(() => {}); // a correct password is not a failure
-    return null;
+    if (!ok) { event("admin_denied", { method: "password" }); return { denied: json(401, { error: "unauthorized" }) }; }
+    await refund(); // a correct password is not a failure
+    event("admin_auth", { method: "password" });
+    return { denied: null, method: "password" };
   };
+  const adminField = (auth) => (auth.address ? { admin: auth.address } : {});
   const parseBody = (raw) => { try { return JSON.parse(raw || "{}") || {}; } catch { return {}; } };
   const headerValue = (request, name) => {
     const headers = request.headers || {};
@@ -342,12 +368,12 @@ const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, getAdminSecret
       const raw = readBody(request);
       if (Buffer.byteLength(raw) > MAX_BODY_BYTES) return json(413, { error: "too_large" });
       const body = parseBody(raw);
-      const denied = await adminGuard(request, body.password);
-      if (denied) return denied;
+      const auth = await adminAuth(request, body.password);
+      if (auth.denied) return auth.denied;
       if (typeof body.open !== "boolean") return json(400, { error: "bad_request" });
       const updatedAt = Math.floor(now() / 1000);
       await store.setState(body.open, updatedAt);
-      event("admin_state_changed", { open: body.open });
+      event("admin_state_changed", { open: body.open, ...adminField(auth) });
       return json(200, publicState({ open: body.open, updatedAt }));
     } catch {
       event("error", { code: "admin" });
@@ -360,8 +386,8 @@ const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, getAdminSecret
   // maxPayouts is null in allowlist mode (there is no counter cap there).
   const adminStatus = async (request) => {
     try {
-      const denied = await adminGuard(request, headerValue(request, "x-admin-password"));
-      if (denied) return denied;
+      const auth = await adminAuth(request, headerValue(request, "x-admin-password"));
+      if (auth.denied) return auth.denied;
       const state = await readState();
       const payoutsUsed = prolific ? await store.getPayoutCount() : 0;
       return json(200, {
@@ -383,8 +409,8 @@ const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, getAdminSecret
       const raw = readBody(request);
       if (Buffer.byteLength(raw) > MAX_BODY_BYTES) return json(413, { error: "too_large" });
       const body = parseBody(raw);
-      const denied = await adminGuard(request, body.password);
-      if (denied) return denied;
+      const auth = await adminAuth(request, body.password);
+      if (auth.denied) return auth.denied;
       if (!prolific) return json(400, { error: "not_applicable" });
       const { value } = body;
       if (!Number.isInteger(value) || value < 1 || value > ADMIN_MAX_PAYOUTS_LIMIT) return json(400, { error: "bad_request" });
@@ -394,7 +420,7 @@ const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, getAdminSecret
       // The store re-checks the counter atomically, so a claim racing this request cannot leave used > cap.
       if ((await store.setMaxPayouts(value, Math.floor(now() / 1000))) === false) return json(400, { error: "below_used", payoutsUsed: await store.getPayoutCount() });
       lastEffectiveMax = value;
-      event("admin_max_payouts_changed", { from: previous, to: value, payoutsUsed });
+      event("admin_max_payouts_changed", { from: previous, to: value, payoutsUsed, ...adminField(auth) });
       return json(200, { payoutsUsed, maxPayouts: value });
     } catch {
       event("error", { code: "admin" });
@@ -483,8 +509,8 @@ const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, getAdminSecret
   // GET /admin/sweeps (x-admin-password): every record, for the participants gas card.
   const adminSweeps = async (request) => {
     try {
-      const denied = await adminGuard(request, headerValue(request, "x-admin-password"));
-      if (denied) return denied;
+      const auth = await adminAuth(request, headerValue(request, "x-admin-password"));
+      if (auth.denied) return auth.denied;
       const entries = await store.listSweeps();
       return json(200, { idleMinutes: await sweepIdle(), sweeps: entries.map(sweep.publicSweep) });
     } catch {
@@ -499,8 +525,8 @@ const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, getAdminSecret
       const raw = readBody(request);
       if (Buffer.byteLength(raw) > MAX_BODY_BYTES) return json(413, { error: "too_large" });
       const body = parseBody(raw);
-      const denied = await adminGuard(request, headerValue(request, "x-admin-password") ?? body.password);
-      if (denied) return denied;
+      const auth = await adminAuth(request, headerValue(request, "x-admin-password") ?? body.password);
+      if (auth.denied) return auth.denied;
       const idleMinutes = sweep.parseIdleMinutes(body.idleMinutes);
       if (idleMinutes === null) return json(400, { error: "bad_request" });
       await store.setSweepSettings(idleMinutes, Math.floor(now() / 1000));
@@ -604,8 +630,8 @@ const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, getAdminSecret
       const raw = readBody(request);
       if (Buffer.byteLength(raw) > MAX_MESSAGE_REQUEST_BYTES) return json(413, { error: "too_large" });
       const body = parseBody(raw);
-      const denied = await adminGuard(request, headerValue(request, "x-admin-password") ?? body.password);
-      if (denied) return denied;
+      const auth = await adminAuth(request, headerValue(request, "x-admin-password") ?? body.password);
+      if (auth.denied) return auth.denied;
       const text = inbox.cleanBody(body.body);
       const toAll = body.all === true;
       if (!text || text.length > inbox.MAX_BODY_CHARS || toAll === (body.pidHash !== undefined)) return json(400, { error: "bad_request" });
@@ -632,8 +658,8 @@ const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, getAdminSecret
   // participants that acknowledged each) and every participant's messages. With pidHash: that participant only.
   const adminListMessages = async (request) => {
     try {
-      const denied = await adminGuard(request, headerValue(request, "x-admin-password"));
-      if (denied) return denied;
+      const auth = await adminAuth(request, headerValue(request, "x-admin-password"));
+      if (auth.denied) return auth.denied;
       const { pidHash: asked } = queryOf(request);
       const pidHash = asked === undefined ? null : readPidHash(asked);
       if (asked !== undefined && !pidHash) return json(400, { error: "bad_request" });

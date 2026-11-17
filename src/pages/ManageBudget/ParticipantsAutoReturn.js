@@ -1,6 +1,6 @@
 // "Auto-return" part of the admin Participants gas card: which participants have a pre-signed return transfer armed
 // with the faucet server, what was sent back, and how long a participant may be idle before it is broadcast.
-// The faucet admin password is typed once per session (see faucetSessionPassword.js) and shared with the other cards.
+// The signed-in admin wallet is tried first; the faucet admin password (typed once per session, see faucetSessionPassword.js) is the fallback.
 import { useCallback, useState } from "react";
 import { Box, Button, TableCell, TextField, Typography } from "@mui/material";
 import { adminHeadCellSx } from "./AdminCard";
@@ -33,17 +33,17 @@ export const useAutoReturn = ({ faucetUrl = process.env.REACT_APP_FAUCET_URL, de
   }, []);
   // load(typed) uses the typed password, or the session one when nothing is typed. Resolves to the sweeps map
   // (lowercase address -> sweep) or undefined when the request failed.
-  const load = (typed) => run(() => session.run(typed, async (password) => {
-    const body = await api.fetchSweeps({ faucetUrl, password });
+  const load = (typed) => run(() => session.run(typed, async (auth) => {
+    const body = await api.fetchSweeps({ faucetUrl, ...auth });
     const map = Object.fromEntries(body.sweeps.map((sweep) => [String(sweep.address).toLowerCase(), sweep]));
     setSweeps(map);
     setIdleMinutes(Number.isInteger(body.idleMinutes) ? body.idleMinutes : null);
     return map;
   }));
-  const save = (typed, minutes) => run(() => session.run(typed, async (password) => {
-    setIdleMinutes(await api.saveSweepIdleMinutes({ faucetUrl, password, idleMinutes: minutes }));
+  const save = (typed, minutes) => run(() => session.run(typed, async (auth) => {
+    setIdleMinutes(await api.saveSweepIdleMinutes({ faucetUrl, ...auth, idleMinutes: minutes }));
   }));
-  return { sweeps, idleMinutes, message, busy, load, save, enabled: Boolean(faucetUrl), hasPassword: session.hasPassword, forget: session.forget };
+  return { sweeps, idleMinutes, message, busy, load, save, enabled: Boolean(faucetUrl), hasPassword: session.hasCredential, usesWallet: session.usesWallet, forget: session.forget };
 };
 
 export const AutoReturnHeaders = () => (<><TableCell sx={adminHeadCellSx}>Auto-return</TableCell><TableCell sx={adminHeadCellSx}>Returned</TableCell></>);
@@ -71,7 +71,9 @@ export const AutoReturnControls = ({ state }) => {
   return (
     <Box sx={{ display: "flex", flexWrap: "wrap", gap: 2, alignItems: "center", mt: 2 }} data-testid="auto-return-controls">
       <Typography variant="body2" color="text.secondary">Auto-return of leftover funds to the lab address:</Typography>
-      {state.hasPassword ? (
+      {state.usesWallet ? (
+        <Typography variant="caption" color="text.secondary" data-testid="wallet-auth-note">Using your admin wallet.</Typography>
+      ) : state.hasPassword ? (
         <Typography variant="caption" color="text.secondary" data-testid="session-password-note">
           Faucet admin password saved for this session. <Button size="small" onClick={state.forget}>Forget</Button>
         </Typography>

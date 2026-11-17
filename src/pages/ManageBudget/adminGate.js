@@ -122,6 +122,24 @@ const readStoredProof = (account, { allowlist, now, expected } = {}) => {
   }
 };
 
+// The stored proof for `account` as the faucet's x-admin-proof header value (base64url JSON { address, message, signature }),
+// or null when there is none, it is for another account, or it has expired. The faucet re-verifies everything, including the
+// on-chain admin role; this only avoids sending a proof that is certainly refused.
+export const getAdminProofHeader = (account, { allowlist, now, expected } = {}) => {
+  try {
+    const stored = JSON.parse(storage()?.getItem(ADMIN_PROOF_KEY) || "null");
+    if (!stored || String(stored.address).toLowerCase() !== String(account ?? "").toLowerCase()) return null;
+    if (!verifyAdminProof({ ...stored, allowlist, now, expected }).ok) return null;
+    const json = JSON.stringify({ address: stored.address, message: stored.message, signature: stored.signature });
+    const bytes = new TextEncoder().encode(json);
+    let binary = "";
+    bytes.forEach((byte) => { binary += String.fromCharCode(byte); });
+    return btoa(binary).split("+").join("-").split("/").join("_").replace(/=+$/, "");
+  } catch (_) {
+    return null;
+  }
+};
+
 export const getVerifiedAdminAddress = (account, options = {}) => readStoredProof(account, options)?.address || "";
 
 // Epoch ms when the stored proof for this account stops being valid (0 when there is none).
