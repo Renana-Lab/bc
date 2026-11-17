@@ -1,7 +1,9 @@
 // The faucet admin password is typed once per browser session and shared by every card that talks to the faucet
 // (Participants gas, Faucet funds, auto-return, messages). It lives in sessionStorage only: it is cleared when the
 // tab closes and is never written to localStorage, a URL or a log. A rejected password is dropped again.
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useIsAdminWallet } from "../../real_ethereum/wallets/useIsAdminWallet";
+import { getAdminProofHeader } from "./adminGate";
 
 export const SESSION_PASSWORD_KEY = "bc:faucet-admin-password:session";
 
@@ -35,28 +37,69 @@ export const clearSessionPassword = () => setSessionPassword("");
 
 export const isUnauthorizedError = (error) => error?.code === "unauthorized" || /wrong password/i.test(String(error?.message || ""));
 
-// { password, hasPassword, remember(pw), forget(), run(pw, action) }
-//   run(typedOrEmpty, action) uses the typed password, else the session one; it remembers a password that worked
-//   and forgets one the server refused, so the field reappears.
+// Wallet proofs the faucet refused (401, 503 or "not supported" on an older faucet): not tried again until a new proof is signed.
+const refusedProofs = new Set();
+// A network-type failure (FaucetError "network", or the TypeError fetch throws) counts as a refusal too: until the faucet is
+// redeployed its CORS rules reject the x-admin-proof header, which the browser reports as a plain network error.
+const isNetworkError = (error) => error?.code === "network" || error instanceof TypeError;
+const isRefusal = (error) => error?.code === "unauthorized" || error?.code === "unavailable" || isNetworkError(error);
+
+// { password, hasPassword, usesWallet, hasCredential, remember(pw), forget(), run(typed, action) }
+//   run(typedOrEmpty, action) calls action({ password }) with the typed password, else action({ proof }) with the signed-in admin
+//   wallet's proof (x-admin-proof), else action({ password }) with the session password. Spread the argument into the client call.
+//   A refused proof falls back to the session password when there is one, otherwise it throws so the password field appears.
+//   A password that worked is remembered; one the server refused is forgotten, so the field reappears.
 export const useFaucetSessionPassword = () => {
   const [password, setPassword] = useState(getSessionPassword);
+  const { account } = useIsAdminWallet();
+  const [tick, setTick] = useState(0); // bumped when a proof is refused or may have expired
   useEffect(() => {
-    const sync = () => setPassword(getSessionPassword());
+    const sync = () => { setPassword(getSessionPassword()); setTick((value) => value + 1); };
     listeners.add(sync);
     sync();
     return () => listeners.delete(sync);
   }, []);
+  const currentProof = useCallback(() => {
+    const proof = account ? getAdminProofHeader(account) : null;
+    return proof && !refusedProofs.has(proof) ? proof : null;
+  }, [account]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const proof = useMemo(currentProof, [currentProof, tick]);
   const run = useCallback(async (typed, action) => {
-    const used = typed || getSessionPassword();
-    if (!used) throw new Error("Enter the faucet admin password.");
-    try {
-      const result = await action(used);
-      if (used !== getSessionPassword()) setSessionPassword(used);
-      return result;
-    } catch (error) {
-      if (isUnauthorizedError(error)) clearSessionPassword();
-      throw error;
+    const attempt = async (auth) => {
+      try {
+        const result = await action(auth);
+        if (auth.password && auth.password !== getSessionPassword()) setSessionPassword(auth.password);
+        return result;
+      } catch (error) {
+        if (auth.password && isUnauthorizedError(error)) clearSessionPassword();
+        throw error;
+      }
+    };
+    const walletProof = typed ? null : currentProof();
+    if (walletProof) {
+      try {
+        return await action({ proof: walletProof });
+      } catch (error) {
+        if (!isRefusal(error)) throw error;
+        refusedProofs.add(walletProof);
+        notify();
+        if (!getSessionPassword()) {
+          throw Object.assign(new Error(error.code === "unavailable"
+            ? "The faucet could not check your admin role right now. Try again, or enter the faucet admin password."
+            : "The faucet did not accept your admin wallet. Enter the faucet admin password."), { code: "wallet_refused" });
+        }
+      }
     }
-  }, []);
-  return { password, hasPassword: Boolean(password), remember: setSessionPassword, forget: clearSessionPassword, run };
+    const used = typed || getSessionPassword();
+    if (!used) {
+      setTick((value) => value + 1);
+      throw new Error("Enter the faucet admin password.");
+    }
+    return attempt({ password: used });
+  }, [currentProof]);
+  return {
+    password, hasPassword: Boolean(password), usesWallet: Boolean(proof), hasCredential: Boolean(password) || Boolean(proof),
+    remember: setSessionPassword, forget: clearSessionPassword, run,
+  };
 };

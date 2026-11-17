@@ -87,7 +87,13 @@ test("network, alarm and exposure settings", () => {
   assert.equal(template.Resources.LowBalanceAlarm.Properties.TreatMissingData, "breaching");
   assert.equal(template.Resources.LowBalanceAlarm.Properties.Threshold, 5);
   assert.ok(template.Resources.FaucetUrl.Properties.Cors.AllowHeaders.includes("x-admin-password"), "browser admin calls may send the password header");
+  assert.ok(template.Resources.FaucetUrl.Properties.Cors.AllowHeaders.includes("x-admin-proof"), "browser admin calls may send the wallet proof header");
   assert.ok(template.Resources.FaucetUrl.Properties.Cors.AllowHeaders.includes("content-type"));
+  assert.deepEqual(env.FACTORY_ADDRESS, { Ref: "FactoryAddress" });
+  assert.deepEqual(template.Parameters.FactoryAddress, { Type: "String", Default: "", AllowedPattern: "^(0x[0-9a-fA-F]{40})?$" }, "empty by default = wallet auth disabled");
+  assert.deepEqual(env.ALLOWED_ORIGINS, { "Fn::Join": [",", { Ref: "AllowedOrigins" }] });
+  const withFactory = buildTemplate({ origins: "x", rpcUrl: "u", chainId: 23295, amountWei: "1", lowBalance: 1, factoryAddress: "0xf6d6e74e113CE7107b8a7edB7427927e51e3A146", faucetCodeDir: "a", monitorCodeDir: "b" });
+  assert.equal(withFactory.Parameters.FactoryAddress.Default, "0xf6d6e74e113CE7107b8a7edB7427927e51e3A146");
   assert.deepEqual(template.Resources.FaucetUrl.Properties.Cors.AllowMethods, ["GET", "POST"]); // GET /status, POST /claim and /admin/state
   const json = JSON.stringify(template);
   assert.equal(/datamarketplaces\.net/.test(json), false, "no production domain");
@@ -105,6 +111,8 @@ test("deploy and secret scripts are test-environment only and refuse prod-lookin
   assert.match(run("deployFaucet.js", ["--env", "test", "--origins", "https://datamarketplaces.net", "--dry-run"]).stderr, /production domain/);
   assert.match(run("deployFaucet.js", ["--env", "test", "--chain-id", "23294", "--dry-run"]).stderr, /mainnet is refused/);
   assert.match(run("createFaucetSecret.js", ["--name", "bc-faucet/key", "--dry-run"]).stderr, /start with test-/);
+  assert.match(run("deployFaucet.js", ["--env", "test", "--factory-address", "0x123", "--dry-run"]).stderr, /--factory-address must be/);
+  assert.equal(run("deployFaucet.js", ["--env", "test", "--factory-address", "0xf6d6e74e113CE7107b8a7edB7427927e51e3A146", "--dry-run"]).status, 0);
   const ok = run("deployFaucet.js", ["--env", "test", "--dry-run"]);
   assert.equal(ok.status, 0);
   assert.match(ok.stdout, /no AWS calls were made/);

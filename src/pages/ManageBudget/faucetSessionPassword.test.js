@@ -24,12 +24,12 @@ test("the password lives in sessionStorage only, never localStorage", () => {
 
 test("run() remembers a password that worked, so it is typed at most once per session", async () => {
   const { result } = renderHook(() => useFaucetSessionPassword());
-  const action = jest.fn(async (pw) => `ok:${pw}`);
+  const action = jest.fn(async ({ password }) => `ok:${password}`);
   expect(result.current.hasPassword).toBe(false);
   await act(async () => { expect(await result.current.run("typed", action)).toBe("ok:typed"); });
   expect(result.current.hasPassword).toBe(true);
   await act(async () => { await result.current.run("", action); });
-  expect(action).toHaveBeenLastCalledWith("typed"); // second call needs no typing
+  expect(action).toHaveBeenLastCalledWith({ password: "typed" }); // second call needs no typing
 });
 
 test("run() forgets a password the server refused and keeps it on other errors", async () => {

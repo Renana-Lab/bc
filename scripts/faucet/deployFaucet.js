@@ -4,7 +4,7 @@
 //
 //   node scripts/faucet/deployFaucet.js --dry-run                      builds the bundles and template locally, no AWS calls
 //   node scripts/faucet/deployFaucet.js --region us-east-1 --artifact-bucket my-bucket \
-//        --secret-arn arn:aws:secretsmanager:... --admin-secret-arn arn:aws:secretsmanager:... --faucet-address 0x... --alert-email ops@example.org
+//        --secret-arn arn:aws:secretsmanager:... --admin-secret-arn arn:aws:secretsmanager:... --faucet-address 0x... --factory-address 0x... --alert-email ops@example.org
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -27,6 +27,8 @@ const artifactBucket = read("--artifact-bucket");
 const secretArn = read("--secret-arn");
 const faucetAddress = read("--faucet-address");
 const alertEmail = read("--alert-email");
+// CampaignFactory address: enables admin wallet auth (isAdmin check). Empty = password only.
+const factoryAddress = read("--factory-address");
 const rpcUrl = read("--rpc-url", "https://testnet.sapphire.oasis.io");
 const chainId = Number(read("--chain-id", "23295"));
 const amountWei = read("--amount-wei", "1500000000000000000"); // 1.5 TEST
@@ -52,6 +54,7 @@ if (pidMode === "allowlist" && (maxPayouts || requiredStudyId || experimentCode)
 if (pidMode === "open") console.error("WARNING: --pid-mode open does not verify identity. Any pid of 1-128 printable ASCII characters can claim once; only --max-payouts, the rate limits and the admin open/closed switch limit the spend.");
 if (requiredStudyId && !/^[A-Za-z0-9_-]{1,64}$/.test(requiredStudyId)) throw new Error("--required-study-id has an unexpected format");
 if (experimentCode && !/^[A-Za-z0-9_.~-]{1,64}$/.test(experimentCode)) throw new Error("FAUCET_EXPERIMENT_CODE must match [A-Za-z0-9_.~-]{1,64} (the same characters the app accepts in ?exp=)");
+if (factoryAddress && !/^0x[0-9a-fA-F]{40}$/.test(factoryAddress)) throw new Error("--factory-address must be a 0x-prefixed 40-hex address");
 if (!dryRun) {
   if (!/^arn:aws[a-z-]*:secretsmanager:/.test(adminSecretArn)) throw new Error("--admin-secret-arn is required (store the output of scripts/faucet/setAdminPassword.js in Secrets Manager first)");
   if (!artifactBucket) throw new Error("--artifact-bucket is required (S3 bucket for the Lambda packages)");
@@ -74,7 +77,7 @@ bundle("handler.js", "faucet");
 bundle("monitor.js", "monitor");
 
 const template = buildTemplate({
-  origins, alertEmail, secretArn, faucetAddress, rpcUrl, chainId, amountWei, lowBalance, rateLimit, globalRateLimit, reservedConcurrency,
+  origins, alertEmail, secretArn, faucetAddress, factoryAddress, rpcUrl, chainId, amountWei, lowBalance, rateLimit, globalRateLimit, reservedConcurrency,
   pidMode, maxPayouts, requiredStudyId, adminSecretArn, sweepAddress: process.env.SWEEP_ADDRESS || faucetAddress, sweepIdleMinutes: Number(process.env.SWEEP_IDLE_MINUTES || 30),
   faucetCodeDir: path.join(work, "faucet"), monitorCodeDir: path.join(work, "monitor"),
 });
@@ -102,7 +105,7 @@ try {
   runAws(["cloudformation", "package", "--template-file", templatePath, "--s3-bucket", artifactBucket, "--output-template-file", packaged, "--region", region]);
   runAws([
     "cloudformation", "deploy", "--template-file", packaged, "--stack-name", stackName, "--region", region,
-    "--capabilities", "CAPABILITY_IAM", "--parameter-overrides", `AllowedOrigins=${origins}`, `ExperimentCode=${experimentCode}`, "--tags", "Environment=test", "Project=bc-data-market", "--no-fail-on-empty-changeset",
+    "--capabilities", "CAPABILITY_IAM", "--parameter-overrides", `AllowedOrigins=${origins}`, `FactoryAddress=${factoryAddress}`, `ExperimentCode=${experimentCode}`, "--tags", "Environment=test", "Project=bc-data-market", "--no-fail-on-empty-changeset",
   ]);
   const output = (key) => runAws(["cloudformation", "describe-stacks", "--stack-name", stackName, "--region", region,
     "--query", `Stacks[0].Outputs[?OutputKey=='${key}'].OutputValue | [0]`, "--output", "text"], true);
