@@ -9,7 +9,7 @@ import {
 } from "./adminCardData";
 import { filterHiddenAuctions, auctionBadges } from "../AuctionsList/auctionAdminFlags";
 
-jest.mock("../../real_ethereum/readOnly", () => ({ readOnlyCall: jest.fn(), readOnlyExecute: jest.fn() }));
+jest.mock("../../real_ethereum/readOnly", () => ({ readOnlyCall: jest.fn(), readOnlyExecute: jest.fn(), readOnlyBatchCall: jest.fn() }));
 jest.mock("../../real_ethereum/socketFactory", () => ({ canUseLiveEvents: () => false, factorySocket: { events: {} } }));
 jest.mock("../../real_ethereum/adminChain", () => ({
   readCancelledSet: jest.fn(async () => new Set()),
@@ -31,7 +31,9 @@ import { MemoryRouter } from "react-router-dom";
 // eslint-disable-next-line import/first
 import { AdminOpsCards, AdminsCard, AuctionControlsCard, MarketSettingsCard, UsersBudgetsCard } from "./AdminOpsCards";
 // eslint-disable-next-line import/first
-import { readOnlyCall } from "../../real_ethereum/readOnly";
+import { readOnlyBatchCall, readOnlyCall } from "../../real_ethereum/readOnly";
+// eslint-disable-next-line import/first
+import { chainImplementations } from "./chainTestHelpers";
 
 const A1 = "0x1111111111111111111111111111111111111111";
 const A2 = "0x2222222222222222222222222222222222222222";
@@ -249,18 +251,19 @@ describe("Admins and settings cards", () => {
 
 describe("Users and budgets confirmations", () => {
   const U1 = "0x5555555555555555555555555555555555555555";
-  const mockUsers = () =>
-    readOnlyCall.mockImplementation(async (fn) => {
-      const spec = fn({ factory: { methods: new Proxy({}, { get: (_, method) => (...args) => ({ method, args }) }) } });
-      if (spec.method === "allUsers") {
-        if (spec.args[0] === 0) return U1;
-        throw new Error("execution reverted");
-      }
-      if (spec.method === "getBudget") return "100";
-      if (spec.method === "heldBy") return "0";
-      if (spec.method === "disabled") return false;
+  const mockUsers = () => {
+    const chain = chainImplementations((method, args) => {
+      if (method === "allUsersCount") return "1";
+      if (method === "allUsers") { if (args[0] === 0) return U1; throw new Error("execution reverted"); }
+      if (method === "getBudget") return "100";
+      if (method === "heldBy") return "0";
+      if (method === "disabled" || method === "isAdmin") return false;
+      if (method === "owner") return "0xowner";
       return null;
     });
+    readOnlyCall.mockImplementation(chain.call);
+    readOnlyBatchCall.mockImplementation(chain.batch);
+  };
 
   test("Disable asks for confirmation first and does nothing when declined", async () => {
     mockUsers();

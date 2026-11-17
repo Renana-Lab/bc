@@ -6,6 +6,7 @@ import {
   getAuditSnapshot,
   isRevertError,
   readAllUsers,
+  readFactoryUsers,
   resetAuditCache,
 } from "./adminAuditReader";
 import { alignBidHashes, DEFAULT_CSV_LOOKBACK_BLOCKS, getCsvLookbackBlocks } from "./reportUtils";
@@ -151,5 +152,33 @@ describe("transaction hash matching for the per-auction CSV", () => {
     const { hashes, note } = alignBidHashes(rows, []);
     expect(hashes).toEqual(["", "", ""]);
     expect(note).toMatch(/No BidRecorded logs found/);
+  });
+});
+
+describe("readFactoryUsers", () => {
+  const ok = (value) => ({ status: "fulfilled", value });
+  test("reads allUsersCount then the users in batches of 25", async () => {
+    const readBatch = jest.fn(async (indexes) => indexes.map((i) => ok(`0x${i}`)));
+    const result = await readFactoryUsers({ readCount: async () => "30", readIndex: jest.fn(), readBatch });
+    expect(result.addresses).toHaveLength(30);
+    expect(result).toMatchObject({ complete: true, warning: "" });
+    expect(readBatch.mock.calls.map(([indexes]) => indexes.length)).toEqual([25, 5]);
+  });
+  test("no users: no index reads", async () => {
+    const readBatch = jest.fn();
+    expect((await readFactoryUsers({ readCount: async () => "0", readIndex: jest.fn(), readBatch })).addresses).toEqual([]);
+    expect(readBatch).not.toHaveBeenCalled();
+  });
+  test("falls back to probing until revert when the count fails", async () => {
+    const readIndex = jest.fn(async (i) => (i < 3 ? `0x${i}` : Promise.reject(new Error("execution reverted"))));
+    const result = await readFactoryUsers({ readCount: async () => { throw new Error("no such method"); }, readIndex });
+    expect(result).toMatchObject({ addresses: ["0x0", "0x1", "0x2"], complete: true });
+  });
+  test("a failed index read is an incomplete list with a warning", async () => {
+    const readBatch = async (indexes) => indexes.map((i) => (i < 2 ? ok(`0x${i}`) : { status: "rejected", reason: new Error("timeout") }));
+    const result = await readFactoryUsers({ readCount: async () => 4, readIndex: jest.fn(), readBatch });
+    expect(result.addresses).toHaveLength(2);
+    expect(result.complete).toBe(false);
+    expect(result.warning).toMatch(/user #2/);
   });
 });

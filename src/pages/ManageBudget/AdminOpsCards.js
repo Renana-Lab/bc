@@ -25,7 +25,7 @@ import { getTargetNetwork } from "../../real_ethereum/sapphireNetworks";
 import { getConfiguredRpcUrls } from "../../real_ethereum/rpcConfig";
 import { canUseLiveEvents, factorySocket } from "../../real_ethereum/socketFactory";
 import { notifyBudgetChanged, subscribeToBudgetChanges } from "../../real_ethereum/budget";
-import { readCancelledSet, readFactoryOwner, readHiddenSet, readIsFactoryAdmin } from "../../real_ethereum/adminChain";
+import { readCancelledSet, readFactoryOwner, readHiddenSet } from "../../real_ethereum/adminChain";
 import { createAdminActions } from "./adminActions";
 import { subscribeActiveAuctionRegistry } from "../../real_ethereum/activeAuctionRegistry";
 import { getLivePresence, isPresenceConfigured } from "../../telemetry/presenceClient";
@@ -37,7 +37,6 @@ import {
   AUDIT_CAMPAIGN_LIMIT,
   getAuditLookbackBlocks,
   getAuditSnapshot,
-  readAllUsers,
 } from "./adminAuditReader";
 import {
   AUDIT_EVENT_TYPES,
@@ -57,6 +56,7 @@ import { Countdown, useChainNowSec } from "./AdminCountdown";
 import useAuctionAdminDialogs from "./useAuctionAdminDialogs";
 import { buildRunbook } from "./architectureRunbook";
 import { useAutoReturn } from "./ParticipantsAutoReturn";
+import { readUserStates, readUsersList } from "./usersChainReaders";
 import { REFRESH_MS, addressesFromEvents, isAddressLike } from "./participantsGasData";
 import { adminAddressesFromEvents, classifyAdmin, formatAgo, isOnline, lastSeenMs, unionParticipants } from "./userPresence";
 
@@ -190,11 +190,29 @@ const WriteNotice = ({ canWrite }) =>
     </Typography>
   );
 
+const EMPTY_CHAIN = { budgets: {}, held: {}, disabled: new Set(), admins: new Set(), owner: "" };
+// Folds one readUserStates result into the accumulated per-address state (re-read addresses are replaced).
+const mergeChain = (current, read) => {
+  if (!read) return current;
+  const reread = new Set(Object.keys(read.budgets));
+  const keep = (set) => Array.from(set).filter((key) => !reread.has(key));
+  return {
+    budgets: { ...current.budgets, ...read.budgets },
+    held: { ...current.held, ...read.held },
+    disabled: new Set([...keep(current.disabled), ...read.disabled]),
+    admins: new Set([...keep(current.admins), ...read.admins]),
+    owner: read.owner || current.owner,
+  };
+};
+
 export const UsersBudgetsCard = ({ canWrite = false, actions: actionsOverride }) => {
   const actions = useMemo(() => actionsOverride || createAdminActions(), [actionsOverride]);
   const [budgetDraft, setBudgetDraft] = useState({ address: "", value: "" });
   const [open, toggle] = useCardState(false);
-  const [state, setState] = useState({ rows: [], loading: false, error: "", warnings: [], audit: null, historyError: "", sweeps: {}, sweepsOk: null });
+  const [state, setState] = useState({
+    users: { addresses: [], warning: "" }, usersLoaded: false, chain: EMPTY_CHAIN,
+    audit: null, historyError: "", auditPending: true, sweeps: {}, sweepsOk: null, loading: false, error: "",
+  });
   const requestRef = useRef(0);
   // Faucet sweep records (lastSeen) through the shared 30 s cache + the same wallet-proof/password auth as Participants gas.
   const autoReturn = useAutoReturn();
@@ -209,92 +227,62 @@ export const UsersBudgetsCard = ({ canWrite = false, actions: actionsOverride })
     try { return (await autoLoadRef.current("", { force })) || null; } catch (_) { return null; }
   }, [sweepsEnabled]);
 
+  // Progressive load: each source renders as soon as it is ready and none waits for another.
+  //   1. factory users (allUsersCount + batched allUsers) and their batched budget/held/disabled/isAdmin + owner -> first paint
+  //   2. the shared audit snapshot (already started in parallel; no second log scan) -> bidders, sellers, last change
+  //   3. faucet /admin/sweeps (started in parallel) -> faucet-only wallets, Last seen, Online now
+  // Addresses that only a later source knows get their own batched state read before they are added.
   const load = useCallback(async (force = false, forceSweeps = false) => {
     const requestId = ++requestRef.current;
-    setState((current) => ({ ...current, loading: true, error: "" }));
-    try {
-      const factoryAddress = getActiveFactoryAddress();
-      const options = { ...READ_OPTIONS, factoryAddress };
-      const [allUsers, sweeps] = await Promise.all([
-        readAllUsers((index) => readOnlyCall(({ factory }) => factory.methods.allUsers(index), 1, options)),
-        readSweeps(forceSweeps),
-      ]);
-      // One audit read is shared with the Audit events card and Participants gas (no second log scan).
-      let audit = null;
-      let historyError = "";
+    const live = () => requestId === requestRef.current;
+    const factoryAddress = getActiveFactoryAddress();
+    setState((current) => ({ ...current, loading: true, error: "", auditPending: true }));
+    const auditPromise = getAuditSnapshot(factoryAddress, { force }).then(
+      (audit) => ({ audit, historyError: "" }),
+      (auditError) => ({ audit: null, historyError: auditError?.message || "audit read failed" })
+    );
+    const sweepsPromise = readSweeps(forceSweeps);
+    const known = new Set();
+    const readNew = async (addresses, withOwner = false) => {
+      const fresh = addresses.filter((address) => !known.has(address.toLowerCase()));
+      fresh.forEach((address) => known.add(address.toLowerCase()));
+      return fresh.length || withOwner ? readUserStates(fresh, { factoryAddress, withOwner }) : null;
+    };
+    const usersStage = (async () => {
       try {
-        audit = await getAuditSnapshot(factoryAddress, { force });
-      } catch (auditError) {
-        historyError = auditError?.message || "audit read failed";
+        const list = await readUsersList({ factoryAddress });
+        if (!live()) return;
+        const read = await readNew(list.addresses, true);
+        if (!live()) return;
+        setState((current) => ({ ...current, users: { addresses: list.addresses, warning: list.warning }, usersLoaded: true, chain: mergeChain(current.chain, read), error: "" }));
+      } catch (error) {
+        if (live()) setState((current) => ({ ...current, usersLoaded: true, error: error?.message || "Could not read users." }));
       }
-      // allUsers only has wallets that bid; sellers and wallets that merely entered come from events / faucet sweeps.
-      const { addresses, registered } = unionParticipants({
-        users: allUsers.addresses,
-        events: audit?.events || [],
-        sweepAddresses: Object.keys(sweeps || {}),
-      });
-      const users = { addresses, warning: allUsers.warning };
-      // Participant roles: allUsers + seller/user/contributor/bidder in events (never args.by / args.admin).
-      const roles = new Set([...registered, ...addressesFromEvents(audit?.events || []).keys()]);
-      let budgetErrors = 0;
-      const held = {};
-      const disabled = new Set();
-      // Admins: factory owner, wallets seen acting as args.by / args.admin in the shared snapshot, and isAdmin per row.
-      const admins = adminAddressesFromEvents(audit?.events || []);
-      try {
-        const owner = String(await readFactoryOwner() || "").toLowerCase();
-        if (isAddressLike(owner)) admins.add(owner);
-      } catch (_) {
-        // owner unknown: the other admin signals still apply
-      }
-      // getBudget applies a pending lazy global reset; usersBudget would show a stale raw value.
-      const budgetPairs = await mapWithConcurrency(users.addresses, 4, async (address) => {
-        const key = address.toLowerCase();
-        try {
-          const [budget, heldAmount, isDisabled, adminFlag] = await Promise.all([
-            readOnlyCall(({ factory }) => factory.methods.getBudget(address), 1, options),
-            readOnlyCall(({ factory }) => factory.methods.heldBy(address), 1, options),
-            readOnlyCall(({ factory }) => factory.methods.disabled(address), 1, options),
-            readIsFactoryAdmin(address).catch(() => false),
-          ]);
-          if (adminFlag === true) admins.add(key);
-          held[key] = String(heldAmount);
-          if (isDisabled) disabled.add(key);
-          return [key, String(budget)];
-        } catch (_) {
-          budgetErrors += 1;
-          return [key, "unavailable"];
-        }
-      });
-      const { labels, bots } = readLocalBots();
-      const rows = mapUserRows({
-        addresses: users.addresses,
-        budgets: Object.fromEntries(budgetPairs),
-        events: (audit?.events || []).filter((event) => event.name === "BudgetChanged"),
-        labels,
-        bots,
-        held,
-        disabled,
-      }).map((row) => ({
-        ...row,
-        registered: registered.has(row.address.toLowerCase()),
-        ...classifyAdmin({ address: row.address, admins, roles }),
-      }));
-      const warnings = [users.warning, budgetErrors ? `${budgetErrors} budget reads failed.` : ""].filter(Boolean);
-      if (requestId === requestRef.current) {
-        knownRef.current = new Set(rows.map((row) => row.address.toLowerCase()));
-        setState({ rows, loading: false, error: "", warnings, audit, historyError, sweeps: sweeps || {}, sweepsOk: Boolean(sweeps) });
-      }
-    } catch (error) {
-      if (requestId === requestRef.current) {
-        setState((current) => ({ ...current, loading: false, error: error?.message || "Could not read users." }));
-      }
-    }
+    })();
+    const auditStage = (async () => {
+      await usersStage;
+      const result = await auditPromise;
+      if (!live()) return;
+      const read = await readNew(Array.from(addressesFromEvents(result.audit?.events || []).keys()));
+      if (!live()) return;
+      setState((current) => ({ ...current, audit: result.audit, historyError: result.historyError, auditPending: false, chain: mergeChain(current.chain, read) }));
+    })();
+    const sweepsStage = (async () => {
+      await usersStage;
+      const sweeps = await sweepsPromise;
+      if (!live()) return;
+      const read = await readNew(Object.keys(sweeps || {}).filter(isAddressLike));
+      if (!live()) return;
+      setState((current) => ({ ...current, sweeps: sweeps || {}, sweepsOk: Boolean(sweeps), chain: mergeChain(current.chain, read) }));
+    })();
+    await Promise.all([usersStage, auditStage, sweepsStage]);
+    if (live()) setState((current) => ({ ...current, loading: false }));
   }, [readSweeps]);
 
+  // Starts on mount even while collapsed (like Participants gas), so opening the card is instant.
   useEffect(() => {
-    if (open) load();
-  }, [open, load]);
+    load();
+  }, [load]);
   useAdminLiveRefresh(() => open && load(true));
   // Last seen refreshes at the Participants gas cadence (60 s), only while the tab is visible and the card is open.
   useEffect(() => {
@@ -309,8 +297,38 @@ export const UsersBudgetsCard = ({ canWrite = false, actions: actionsOverride })
   }, [open, sweepsEnabled, readSweeps, load]);
   const { busy, message, run } = useAdminActionRunner(() => load(true));
 
+  const rows = useMemo(() => {
+    const events = state.audit?.events || [];
+    const { addresses, registered } = unionParticipants({
+      users: state.users.addresses,
+      events,
+      sweepAddresses: Object.keys(state.sweeps),
+    });
+    // Participant roles: allUsers + seller/user/contributor/bidder in events (never args.by / args.admin).
+    const roles = new Set([...registered, ...addressesFromEvents(events).keys()]);
+    const admins = new Set([...state.chain.admins, ...adminAddressesFromEvents(events)]);
+    if (state.chain.owner) admins.add(state.chain.owner);
+    const { labels, bots } = readLocalBots();
+    return mapUserRows({
+      addresses,
+      budgets: state.chain.budgets,
+      events: events.filter((event) => event.name === "BudgetChanged"),
+      labels,
+      bots,
+      held: state.chain.held,
+      disabled: state.chain.disabled,
+    }).map((row) => ({
+      ...row,
+      registered: registered.has(row.address.toLowerCase()),
+      ...classifyAdmin({ address: row.address, admins, roles }),
+    }));
+  }, [state.users, state.audit, state.sweeps, state.chain]);
+  knownRef.current = new Set(rows.map((row) => row.address.toLowerCase()));
+  const budgetErrors = rows.filter((row) => row.budget === "unavailable").length;
+  const warnings = [state.users.warning, budgetErrors ? `${budgetErrors} budget reads failed.` : ""].filter(Boolean);
+
   const nowMs = Date.now();
-  const onlineNow = state.rows.filter((row) => !row.adminOnly && isOnline(state.sweeps[row.address.toLowerCase()], nowMs)).length;
+  const onlineNow = rows.filter((row) => !row.adminOnly && isOnline(state.sweeps[row.address.toLowerCase()], nowMs)).length;
   const history = state.historyError ? "unavailable" : state.audit?.failedRanges?.length ? "partial" : "ok";
   const historyNote = describeRangeHealth(state.audit || {});
 
@@ -334,7 +352,7 @@ export const UsersBudgetsCard = ({ canWrite = false, actions: actionsOverride })
         Disabling blocks creating and bidding for that wallet only; a new wallet bypasses it.
       </Typography>
       <ErrorLine error={state.error} />
-      {state.warnings.map((warning) => (
+      {warnings.map((warning) => (
         <Typography key={warning} variant="body2" sx={{ color: "#8a5a00", mb: 0.5 }}>
           {warning}
         </Typography>
@@ -345,7 +363,7 @@ export const UsersBudgetsCard = ({ canWrite = false, actions: actionsOverride })
         </Typography>
       ) : null}
       <Typography variant="caption" color="text.secondary">
-        {state.rows.length} users. Newest activity first. Budget changes are read from the last {state.audit?.lookback ?? getAuditLookbackBlocks()} blocks. Labels come from this browser's bot config.
+        {rows.length} users{state.usersLoaded ? "" : " (loading...)"}. Newest activity first. Budget changes are read from the last {state.audit?.lookback ?? getAuditLookbackBlocks()} blocks. Labels come from this browser's bot config.
       </Typography>
       <div className="tableScrollWrap">
         <Table size="small">
@@ -358,7 +376,7 @@ export const UsersBudgetsCard = ({ canWrite = false, actions: actionsOverride })
             </TableRow>
           </TableHead>
           <TableBody>
-            {state.rows.map((row) => (
+            {rows.map((row) => (
               <TableRow key={row.address}>
                 <TableCell>
                   <span style={monoSx} title={row.address}>
@@ -378,6 +396,8 @@ export const UsersBudgetsCard = ({ canWrite = false, actions: actionsOverride })
                 <TableCell sx={{ fontSize: 12 }}>
                   {row.lastChange
                     ? `${row.lastChange.direction} ${row.lastChange.amount} at block ${row.lastChange.blockNumber}`
+                    : state.auditPending
+                      ? "loading..."
                     : history === "unavailable"
                       ? "budget history unavailable"
                       : `none in last ${state.audit?.lookback ?? getAuditLookbackBlocks()} blocks`}
