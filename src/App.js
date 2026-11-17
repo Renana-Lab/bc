@@ -406,6 +406,10 @@ function App() {
                 />
                 <Route path="/admin/faucet" element={<FaucetAdminPage />} />
                 <Route path="/admin/wallet" element={<AdminWalletPage />} />
+                <Route
+                  path="/admin"
+                  element={<Navigate replace to={getWalletCopy().embedded ? "/admin-login" : "/manage-budget"} />}
+                />
                 <Route path="/admin-login" element={<AdminLoginPage />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>

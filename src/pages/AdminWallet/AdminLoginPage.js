@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { connectAdminWithMetaMask, importAdminKey, readOnChainAdminRole } from "./adminLogin";
+import { rememberAdminDevice } from "../../components/adminEntry";
 import { getWalletMode } from "../../real_ethereum/wallets/walletMode.mjs";
 
 // Hidden route (/admin-login), reached from the Admin Zone entry only. Participants never need it.
@@ -11,7 +12,10 @@ const AdminLoginPage = ({ allowlist, findProvider, extraAdminCheck = readOnChain
   const [key, setKey] = useState("");
 
   const finish = (result) => {
-    if (result.ok) redirect("/manage-budget"); // full navigation: the whole app re-reads the wallet mode
+    if (result.ok) {
+      rememberAdminDevice(result.account, allowlist); // address only: lets the drawer show the admin entry on this device
+      redirect("/manage-budget");
+    } // full navigation: the whole app re-reads the wallet mode
     else setMessage(result.message);
   };
   const connect = async () => {
