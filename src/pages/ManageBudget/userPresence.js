@@ -40,3 +40,19 @@ export const formatAgo = (ms, now = Date.now()) => {
   if (hours < 48) return `${hours} h ago`;
   return `${Math.floor(hours / 24)} d ago`;
 };
+
+// Wallets that appear in the audit snapshot as args.by / args.admin (admins acting on the factory).
+export const adminAddressesFromEvents = (events = []) => {
+  const found = new Set();
+  events.forEach((event) => {
+    [event.args?.by, event.args?.admin].map((value) => String(value ?? "").trim().toLowerCase()).filter(isAddressLike).forEach((address) => found.add(address));
+  });
+  return found;
+};
+
+// Admin chip + "admin only": an admin wallet whose only reason to be listed is not a seller / bidder / user / allUsers entry.
+export const classifyAdmin = ({ address, admins, roles }) => {
+  const key = String(address).toLowerCase();
+  const isAdmin = admins.has(key);
+  return { isAdmin, adminOnly: isAdmin && !roles.has(key) };
+};

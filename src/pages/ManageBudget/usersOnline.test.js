@@ -22,6 +22,7 @@ jest.mock("./participantsGasReaders", () => ({ readNativeBalances: jest.fn(), re
 jest.mock("./adminTransfer", () => ({ sendNativeFromAdmin: jest.fn(), waitForReceipt: jest.fn(), readAdminBalance: jest.fn(), explorerTxUrl: (hash) => hash }));
 
 /* eslint-disable import/first */
+import { readFactoryOwner, readIsFactoryAdmin } from "../../real_ethereum/adminChain";
 import { readOnlyCall, readOnlyBatchCall } from "../../real_ethereum/readOnly";
 import { getAuditSnapshot } from "./adminAuditReader";
 import { fetchSweeps } from "../../real_ethereum/wallets/sweepClient.mjs";
@@ -63,6 +64,8 @@ beforeEach(() => {
   setSessionPassword("pw");
   resetSweepsCache();
   jest.clearAllMocks();
+  readFactoryOwner.mockResolvedValue("0xowner");
+  readIsFactoryAdmin.mockResolvedValue(false);
   mockChain();
   mockAudit();
   mockSweeps([]);
@@ -103,6 +106,43 @@ describe("Users and budgets: every participant", () => {
     openCard();
     await waitFor(() => expect(rowCount()).toBe(3));
     expect(screen.getByText("Online now: 3")).toBeInTheDocument();
+  });
+});
+
+describe("admin wallets", () => {
+  const ADMIN = a(4);
+  const byEvent = (name, by) => ({ name, actor: by.toLowerCase(), blockNumber: 6, args: { by, campaign: a(9) } });
+
+  test("an event whose actor is only args.by adds no row", async () => {
+    mockAudit([byEvent("AuctionCancelled", ADMIN), byEvent("MinimumChanged", ADMIN)]);
+    render(<UsersBudgetsCard canWrite actions={{ setUserBudget: jest.fn(), setDisabled: jest.fn() }} />);
+    openCard();
+    await waitFor(() => expect(screen.getByTitle(USER)).toBeInTheDocument());
+    expect(screen.queryByTitle(ADMIN)).toBeNull();
+    expect(rowCount()).toBe(1);
+  });
+
+  test("a seller who is also an admin keeps the row and gets an admin chip", async () => {
+    mockAudit([created(SELLER), byEvent("AuctionCancelled", SELLER)]);
+    render(<UsersBudgetsCard canWrite actions={{ setUserBudget: jest.fn(), setDisabled: jest.fn() }} />);
+    openCard();
+    const row = (await screen.findByTitle(SELLER)).closest("tr");
+    expect(within(row).getByText("admin")).toBeInTheDocument();
+    expect(within(row).getByRole("button", { name: "Set budget" })).toBeEnabled();
+    expect(within(screen.getByTitle(USER).closest("tr")).queryByText("admin")).toBeNull();
+  });
+
+  test("Online now ignores admin-only addresses", async () => {
+    jest.useFakeTimers("modern");
+    jest.setSystemTime(BASE);
+    readFactoryOwner.mockResolvedValue(ADMIN);
+    mockSweeps([{ address: ADMIN, lastSeen: iso(1) }, { address: USER, lastSeen: iso(1) }]);
+    render(<UsersBudgetsCard canWrite actions={{ setUserBudget: jest.fn(), setDisabled: jest.fn() }} />);
+    openCard();
+    const row = (await screen.findByTitle(ADMIN)).closest("tr");
+    expect(within(row).getByText("admin")).toBeInTheDocument();
+    expect(within(row).getByRole("button", { name: "Set budget" })).toBeDisabled();
+    expect(screen.getByText("Online now: 1")).toBeInTheDocument();
   });
 });
 

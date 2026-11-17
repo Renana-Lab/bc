@@ -25,7 +25,7 @@ import { getTargetNetwork } from "../../real_ethereum/sapphireNetworks";
 import { getConfiguredRpcUrls } from "../../real_ethereum/rpcConfig";
 import { canUseLiveEvents, factorySocket } from "../../real_ethereum/socketFactory";
 import { notifyBudgetChanged, subscribeToBudgetChanges } from "../../real_ethereum/budget";
-import { readCancelledSet, readFactoryOwner, readHiddenSet } from "../../real_ethereum/adminChain";
+import { readCancelledSet, readFactoryOwner, readHiddenSet, readIsFactoryAdmin } from "../../real_ethereum/adminChain";
 import { createAdminActions } from "./adminActions";
 import { subscribeActiveAuctionRegistry } from "../../real_ethereum/activeAuctionRegistry";
 import { getLivePresence, isPresenceConfigured } from "../../telemetry/presenceClient";
@@ -57,8 +57,8 @@ import { Countdown, useChainNowSec } from "./AdminCountdown";
 import useAuctionAdminDialogs from "./useAuctionAdminDialogs";
 import { buildRunbook } from "./architectureRunbook";
 import { useAutoReturn } from "./ParticipantsAutoReturn";
-import { REFRESH_MS, isAddressLike } from "./participantsGasData";
-import { formatAgo, isOnline, lastSeenMs, unionParticipants } from "./userPresence";
+import { REFRESH_MS, addressesFromEvents, isAddressLike } from "./participantsGasData";
+import { adminAddressesFromEvents, classifyAdmin, formatAgo, isOnline, lastSeenMs, unionParticipants } from "./userPresence";
 
 const READ_OPTIONS = { preferInjected: false, allowInjectedFallback: false };
 const PROBE_TIMEOUT_MS = 6000;
@@ -234,18 +234,30 @@ export const UsersBudgetsCard = ({ canWrite = false, actions: actionsOverride })
         sweepAddresses: Object.keys(sweeps || {}),
       });
       const users = { addresses, warning: allUsers.warning };
+      // Participant roles: allUsers + seller/user/contributor/bidder in events (never args.by / args.admin).
+      const roles = new Set([...registered, ...addressesFromEvents(audit?.events || []).keys()]);
       let budgetErrors = 0;
       const held = {};
       const disabled = new Set();
+      // Admins: factory owner, wallets seen acting as args.by / args.admin in the shared snapshot, and isAdmin per row.
+      const admins = adminAddressesFromEvents(audit?.events || []);
+      try {
+        const owner = String(await readFactoryOwner() || "").toLowerCase();
+        if (isAddressLike(owner)) admins.add(owner);
+      } catch (_) {
+        // owner unknown: the other admin signals still apply
+      }
       // getBudget applies a pending lazy global reset; usersBudget would show a stale raw value.
       const budgetPairs = await mapWithConcurrency(users.addresses, 4, async (address) => {
         const key = address.toLowerCase();
         try {
-          const [budget, heldAmount, isDisabled] = await Promise.all([
+          const [budget, heldAmount, isDisabled, adminFlag] = await Promise.all([
             readOnlyCall(({ factory }) => factory.methods.getBudget(address), 1, options),
             readOnlyCall(({ factory }) => factory.methods.heldBy(address), 1, options),
             readOnlyCall(({ factory }) => factory.methods.disabled(address), 1, options),
+            readIsFactoryAdmin(address).catch(() => false),
           ]);
+          if (adminFlag === true) admins.add(key);
           held[key] = String(heldAmount);
           if (isDisabled) disabled.add(key);
           return [key, String(budget)];
@@ -263,7 +275,11 @@ export const UsersBudgetsCard = ({ canWrite = false, actions: actionsOverride })
         bots,
         held,
         disabled,
-      }).map((row) => ({ ...row, registered: registered.has(row.address.toLowerCase()) }));
+      }).map((row) => ({
+        ...row,
+        registered: registered.has(row.address.toLowerCase()),
+        ...classifyAdmin({ address: row.address, admins, roles }),
+      }));
       const warnings = [users.warning, budgetErrors ? `${budgetErrors} budget reads failed.` : ""].filter(Boolean);
       if (requestId === requestRef.current) {
         knownRef.current = new Set(rows.map((row) => row.address.toLowerCase()));
@@ -294,7 +310,7 @@ export const UsersBudgetsCard = ({ canWrite = false, actions: actionsOverride })
   const { busy, message, run } = useAdminActionRunner(() => load(true));
 
   const nowMs = Date.now();
-  const onlineNow = state.rows.filter((row) => isOnline(state.sweeps[row.address.toLowerCase()], nowMs)).length;
+  const onlineNow = state.rows.filter((row) => !row.adminOnly && isOnline(state.sweeps[row.address.toLowerCase()], nowMs)).length;
   const history = state.historyError ? "unavailable" : state.audit?.failedRanges?.length ? "partial" : "ok";
   const historyNote = describeRangeHealth(state.audit || {});
 
@@ -350,7 +366,8 @@ export const UsersBudgetsCard = ({ canWrite = false, actions: actionsOverride })
                   </span>{" "}
                   {row.label ? <strong>{row.label}</strong> : null}{" "}
                   {row.isBot ? <Chip size="small" label="bot" color="secondary" /> : null}{" "}
-                  {row.disabled ? <Chip size="small" label="disabled" color="error" /> : null}
+                  {row.disabled ? <Chip size="small" label="disabled" color="error" /> : null}{" "}
+                  {row.isAdmin ? <Chip size="small" label="admin" variant="outlined" /> : null}
                   {row.registered ? null : (
                     <Typography variant="caption" color="text.secondary" display="block">not registered yet</Typography>
                   )}
@@ -382,7 +399,7 @@ export const UsersBudgetsCard = ({ canWrite = false, actions: actionsOverride })
                   <TableCell sx={{ whiteSpace: "nowrap" }}>
                     <Button
                       size="small"
-                      disabled={Boolean(busy)}
+                      disabled={Boolean(busy) || row.adminOnly}
                       onClick={() => setBudgetDraft({ address: row.address, value: row.total })}
                     >
                       Set budget
@@ -390,7 +407,7 @@ export const UsersBudgetsCard = ({ canWrite = false, actions: actionsOverride })
                     <Button
                       size="small"
                       color={row.disabled ? "primary" : "error"}
-                      disabled={Boolean(busy)}
+                      disabled={Boolean(busy) || row.adminOnly}
                       onClick={() => {
                         const name = row.label || shortAddress(row.address);
                         // Same confirmation as the marketplace admin, before the wallet asks to sign.
