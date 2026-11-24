@@ -19,7 +19,8 @@ const run = (commandArgs) => {
 };
 
 // Pure: environment variables + stack parameters -> the flags. Exported for tests.
-const buildFlags = ({ env, parameters = {}, tags = {} }) => {
+// extra: { sellerDeployed, sellerSecretArn, sellerSchedule ("disabled" or the expression), sellerLowBalance, lowBalance, reservedConcurrency }.
+const buildFlags = ({ env, parameters = {}, tags = {}, extra = {} }) => {
   const flags = [];
   const notes = [];
   const add = (flag, value) => { if (value !== undefined && value !== null && String(value) !== "") flags.push(`${flag} ${value}`); };
@@ -37,12 +38,21 @@ const buildFlags = ({ env, parameters = {}, tags = {} }) => {
   add("--rpc-url", env.RPC_URL);
   add("--chain-id", env.CHAIN_ID);
   add("--amount-wei", env.FAUCET_AMOUNT_WEI);
-  add("--seller-bot-addresses", env.SELLER_BOT_ADDRESSES);
+  add("--low-balance", extra.lowBalance);
+  if (extra.reservedConcurrency !== undefined) add("--reserved-concurrency", extra.reservedConcurrency);
+  if (extra.sellerDeployed) {
+    add("--seller-secret-arn", extra.sellerSecretArn);
+    add("--seller-bot-addresses", env.SELLER_BOT_ADDRESSES);
+    add("--seller-funding-max-wei", env.SELLER_FUNDING_MAX_WEI);
+    add("--seller-schedule", extra.sellerSchedule ? `"${extra.sellerSchedule}"` : "");
+    add("--seller-low-balance", extra.sellerLowBalance);
+    notes.push("Seller bots are deployed: omit these flags only if you want to REMOVE them.");
+  }
   if (env.SWEEP_IDLE_MINUTES) notes.push(`SWEEP_IDLE_MINUTES=${env.SWEEP_IDLE_MINUTES} (environment variable of deployFaucet.js, not a flag)`);
   if (env.SWEEP_ADDRESS) notes.push(`SWEEP_ADDRESS=${env.SWEEP_ADDRESS} (environment variable of deployFaucet.js, not a flag)`);
   // The experiment code is a secret: only report whether one is set. Redeploys need FAUCET_EXPERIMENT_CODE in the environment.
   const experimentSet = Boolean(env.FAUCET_EXPERIMENT_CODE); // (NoEcho stack parameters are masked, the function setting is the reliable source)
-  return { flags, notes, experimentSet, alertEmail: tags.alertEmail || "" };
+  return { flags, notes, experimentSet, alertEmail: tags.alertEmail || "", sellerDeployed: Boolean(extra.sellerDeployed) };
 };
 
 if (require.main === module) {
@@ -63,7 +73,21 @@ if (require.main === module) {
       const subscriptions = run(["sns", "list-subscriptions-by-topic", "--topic-arn", topic]).Subscriptions || [];
       alertEmail = subscriptions.find((entry) => entry.Protocol === "email")?.Endpoint || "";
     }
-    const { flags, notes, experimentSet } = buildFlags({ env, parameters, tags: { alertEmail } });
+    const physical = (id) => resources.find((resource) => resource.LogicalResourceId === id)?.PhysicalResourceId;
+    const extra = {};
+    const concurrency = run(["lambda", "get-function-concurrency", "--function-name", faucetFunction]).ReservedConcurrentExecutions;
+    extra.reservedConcurrency = concurrency > 0 ? 1 : 0;
+    const alarmThreshold = (id) => { const name = physical(id); return name ? run(["cloudwatch", "describe-alarms", "--alarm-names", name]).MetricAlarms?.[0]?.Threshold : undefined; };
+    extra.lowBalance = alarmThreshold("LowBalanceAlarm");
+    const sellerFunction = physical("SellerJobFunction");
+    if (sellerFunction) {
+      extra.sellerDeployed = true;
+      extra.sellerSecretArn = run(["lambda", "get-function-configuration", "--function-name", sellerFunction]).Environment?.Variables?.SELLER_SECRET_ID;
+      const rule = run(["events", "describe-rule", "--name", physical("SellerSchedule")]);
+      extra.sellerSchedule = rule.State === "DISABLED" ? "disabled" : rule.ScheduleExpression;
+      extra.sellerLowBalance = alarmThreshold("SellerLowBalanceAlarm");
+    }
+    const { flags, notes, experimentSet } = buildFlags({ env, parameters, tags: { alertEmail }, extra });
     if (alertEmail) flags.push(`--alert-email ${alertEmail}`);
     console.log(`# Flags that reproduce stack ${stack} (${region}). Keep this output private.`);
     console.log(`--env test --stack ${stack} --region ${region} \\`);

@@ -261,6 +261,9 @@ test("deploy script: --region is required for a real deploy, seller flags are va
   assert.match(run("deployFaucet.js", ["--env", "test", "--dry-run", "--seller-secret-arn", "nope"]).stderr, /--seller-secret-arn must be/);
   assert.match(run("deployFaucet.js", ["--env", "test", "--dry-run", "--seller-schedule", "every day"]).stderr, /--seller-schedule must be/);
   assert.match(run("deployFaucet.js", ["--env", "test", "--dry-run", "--seller-bot-addresses", "0x1"]).stderr, /--seller-bot-addresses must be/);
+  const noAddresses = run("deployFaucet.js", ["--env", "test", "--dry-run", "--origins", "https://x.example.org", "--pid-mode", "allowlist", "--seller-secret-arn", SELLER_ARN]);
+  assert.notEqual(noAddresses.status, 0, "an error, not a warning");
+  assert.match(noAddresses.stderr, /--seller-bot-addresses is required with --seller-secret-arn/);
   const plain = run("deployFaucet.js", ["--env", "test", "--dry-run"]);
   assert.match(plain.stderr, /WARNING: --origins is the localhost default/);
   assert.match(plain.stderr, /WARNING: --pid-mode was not given/);
@@ -297,5 +300,15 @@ test("printCurrentDeployArgs: flags from the live settings, the experiment code 
   assert.equal(out.experimentSet, true);
   assert.equal(JSON.stringify(out).includes("SUPER-SECRET-CODE"), false);
   assert.equal(buildFlags({ env: {} }).experimentSet, false);
+  // Seller bots and the other settings a redeploy would otherwise reset.
+  const sellerEnv = { ...env, SELLER_BOT_ADDRESSES: `${BOT_A},${BOT_B}`, SELLER_FUNDING_MAX_WEI: "0" };
+  const seller = buildFlags({ env: sellerEnv, extra: { sellerDeployed: true, sellerSecretArn: SELLER_ARN, sellerSchedule: "rate(1 minute)", sellerLowBalance: 0.5, lowBalance: 5, reservedConcurrency: 1 } });
+  for (const flag of [`--seller-secret-arn ${SELLER_ARN}`, `--seller-bot-addresses ${BOT_A},${BOT_B}`, "--seller-funding-max-wei 0", '--seller-schedule "rate(1 minute)"', "--seller-low-balance 0.5", "--low-balance 5", "--reserved-concurrency 1"]) assert.ok(seller.flags.includes(flag), flag);
+  assert.ok(seller.notes.includes("Seller bots are deployed: omit these flags only if you want to REMOVE them."));
+  assert.ok(buildFlags({ env: sellerEnv, extra: { sellerDeployed: true, sellerSchedule: "disabled" } }).flags.includes('--seller-schedule "disabled"'));
+  assert.equal(buildFlags({ env: sellerEnv, extra: { reservedConcurrency: 0 } }).flags.includes("--reserved-concurrency 0"), true);
+  const without = buildFlags({ env: sellerEnv, extra: { sellerDeployed: false } });
+  assert.equal(without.flags.some((flag) => flag.startsWith("--seller-")), false, "no seller flags when the stack has no seller job");
+  assert.equal(JSON.stringify(seller).includes("SUPER-SECRET-CODE"), false);
   assert.match(run("printCurrentDeployArgs.js", []).stderr, /--region is required/);
 });

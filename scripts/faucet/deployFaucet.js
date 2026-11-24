@@ -68,7 +68,7 @@ if (factoryAddress && !/^0x[0-9a-fA-F]{40}$/.test(factoryAddress)) throw new Err
 if (sellerSecretArn && !/^arn:aws[a-z-]*:secretsmanager:/.test(sellerSecretArn)) throw new Error("--seller-secret-arn must be a Secrets Manager ARN");
 if (sellerSchedule !== "disabled" && !/^(rate\([0-9]+ (minute|minutes|hour|hours)\)|cron\(.+\))$/.test(sellerSchedule)) throw new Error("--seller-schedule must be a rate(...) or cron(...) expression, or disabled");
 if (sellerBotAddresses && !sellerBotAddresses.split(",").every((entry) => /^0x[0-9a-fA-F]{40}$/.test(entry))) throw new Error("--seller-bot-addresses must be comma-separated 0x addresses");
-if (sellerSecretArn && !sellerBotAddresses) console.error("WARNING: no --seller-bot-addresses: the low-balance alarm, the admin panel bot list and the buyer-bot skip list have no addresses until the job derives them.");
+if (sellerSecretArn && !sellerBotAddresses) throw new Error("--seller-bot-addresses is required with --seller-secret-arn (the admin routes answer 404 and the low-balance alarm has no metric without the public addresses; createSellerBotsSecret.js prints them)");
 if (!(sellerLowBalance >= 0)) throw new Error("--seller-low-balance must be a number of TEST");
 if (!/^[0-9]{1,30}$/.test(sellerFundingMaxWei)) throw new Error("--seller-funding-max-wei must be a non-negative integer");
 // A redeploy with the defaults would overwrite the live stack's origins and pid mode with these values: say so loudly.
