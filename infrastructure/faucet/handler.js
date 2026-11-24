@@ -25,6 +25,7 @@ const { Wallet, Transaction, getAddress, isAddress } = require("ethers");
 const { createAdminWalletAuth } = require("./adminWalletAuth");
 const sweep = require("./sweep");
 const inbox = require("./inbox");
+const sellerConfig = require("./sellerConfig");
 
 const PID_PATTERN = /^(?=.*[A-Za-z])[A-Za-z0-9]{8,24}$/; // same rule as src/real_ethereum/wallets/participantId.mjs
 const PROLIFIC_PID_PATTERN = /^[a-fA-F0-9]{24}$/; // Prolific participant id
@@ -107,10 +108,14 @@ const loadConfig = (env = process.env) => {
     // Participant inbox polling (every 30 s per open tab; a whole lab may share one address).
     inboxRateLimit: Number(env.INBOX_RATE_LIMIT_PER_WINDOW || 3000),
     inboxGlobalRateLimit: Number(env.INBOX_GLOBAL_RATE_LIMIT_PER_WINDOW || 30000),
+    // Seller bots (public addresses only; the keys live in a secret the faucet role cannot read). Empty = not deployed (routes answer 404).
+    sellerBotAddresses: String(env.SELLER_BOT_ADDRESSES || "").split(",").map((entry) => entry.trim()).filter((entry) => isAddress(entry)).map((entry) => getAddress(entry)),
+    sellerFundingMaxWei: /^[0-9]{1,30}$/.test(String(env.SELLER_FUNDING_MAX_WEI || "")) ? BigInt(env.SELLER_FUNDING_MAX_WEI) : 0n,
+    sellerFundingDailyMaxWei: /^[0-9]{1,30}$/.test(String(env.SELLER_FUNDING_DAILY_MAX_WEI || "")) ? BigInt(env.SELLER_FUNDING_DAILY_MAX_WEI) : null,
   };
 };
 
-const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, getAdminSecret, chain, config, now = () => Date.now(), log = console.log }) => {
+const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, getAdminSecret, chain, config, sellerStore = null, now = () => Date.now(), log = console.log }) => {
   if (!SAPPHIRE_CHAIN_IDS.has(config.chainId)) throw new Error("Unsupported chain id");
   const openMode = config.pidMode === "open";
   // prolific and open both accept ids that are not pre-inserted: the first claim inserts the hash and takes a payout slot.
@@ -683,6 +688,147 @@ const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, getAdminSecret
     }
   };
 
+  // ---- seller bots (admin only): see sellerJob.js and sellerConfig.js. 404 until the seller stack part is deployed. ----
+  const MAX_SELLER_BODY_BYTES = 300_000; // up to 10 bots x 20 items x (2000 B payload + 1200 B description)
+  const sellerBotIds = () => (config.sellerBotAddresses || []).map((_, index) => `bot-${index + 1}`);
+  const sellerDeployed = () => Boolean(sellerStore) && (config.sellerBotAddresses || []).length > 0;
+  const sellerAddresses = (progress) => ({ ...Object.fromEntries((config.sellerBotAddresses || []).map((address, index) => [`bot-${index + 1}`, address])), ...(progress?.addresses || {}) });
+  const emptyBot = (id) => ({ id, running: false, maxConcurrentOpen: 1, spacingSeconds: 60, minNativeBalance: 0.1, items: [] });
+  // Reads and authenticates a seller-bots request. Returns { denied } or { auth, body }.
+  const sellerGate = async (request, { withBody }) => {
+    let body = {};
+    if (withBody) {
+      const raw = readBody(request);
+      if (Buffer.byteLength(raw) > MAX_SELLER_BODY_BYTES) return { denied: json(413, { error: "too_large" }) };
+      body = parseBody(raw);
+    }
+    const auth = await adminAuth(request, headerValue(request, "x-admin-password") ?? body.password);
+    return auth.denied ? { denied: auth.denied } : { auth, body };
+  };
+
+  // GET /admin/seller-bots: config (payloads as byte lengths only), job progress, public addresses and live native balances.
+  const adminSellerGet = async (request) => {
+    try {
+      const gate = await sellerGate(request, { withBody: false });
+      if (gate.denied) return gate.denied;
+      const [stored, progress] = await Promise.all([sellerStore.getConfig(), sellerStore.getProgress()]);
+      const current = stored?.config || sellerConfig.defaultConfig();
+      const bots = [...current.bots];
+      for (const id of sellerBotIds()) if (!bots.some((bot) => bot.id === id)) bots.push(emptyBot(id));
+      const addresses = sellerAddresses(progress);
+      const balances = await Promise.all(bots.map((bot) => (addresses[bot.id] ? Promise.resolve(chain.getBalance(addresses[bot.id])).then((value) => value.toString(), () => null) : null)));
+      const view = sellerConfig.publicConfig({ ...current, bots });
+      const state = (id) => progress.bots?.[id] || {};
+      return json(200, {
+        version: stored?.version || 0,
+        config: { ...view, bots: view.bots.map((bot, index) => ({
+          ...bot, address: addresses[bot.id] || null, balanceWei: balances[index], openAuctions: (state(bot.id).open || []).length,
+          lastError: bot.lastError || null, consecutiveErrors: state(bot.id).errors || 0,
+          items: bot.items.map((item) => ({ ...item, created: state(bot.id).hints?.[`${item.slot}.${item.seqBase}`] || 0 })),
+        })) },
+        presence: progress.presence || null,
+        lastRunAt: progress.lastRunAt ? new Date(progress.lastRunAt * 1000).toISOString() : null,
+        botAddresses: Object.values(addresses),
+        fundingEnabled: config.sellerFundingMaxWei > 0n,
+        limits: sellerConfig.LIMITS,
+      });
+    } catch {
+      event("error", { code: "admin_seller_get" });
+      return json(500, { error: "internal" });
+    }
+  };
+
+  // POST /admin/seller-bots { version, ...full config }. Optimistic concurrency: 409 when the stored version moved on.
+  const adminSellerSave = async (request) => {
+    try {
+      const gate = await sellerGate(request, { withBody: true });
+      if (gate.denied) return gate.denied;
+      const { body, auth } = gate;
+      if (!Number.isInteger(body.version) || body.version < 0) return json(400, { error: "bad_request", field: "version" });
+      const stored = await sellerStore.getConfig();
+      if ((stored?.version || 0) !== body.version) return json(409, { error: "version_conflict", version: stored?.version || 0 });
+      let next;
+      try { next = sellerConfig.validateConfig(body, stored?.config, { knownBotIds: sellerBotIds() }); } catch (error) {
+        return json(400, { error: "invalid", field: scrub(error?.message) });
+      }
+      if (!(await sellerStore.putConfig(next, body.version))) return json(409, { error: "version_conflict", version: (await sellerStore.getConfig())?.version || 0 });
+      event("admin_seller_bots_saved", { enabled: next.enabled, bots: next.bots.length, ...adminField(auth) });
+      return json(200, { version: body.version + 1, config: sellerConfig.publicConfig(next) });
+    } catch {
+      event("error", { code: "admin_seller_save" });
+      return json(500, { error: "internal" });
+    }
+  };
+
+  // POST /admin/seller-bots/stop-all: kill switch. Sets enabled=false; the next scheduled run does nothing.
+  const adminSellerStopAll = async (request) => {
+    try {
+      const gate = await sellerGate(request, { withBody: true });
+      if (gate.denied) return gate.denied;
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const stored = await sellerStore.getConfig();
+        if (!stored?.config) return json(200, { enabled: false, version: 0 });
+        if (await sellerStore.putConfig({ ...stored.config, enabled: false }, stored.version)) {
+          event("admin_seller_bots_stopped", adminField(gate.auth));
+          return json(200, { enabled: false, version: stored.version + 1 });
+        }
+      }
+      return json(409, { error: "version_conflict" });
+    } catch {
+      event("error", { code: "admin_seller_stop" });
+      return json(500, { error: "internal" });
+    }
+  };
+
+  // POST /admin/seller-bots/fund { botId, amountWei }: sends native TEST from the faucet wallet to a seller bot address.
+  // Off unless SELLER_FUNDING_MAX_WEI > 0 (404). Capped per call and per UTC day; signs inside exclusive() like every payout.
+  const adminSellerFund = async (request) => {
+    let reserved = null;
+    try {
+      const gate = await sellerGate(request, { withBody: true });
+      if (gate.denied) return gate.denied;
+      const { botId, amountWei } = gate.body;
+      const perCall = config.sellerFundingMaxWei;
+      const perDay = config.sellerFundingDailyMaxWei ?? perCall * 5n;
+      const known = sellerAddresses(await sellerStore.getProgress());
+      const address = typeof botId === "string" && Object.prototype.hasOwnProperty.call(known, botId) ? known[botId] : null;
+      if (!address || typeof amountWei !== "string" || !/^[1-9][0-9]{0,29}$/.test(amountWei)) return json(400, { error: "bad_request" });
+      const amount = BigInt(amountWei);
+      if (amount > perCall) return json(400, { error: "over_cap" });
+      const day = sellerConfig.FUND_DAY_KEY(now());
+      if (!(await sellerStore.addFunding(day, amount, perDay))) return json(429, { error: "daily_cap" });
+      reserved = { day, amount };
+      const { txHash } = await exclusive(async () => {
+        const wallet = await getWallet();
+        const [balance, quoted, nonce] = await Promise.all([chain.getBalance(wallet.address), chain.getGasPrice(), chain.getNonce(wallet.address)]);
+        const gasPrice = (quoted * 12n) / 10n;
+        if (balance < amount + gasPrice * TRANSFER_GAS) throw Object.assign(new Error("faucet balance too low"), { code: "FAUCET_EMPTY" });
+        const rawTx = await wallet.signTransaction({ type: 0, chainId: config.chainId, to: address, value: amount, nonce, gasPrice, gasLimit: TRANSFER_GAS });
+        const hash = Transaction.from(rawTx).hash;
+        await chain.sendRaw(rawTx);
+        reserved = null; // broadcast: the amount counts against the day from here on, even if confirmation is slow
+        const ok = await confirm(hash);
+        if (ok === false) throw Object.assign(new Error("transaction reverted"), { code: "REVERTED" });
+        return { txHash: hash, ok };
+      });
+      event("admin_seller_bot_funded", { bot: botId, txHash, ...adminField(gate.auth) });
+      return json(200, { txHash, botId, amountWei });
+    } catch (error) {
+      if (reserved) await sellerStore.refundFunding(reserved.day, reserved.amount).catch(() => {});
+      event("error", { code: "admin_seller_fund", message: scrub(error?.code) });
+      return json(error?.code === "FAUCET_EMPTY" ? 503 : 500, { error: error?.code === "FAUCET_EMPTY" ? "faucet_empty" : "internal" });
+    }
+  };
+
+  // Returns the route function for an /admin/seller-bots* request, or null (404 when not deployed, 405 for a wrong method).
+  const sellerRoute = (path, method) => {
+    if (!sellerDeployed()) return null;
+    if (path === "/admin/seller-bots") return method === "GET" ? adminSellerGet : method === "POST" ? adminSellerSave : null;
+    if (path === "/admin/seller-bots/stop-all") return method === "POST" ? adminSellerStopAll : null;
+    if (path === "/admin/seller-bots/fund") return method === "POST" && config.sellerFundingMaxWei > 0n ? adminSellerFund : null;
+    return null;
+  };
+
   const claimFunds = async (request) => {
     const started = now();
     let pidHash = "";
@@ -797,6 +943,12 @@ const createFaucetHandler = ({ store, getPrivateKey, getRateSalt, getAdminSecret
       if (path === "/admin/sweep-settings") return await methodOnly("POST", adminSweepSettings);
       if (path === "/inbox") return await methodOnly("GET", inboxList);
       if (path === "/inbox/ack") return await methodOnly("POST", inboxAck);
+      if (path.startsWith("/admin/seller-bots")) {
+        const route = sellerRoute(path, method);
+        if (route) return await route(request);
+        const known = path === "/admin/seller-bots" || path === "/admin/seller-bots/stop-all" || (path === "/admin/seller-bots/fund" && config.sellerFundingMaxWei > 0n);
+        return sellerDeployed() && known ? json(405, { error: "method_not_allowed" }) : json(404, { error: "not_found" });
+      }
       if (path === "/admin/messages") return method === "GET" ? await adminListMessages(request) : method === "POST" ? await adminSendMessage(request) : json(405, { error: "method_not_allowed" });
       if (path !== "/claim") return json(404, { error: "not_found" });
       if (method !== "POST") return json(405, { error: "method_not_allowed" });
@@ -850,8 +1002,9 @@ const handler = async (request) => {
       const result = await secrets.send(new GetSecretValueCommand({ SecretId: process.env.FAUCET_ADMIN_SECRET_ID }));
       return JSON.parse(result.SecretString || "{}");
     };
+    const { createDynamoSellerStore } = require("./sellerStore");
     cachedHandler = createFaucetHandler({
-      store: createDynamoStore({ table: process.env.FAUCET_TABLE, rateTable: process.env.RATE_TABLE }), getPrivateKey, getRateSalt, getAdminSecret, chain, config,
+      store: createDynamoStore({ table: process.env.FAUCET_TABLE, rateTable: process.env.RATE_TABLE }), sellerStore: createDynamoSellerStore({ table: process.env.FAUCET_TABLE }), getPrivateKey, getRateSalt, getAdminSecret, chain, config,
     });
   }
   return cachedHandler(request);

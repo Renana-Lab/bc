@@ -212,6 +212,49 @@ infrastructure: items in the existing codes table, the existing Function URL, no
   The per-row button needs the participant's pid hash, which comes from the auto-return list: press **Load auto-return** first (a participant appears there after their first heartbeat).
 * Not verified against AWS: `getInbox/putInbox/getBroadcast/putBroadcast/listInboxes` are covered by the memory store contract tests and by a fake DynamoDB client in `inbox.test.mjs`, not by real DynamoDB.
 
+### Seller bots (scheduled, server-side sellers)
+
+Server-side **seller** bots for the marketplace. A scheduled Lambda (`SellerJobFunction`, `sellerJob.js`) creates auctions with the items the admin
+configures, and does nothing when nobody is on the site. No admin browser tab has to stay open. Nothing here is deployed until you pass
+`--seller-secret-arn` to `deployFaucet.js`; without it the stack is exactly what it was before.
+
+**Design**
+
+* The admin edits one configuration item (`config#sellerbots`, Admin Zone card "Seller bots", optimistic `version`). Per bot: items (public description, confidential payload, minimum bid = the auction minimum, duration, quantity), spacing, max open auctions, minimum native balance, running switch.
+* Each run (default every minute): read the config; if disabled, or no running bot has quantity left and nothing to finalize, log `seller_idle_skip` and stop (no scan, no secret read). Otherwise take a DynamoDB lease (`lease#sellerjob`), check presence, load the keys once per container, and handle each running bot in turn with its own nonce.
+* Per bot: finalize its own ended auctions (at most 3 per run), then, when participants are present, the spacing has passed, it has fewer than `maxConcurrentOpen` open auctions and enough balance, create **one** auction for the next item with quantity left. `createCampaign` is signed through the Sapphire wrapper, the job asserts the calldata is enveloped (`isCalldataEnveloped`) and refuses to broadcast otherwise.
+* Quantity is never exceeded, also across crashes: every attempt is a record `sellerbot#<bot>#item#<slot>#seq#<n>` created with `attribute_not_exists` **before** anything is signed; the nonce and transaction hash are stored before the broadcast. A record left in `sending` is settled by a later run from the receipt, or from the nonce (the raw transaction is never stored, so a transaction that is absent past the Lambda timeout and whose nonce was used, or that stayed absent for 5 minutes, can never be mined and its slot is released). One in-flight transaction per bot.
+* A bot is paused (`running=false`, `lastError` = a short code such as `rpc`, `revert`, `insufficient_funds`) after 3 consecutive errors.
+* Gas: a fixed limit (`SELLER_CREATE_GAS`, default 3,000,000) and the quoted gas price +20%. Sapphire's own estimate is about 4x too high for creates, so it is not used.
+
+**Presence.** A participant counts when its `sweep#<address>` item (written by the browser heartbeat) has `lastSeen` within the last `activeWindowMinutes` (default 5). Seller-bot addresses are excluded. The scan reads only `pk` and `lastSeen`. `active` = count >= `minActiveParticipants` (default 1). When the count drops below the threshold the market stays active for `idleGraceMinutes` (default 5) after having been active, then becomes idle; it never starts active from nothing. A scan error means **unknown**, which does not sell (fails closed). `presenceMode: always` skips the check (testing only).
+
+**Defaults:** disabled until switched on in the panel; manual funding; buyer bots skip seller-bot auctions; threshold 1 participant; 5 minute window; 5 minute idle grace; per-item quantity (1..50); 1-minute schedule; spacing 60 s (min 30), 1 open auction per bot (max 5), minimum balance 0.1 TEST.
+
+**Kill switch.** Admin Zone: "Stop all" (`POST /admin/seller-bots/stop-all`, sets `enabled=false`; the next run only logs `seller_idle_skip`). Hard stop: `aws events disable-rule --name <SellerSchedule physical id> --region us-east-2`.
+
+**Admin routes** (all behind the usual wallet proof or password): `GET/POST /admin/seller-bots` (payloads are write-only: GET returns byte lengths; a POST with an empty payload keeps the stored one; limits: description <= 1200 B, payload <= 2000 B, minimum bid 1..1e9, duration 1..30 min, quantity 1..50, spacing >= 30 s, max open 1..5), `POST /admin/seller-bots/stop-all`, and the optional `POST /admin/seller-bots/fund {botId, amountWei}` which sends TEST from the faucet wallet. The fund route answers 404 unless `--seller-funding-max-wei` (`SELLER_FUNDING_MAX_WEI`) is above 0 (default 0); it is capped per call by that value and per UTC day by `SELLER_FUNDING_DAILY_MAX_WEI` (default 5x the per-call cap). `--seller-secret-arn` without `--seller-bot-addresses` is refused by `deployFaucet.js`, because the routes answer 404 until the addresses are deployed. The **faucet function never receives the seller secret**: only `SellerJobRole` can read it.
+
+**Buyer bots.** The admin card caches the bot addresses in `localStorage` (`bc:seller-bots:v1`); `cyclePlanner` skips auctions whose manager is in that list with the reason "Seller is a bot", unless "Allow buyer bots on seller-bot auctions" is ticked. The list and any "bot" label are never shown to participants.
+
+**Logs.** JSON events only: `seller_idle_skip`, `seller_presence`, `seller_created`, `seller_finalized`, `seller_skip`, `seller_error`, `seller_paused`, `seller_run`, with bot ids, item slots, auction addresses, transaction hashes, reasons and counts. Never payloads, descriptions, keys, proofs, passwords, pid hashes, participant addresses or raw error text (errors are reduced to a short code). Log group retention: 30 days.
+
+**Costs** (estimate, test environment): about $0.5-1.5 per month. An idle minute is two DynamoDB reads and ~50 ms of Lambda, which stays inside the free tier or a few cents. The presence scan (`Scan` over the whole faucet table, billed by table size, not by matches) only runs when a bot has something to create, so its cost **grows with the size of the faucet table** (one item per participant plus the pid allowlist) and with how long participants are online; a table of a few thousand items costs well under a dollar per month. CloudWatch logs and the balance metric/alarm are cents.
+
+**Steps for the lab admin** (CloudShell, or locally with an MFA session; nothing below is run by the pull request):
+
+1. Read the live settings (keep the output private): `node scripts/faucet/printCurrentDeployArgs.js --stack test-bc-faucet --region us-east-2`
+2. Create the keys inside Secrets Manager (prints only the ARN and the public addresses): `node scripts/faucet/createSellerBotsSecret.js --name test-bc-faucet/seller-bots --count 3 --region us-east-2`
+3. Fund each printed address with TEST from the lab wallet (for example 2 TEST each).
+4. Dry run: `node scripts/faucet/deployFaucet.js --env test --dry-run <all flags from step 1> --seller-secret-arn <ARN> --seller-bot-addresses <a,b,c>`. Check that no `WARNING` about origins or pid mode appears.
+5. Deploy: the same command without `--dry-run`, with `--region us-east-2 --artifact-bucket test-bc-artifacts-774490039997` (and `FAUCET_EXPERIMENT_CODE` in the environment if step 1 says it is set, otherwise the redeploy clears it). `--region` has no default.
+6. Verify: `aws lambda invoke` on the `SellerJobFunction` in us-east-2 and look in its log group for `seller_idle_skip`. The seller bots stay disabled until they are enabled in the panel.
+7. Then merge the pull request (Amplify deploys the panel).
+8. Emergency stop: panel "Stop all", or `aws events disable-rule --name <SellerSchedule physical id> --region us-east-2`.
+9. Rollback: redeploy without `--seller-secret-arn` (the DynamoDB items remain; delete the secret manually if you want).
+
+Optional deploy flags: `--seller-schedule "rate(1 minute)"` (or `disabled`), `--seller-low-balance 0.5` (TEST per bot, alarm on the existing alert topic), `--seller-funding-max-wei 0`.
+
 ## Files
 
 * `adminWalletAuth.js` - verifies the `x-admin-proof` wallet proof and the on-chain admin role (cached)
@@ -220,8 +263,9 @@ infrastructure: items in the existing codes table, the existing Function URL, no
 * `store.js` - DynamoDB store (conditional writes). `memoryStore.js` - test double with the same semantics
 * `sweep.js` - auto-return validation and the scheduled job (`runSweepJob`)
 * `inbox.js` - admin message limits and the "what is unread" rule (storage in `store.js` / `memoryStore.js`)
-* `monitor.js` - balance metric publisher. `template.js` - the CloudFormation template (checked by `scripts/faucet/template.test.mjs`)
-* `../../scripts/faucet/pidTools.js`, `generatePids.js`, `createFaucetSecret.js`, `deployFaucet.js`
+* `sellerJob.js` (job core + Lambda entry), `sellerConfig.js` (validation), `sellerStore.js` (DynamoDB + memory), `sellerChain.js` (signing, receipts)
+* `monitor.js` - balance metric publisher (also `SellerBotMinBalance`). `template.js` - the CloudFormation template (checked by `scripts/faucet/template.test.mjs`)
+* `../../scripts/faucet/pidTools.js`, `generatePids.js`, `createFaucetSecret.js`, `createSellerBotsSecret.js`, `printCurrentDeployArgs.js`, `deployFaucet.js`
 * Tests: `npm run faucet:test` (unit, no network) and `REQUIRE_LOCALNET=1 npm run faucet:test:flow` (5 parallel participants on localnet)
 
 Not verified here: the DynamoDB store and CloudFormation template were not run against AWS (no deployment was made). The

@@ -8,7 +8,11 @@ const buildTemplate = ({
   rateLimit = "20", globalRateLimit = "600", reservedConcurrency = 1,
   pidMode = "allowlist", maxPayouts = "", requiredStudyId = "", adminSecretArn = "", faucetCodeDir, monitorCodeDir,
   factoryAddress = "", sweepAddress = "", sweepIdleMinutes = 30, sweepRateLimit = "600", sweepGlobalRateLimit = "6000",
+  // Seller bots: everything below is inert unless sellerSecretArn is given (the template is then identical to a stack without them).
+  sellerSecretArn = "", sellerSchedule = "rate(1 minute)", sellerBotAddresses = "", sellerLowBalance = 0.5, sellerFundingMaxWei = "0", sellerCodeDir,
 }) => {
+  const sellers = Boolean(sellerSecretArn);
+  const sellerEnabled = sellerSchedule !== "disabled";
 const policy = (statement) => ({ PolicyName: "inline", PolicyDocument: { Version: "2012-10-17", Statement: statement } });
   const assume = { Version: "2012-10-17", Statement: [{ Effect: "Allow", Principal: { Service: "lambda.amazonaws.com" }, Action: "sts:AssumeRole" }] };
   const basic = ["arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"];
@@ -80,6 +84,8 @@ const policy = (statement) => ({ PolicyName: "inline", PolicyDocument: { Version
             SWEEP_ADDRESS: sweepAddress || faucetAddress || "", SWEEP_IDLE_MINUTES: String(sweepIdleMinutes),
             // A whole lab shares one NAT address: every participant heartbeats every 2 minutes and re-arms on activity.
             SWEEP_RATE_LIMIT_PER_WINDOW: String(sweepRateLimit), SWEEP_GLOBAL_RATE_LIMIT_PER_WINDOW: String(sweepGlobalRateLimit),
+            // Public addresses only (admin panel list); the seller keys are in a secret this role cannot read.
+            ...(sellers ? { SELLER_BOT_ADDRESSES: sellerBotAddresses, SELLER_FUNDING_MAX_WEI: String(sellerFundingMaxWei) } : {}),
           },
         },
         Code: faucetCodeDir,
@@ -154,7 +160,7 @@ const policy = (statement) => ({ PolicyName: "inline", PolicyDocument: { Version
       Type: "AWS::Lambda::Function",
       Properties: {
         Runtime: "nodejs20.x", Handler: "index.handler", Role: { "Fn::GetAtt": ["MonitorRole", "Arn"] }, Timeout: 20, MemorySize: 128,
-        Environment: { Variables: { RPC_URL: rpcUrl, CHAIN_ID: String(chainId), FAUCET_ADDRESS: faucetAddress || "0x0000000000000000000000000000000000000000" } },
+        Environment: { Variables: { RPC_URL: rpcUrl, CHAIN_ID: String(chainId), FAUCET_ADDRESS: faucetAddress || "0x0000000000000000000000000000000000000000", ...(sellers ? { SELLER_BOT_ADDRESSES: sellerBotAddresses } : {}) } },
         Code: monitorCodeDir,
       },
     },
@@ -179,6 +185,61 @@ const policy = (statement) => ({ PolicyName: "inline", PolicyDocument: { Version
         AlarmActions: [{ Ref: "AlertTopic" }], OKActions: [{ Ref: "AlertTopic" }],
       },
     },
+    ...(sellers ? {
+      // Seller bots: own role (the ONLY one that can read the seller secret), own function, one invocation at a time, no retries.
+      SellerJobRole: {
+        Type: "AWS::IAM::Role",
+        Properties: {
+          AssumeRolePolicyDocument: assume, ManagedPolicyArns: basic,
+          Policies: [policy([
+            { Effect: "Allow", Action: "secretsmanager:GetSecretValue", Resource: sellerSecretArn },
+            { Effect: "Allow", Action: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:Scan"], Resource: { "Fn::GetAtt": ["FaucetTable", "Arn"] } },
+          ])],
+        },
+      },
+      SellerJobFunction: {
+        Type: "AWS::Lambda::Function",
+        Properties: {
+          Runtime: "nodejs20.x", Handler: "index.sellerJob", Role: { "Fn::GetAtt": ["SellerJobRole", "Arn"] }, Timeout: 120, MemorySize: 256,
+          ...(reservedConcurrency > 0 ? { ReservedConcurrentExecutions: 1 } : {}),
+          Environment: {
+            Variables: {
+              FAUCET_TABLE: { Ref: "FaucetTable" }, RPC_URL: rpcUrl, CHAIN_ID: String(chainId),
+              FACTORY_ADDRESS: { Ref: "FactoryAddress" }, SELLER_SECRET_ID: sellerSecretArn,
+            },
+          },
+          Code: sellerCodeDir,
+        },
+      },
+      SellerJobEventInvokeConfig: {
+        Type: "AWS::Lambda::EventInvokeConfig",
+        Properties: { FunctionName: { Ref: "SellerJobFunction" }, Qualifier: "$LATEST", MaximumRetryAttempts: 0 },
+      },
+      SellerJobLogGroup: {
+        Type: "AWS::Logs::LogGroup", DeletionPolicy: "Retain", UpdateReplacePolicy: "Retain",
+        Properties: { LogGroupName: { "Fn::Sub": "/aws/lambda/${SellerJobFunction}" }, RetentionInDays: 30 },
+      },
+      SellerSchedule: {
+        Type: "AWS::Events::Rule",
+        Properties: {
+          ScheduleExpression: sellerEnabled ? sellerSchedule : "rate(1 minute)", State: sellerEnabled ? "ENABLED" : "DISABLED",
+          Targets: [{ Id: "seller", Arn: { "Fn::GetAtt": ["SellerJobFunction", "Arn"] } }],
+        },
+      },
+      SellerSchedulePermission: {
+        Type: "AWS::Lambda::Permission",
+        Properties: { Action: "lambda:InvokeFunction", FunctionName: { Ref: "SellerJobFunction" }, Principal: "events.amazonaws.com", SourceArn: { "Fn::GetAtt": ["SellerSchedule", "Arn"] } },
+      },
+      SellerLowBalanceAlarm: {
+        Type: "AWS::CloudWatch::Alarm",
+        Properties: {
+          AlarmDescription: `A seller bot holds less than ${sellerLowBalance} TEST${sellerBotAddresses ? ", or the balance monitor stopped reporting" : ""}`,
+          Namespace: "BcFaucet", MetricName: "SellerBotMinBalance", Statistic: "Minimum", Period: 300, EvaluationPeriods: 1,
+          Threshold: sellerLowBalance, ComparisonOperator: "LessThanThreshold", TreatMissingData: sellerBotAddresses ? "breaching" : "notBreaching",
+          AlarmActions: [{ Ref: "AlertTopic" }], OKActions: [{ Ref: "AlertTopic" }],
+        },
+      },
+    } : {}),
   },
   Outputs: {
     FaucetApiUrl: { Description: "Set as REACT_APP_FAUCET_URL in AWS Amplify (the app POSTs to <url>/claim, reads <url>/status and the admin page POSTs <url>/admin/state)", Value: { "Fn::GetAtt": ["FaucetUrl", "FunctionUrl"] } },

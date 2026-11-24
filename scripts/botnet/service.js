@@ -898,6 +898,9 @@ function getStrategy(bot) {
       Number(DEFAULT_OVERRIDES.MIN_TIME_REMAINING_SEC)
     ),
     skipIfWinning: toBool(overrides.SKIP_IF_WINNING, true),
+    // Seller-bot auctions are skipped unless SELLER_BOTS_ALLOW_BUYERS=true (public addresses, comma separated).
+    sellerBotAddresses: String(process.env.SELLER_BOT_ADDRESSES || "").split(",").map((entry) => entry.trim().toLowerCase()).filter(Boolean),
+    allowBuyerBotsOnSellerAuctions: process.env.SELLER_BOTS_ALLOW_BUYERS === "true",
     enableBidding: toBool(overrides.ENABLE_BIDDING, true),
     enableFinalize: toBool(overrides.ENABLE_FINALIZE, true),
     intervalSec: toPositiveInt(

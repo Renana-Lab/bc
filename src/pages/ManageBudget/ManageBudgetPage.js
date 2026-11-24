@@ -59,6 +59,7 @@ import {
 import { AdminSessionControls } from "./AdminGasCards";
 import ParticipantsGasCard from "./ParticipantsGasCard";
 import FaucetFundsCard from "./FaucetFundsCard";
+import SellerBotsCard from "./SellerBotsCard";
 import {
   BULK_DRAFT_KEY,
   BULK_MAX_AUCTIONS,
@@ -3088,6 +3089,7 @@ const ManageBudgetPage = () => {
             <FaucetCard />
             <ParticipantsGasCard />
             <FaucetFundsCard />
+            <SellerBotsCard />
             <AdminCard
               title="Contract manager"
               open={contractManagerOpen}

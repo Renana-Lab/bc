@@ -65,10 +65,10 @@
     "stress:serve": "node scripts/stress/serveBuild.js",
     "eject": "react-scripts eject",
     "sapphire:compile": "node src/real_ethereum/compile.js",
-    "sapphire:test": "node --test src/real_ethereum/siwe.test.mjs scripts/sapphire/sapphireConfidential.test.mjs scripts/sapphire/admin.test.mjs",
+    "sapphire:test": "node --test --test-concurrency=1 src/real_ethereum/siwe.test.mjs scripts/sapphire/sapphireConfidential.test.mjs scripts/sapphire/admin.test.mjs scripts/sapphire/sellerJobLocalnet.test.mjs",
     "sapphire:test:wallets": "node --test scripts/sapphire/walletModes.test.mjs",
     "sapphire:test:gasless": "node --test scripts/sapphire/gasless/gaslessFeasibility.test.mjs",
-    "faucet:test": "node --test scripts/faucet/faucetHandler.test.mjs scripts/faucet/dynamoStore.test.mjs scripts/faucet/template.test.mjs scripts/faucet/adminAuth.test.mjs scripts/faucet/adminWalletAuth.test.mjs scripts/faucet/adminPayouts.test.mjs scripts/faucet/sweep.test.mjs scripts/faucet/inbox.test.mjs",
+    "faucet:test": "node --test scripts/faucet/faucetHandler.test.mjs scripts/faucet/dynamoStore.test.mjs scripts/faucet/template.test.mjs scripts/faucet/adminAuth.test.mjs scripts/faucet/adminWalletAuth.test.mjs scripts/faucet/adminPayouts.test.mjs scripts/faucet/sweep.test.mjs scripts/faucet/inbox.test.mjs scripts/faucet/sellerJob.test.mjs scripts/faucet/sellerStore.test.mjs scripts/faucet/sellerAdmin.test.mjs",
     "faucet:test:flow": "node --test scripts/faucet/faucetFlow.test.mjs"
   },
   "eslintConfig": {

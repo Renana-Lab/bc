@@ -1,0 +1,559 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Protected one-time faucet for anonymous participants (Sapphire testnet)",
+  "Parameters": {
+    "AllowedOrigins": {
+      "Type": "CommaDelimitedList",
+      "Default": "https://main.d123.amplifyapp.com"
+    },
+    "FactoryAddress": {
+      "Type": "String",
+      "Default": "0x00000000000000000000000000000000000000f1",
+      "AllowedPattern": "^(0x[0-9a-fA-F]{40})?$"
+    },
+    "ExperimentCode": {
+      "Type": "String",
+      "Default": "",
+      "NoEcho": true
+    }
+  },
+  "Conditions": {
+    "HasAlertEmail": {
+      "Fn::Not": [
+        {
+          "Fn::Equals": [
+            "ops@example.org",
+            ""
+          ]
+        }
+      ]
+    }
+  },
+  "Resources": {
+    "FaucetTable": {
+      "Type": "AWS::DynamoDB::Table",
+      "Properties": {
+        "BillingMode": "PAY_PER_REQUEST",
+        "AttributeDefinitions": [
+          {
+            "AttributeName": "pk",
+            "AttributeType": "S"
+          }
+        ],
+        "KeySchema": [
+          {
+            "AttributeName": "pk",
+            "KeyType": "HASH"
+          }
+        ],
+        "TimeToLiveSpecification": {
+          "AttributeName": "expiresAt",
+          "Enabled": true
+        },
+        "PointInTimeRecoverySpecification": {
+          "PointInTimeRecoveryEnabled": true
+        },
+        "SSESpecification": {
+          "SSEEnabled": true
+        }
+      }
+    },
+    "RateTable": {
+      "Type": "AWS::DynamoDB::Table",
+      "Properties": {
+        "BillingMode": "PAY_PER_REQUEST",
+        "AttributeDefinitions": [
+          {
+            "AttributeName": "pk",
+            "AttributeType": "S"
+          }
+        ],
+        "KeySchema": [
+          {
+            "AttributeName": "pk",
+            "KeyType": "HASH"
+          }
+        ],
+        "TimeToLiveSpecification": {
+          "AttributeName": "expiresAt",
+          "Enabled": true
+        },
+        "SSESpecification": {
+          "SSEEnabled": true
+        }
+      }
+    },
+    "FaucetRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "ManagedPolicyArns": [
+          "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+        ],
+        "Policies": [
+          {
+            "PolicyName": "inline",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "dynamodb:GetItem",
+                    "dynamodb:UpdateItem",
+                    "dynamodb:PutItem",
+                    "dynamodb:Scan"
+                  ],
+                  "Resource": {
+                    "Fn::GetAtt": [
+                      "FaucetTable",
+                      "Arn"
+                    ]
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": "dynamodb:UpdateItem",
+                  "Resource": {
+                    "Fn::GetAtt": [
+                      "RateTable",
+                      "Arn"
+                    ]
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": "secretsmanager:GetSecretValue",
+                  "Resource": "arn:aws:secretsmanager:us-east-1:123456789012:secret:test-bc-faucet/key-AbCdEf"
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": "secretsmanager:GetSecretValue",
+                  "Resource": "arn:aws:secretsmanager:us-east-1:123456789012:secret:test-bc-faucet/admin-AbCdEf"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "FaucetFunction": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "Runtime": "nodejs20.x",
+        "Handler": "index.handler",
+        "Role": {
+          "Fn::GetAtt": [
+            "FaucetRole",
+            "Arn"
+          ]
+        },
+        "Timeout": 30,
+        "MemorySize": 256,
+        "ReservedConcurrentExecutions": 1,
+        "Environment": {
+          "Variables": {
+            "FAUCET_TABLE": {
+              "Ref": "FaucetTable"
+            },
+            "RATE_TABLE": {
+              "Ref": "RateTable"
+            },
+            "RATE_TTL_GRACE_SECONDS": "60",
+            "FAUCET_SECRET_ID": "arn:aws:secretsmanager:us-east-1:123456789012:secret:test-bc-faucet/key-AbCdEf",
+            "RPC_URL": "https://testnet.sapphire.oasis.io",
+            "CHAIN_ID": "23295",
+            "FAUCET_AMOUNT_WEI": "100000000000000000",
+            "RATE_LIMIT_PER_WINDOW": "20",
+            "GLOBAL_RATE_LIMIT_PER_WINDOW": "600",
+            "RATE_WINDOW_SECONDS": "600",
+            "FAUCET_PID_MODE": "prolific",
+            "FAUCET_MAX_PAYOUTS": "50",
+            "FAUCET_REQUIRED_STUDY_ID": "",
+            "FAUCET_EXPERIMENT_CODE": {
+              "Ref": "ExperimentCode"
+            },
+            "FAUCET_ADMIN_SECRET_ID": "arn:aws:secretsmanager:us-east-1:123456789012:secret:test-bc-faucet/admin-AbCdEf",
+            "FACTORY_ADDRESS": {
+              "Ref": "FactoryAddress"
+            },
+            "ALLOWED_ORIGINS": {
+              "Fn::Join": [
+                ",",
+                {
+                  "Ref": "AllowedOrigins"
+                }
+              ]
+            },
+            "ADMIN_RATE_LIMIT_PER_WINDOW": "5",
+            "ADMIN_GLOBAL_RATE_LIMIT_PER_WINDOW": "300",
+            "ADMIN_SECRET_TTL_SECONDS": "60",
+            "SWEEP_ADDRESS": "0x0000000000000000000000000000000000000001",
+            "SWEEP_IDLE_MINUTES": "30",
+            "SWEEP_RATE_LIMIT_PER_WINDOW": "600",
+            "SWEEP_GLOBAL_RATE_LIMIT_PER_WINDOW": "6000"
+          }
+        },
+        "Code": "/tmp/f"
+      }
+    },
+    "FaucetLogGroup": {
+      "Type": "AWS::Logs::LogGroup",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "LogGroupName": {
+          "Fn::Sub": "/aws/lambda/${FaucetFunction}"
+        },
+        "RetentionInDays": 30
+      }
+    },
+    "FaucetUrl": {
+      "Type": "AWS::Lambda::Url",
+      "Properties": {
+        "TargetFunctionArn": {
+          "Fn::GetAtt": [
+            "FaucetFunction",
+            "Arn"
+          ]
+        },
+        "AuthType": "NONE",
+        "InvokeMode": "BUFFERED",
+        "Cors": {
+          "AllowOrigins": {
+            "Ref": "AllowedOrigins"
+          },
+          "AllowMethods": [
+            "GET",
+            "POST"
+          ],
+          "AllowHeaders": [
+            "content-type",
+            "x-admin-password",
+            "x-admin-proof"
+          ],
+          "MaxAge": 86400
+        }
+      }
+    },
+    "FaucetUrlPermission": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "Action": "lambda:InvokeFunctionUrl",
+        "FunctionName": {
+          "Ref": "FaucetFunction"
+        },
+        "Principal": "*",
+        "FunctionUrlAuthType": "NONE"
+      }
+    },
+    "FaucetInvokePermission": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Ref": "FaucetFunction"
+        },
+        "Principal": "*",
+        "InvokedViaFunctionUrl": true
+      }
+    },
+    "SweepJobRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "ManagedPolicyArns": [
+          "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+        ],
+        "Policies": [
+          {
+            "PolicyName": "inline",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "dynamodb:GetItem",
+                    "dynamodb:UpdateItem",
+                    "dynamodb:Scan"
+                  ],
+                  "Resource": {
+                    "Fn::GetAtt": [
+                      "FaucetTable",
+                      "Arn"
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "SweepJobFunction": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "Runtime": "nodejs20.x",
+        "Handler": "index.sweepJob",
+        "Role": {
+          "Fn::GetAtt": [
+            "SweepJobRole",
+            "Arn"
+          ]
+        },
+        "Timeout": 60,
+        "MemorySize": 256,
+        "ReservedConcurrentExecutions": 1,
+        "Environment": {
+          "Variables": {
+            "FAUCET_TABLE": {
+              "Ref": "FaucetTable"
+            },
+            "RPC_URL": "https://testnet.sapphire.oasis.io",
+            "CHAIN_ID": "23295",
+            "FAUCET_AMOUNT_WEI": "100000000000000000",
+            "SWEEP_ADDRESS": "0x0000000000000000000000000000000000000001",
+            "SWEEP_IDLE_MINUTES": "30"
+          }
+        },
+        "Code": "/tmp/f"
+      }
+    },
+    "SweepJobLogGroup": {
+      "Type": "AWS::Logs::LogGroup",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "LogGroupName": {
+          "Fn::Sub": "/aws/lambda/${SweepJobFunction}"
+        },
+        "RetentionInDays": 30
+      }
+    },
+    "SweepSchedule": {
+      "Type": "AWS::Events::Rule",
+      "Properties": {
+        "ScheduleExpression": "rate(5 minutes)",
+        "State": "ENABLED",
+        "Targets": [
+          {
+            "Id": "sweep",
+            "Arn": {
+              "Fn::GetAtt": [
+                "SweepJobFunction",
+                "Arn"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "SweepSchedulePermission": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Ref": "SweepJobFunction"
+        },
+        "Principal": "events.amazonaws.com",
+        "SourceArn": {
+          "Fn::GetAtt": [
+            "SweepSchedule",
+            "Arn"
+          ]
+        }
+      }
+    },
+    "MonitorRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "ManagedPolicyArns": [
+          "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+        ],
+        "Policies": [
+          {
+            "PolicyName": "inline",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": "cloudwatch:PutMetricData",
+                  "Resource": "*",
+                  "Condition": {
+                    "StringEquals": {
+                      "cloudwatch:namespace": "BcFaucet"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "MonitorLogGroup": {
+      "Type": "AWS::Logs::LogGroup",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "LogGroupName": {
+          "Fn::Sub": "/aws/lambda/${MonitorFunction}"
+        },
+        "RetentionInDays": 30
+      }
+    },
+    "MonitorFunction": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "Runtime": "nodejs20.x",
+        "Handler": "index.handler",
+        "Role": {
+          "Fn::GetAtt": [
+            "MonitorRole",
+            "Arn"
+          ]
+        },
+        "Timeout": 20,
+        "MemorySize": 128,
+        "Environment": {
+          "Variables": {
+            "RPC_URL": "https://testnet.sapphire.oasis.io",
+            "CHAIN_ID": "23295",
+            "FAUCET_ADDRESS": "0x0000000000000000000000000000000000000001"
+          }
+        },
+        "Code": "/tmp/m"
+      }
+    },
+    "MonitorSchedule": {
+      "Type": "AWS::Events::Rule",
+      "Properties": {
+        "ScheduleExpression": "rate(5 minutes)",
+        "State": "ENABLED",
+        "Targets": [
+          {
+            "Id": "monitor",
+            "Arn": {
+              "Fn::GetAtt": [
+                "MonitorFunction",
+                "Arn"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "MonitorSchedulePermission": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Ref": "MonitorFunction"
+        },
+        "Principal": "events.amazonaws.com",
+        "SourceArn": {
+          "Fn::GetAtt": [
+            "MonitorSchedule",
+            "Arn"
+          ]
+        }
+      }
+    },
+    "AlertTopic": {
+      "Type": "AWS::SNS::Topic",
+      "Properties": {
+        "Subscription": [
+          {
+            "Fn::If": [
+              "HasAlertEmail",
+              {
+                "Protocol": "email",
+                "Endpoint": "ops@example.org"
+              },
+              {
+                "Ref": "AWS::NoValue"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "LowBalanceAlarm": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmDescription": "Faucet balance below 5 TEST, or the balance monitor stopped reporting",
+        "Namespace": "BcFaucet",
+        "MetricName": "FaucetBalance",
+        "Statistic": "Minimum",
+        "Period": 300,
+        "EvaluationPeriods": 1,
+        "Threshold": 5,
+        "ComparisonOperator": "LessThanThreshold",
+        "TreatMissingData": "breaching",
+        "AlarmActions": [
+          {
+            "Ref": "AlertTopic"
+          }
+        ],
+        "OKActions": [
+          {
+            "Ref": "AlertTopic"
+          }
+        ]
+      }
+    }
+  },
+  "Outputs": {
+    "FaucetApiUrl": {
+      "Description": "Set as REACT_APP_FAUCET_URL in AWS Amplify (the app POSTs to <url>/claim, reads <url>/status and the admin page POSTs <url>/admin/state)",
+      "Value": {
+        "Fn::GetAtt": [
+          "FaucetUrl",
+          "FunctionUrl"
+        ]
+      }
+    },
+    "FaucetTableName": {
+      "Description": "Pass to scripts/faucet/generatePids.js --table",
+      "Value": {
+        "Ref": "FaucetTable"
+      }
+    }
+  }
+}
