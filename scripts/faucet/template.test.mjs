@@ -154,7 +154,7 @@ test("deploy script: default amount is 1.5 TEST and the prolific flags are valid
   const open = run("deployFaucet.js", ["--env", "test", "--pid-mode", "open", "--max-payouts", "40", "--dry-run"]);
   assert.equal(open.status, 0);
   assert.match(open.stderr, /does not verify identity/);
-  assert.match(run("deployFaucet.js", ["--env", "test", "--artifact-bucket", "b", "--secret-arn", ARN, "--faucet-address", "0x0000000000000000000000000000000000000001"]).stderr, /--admin-secret-arn is required/);
+  assert.match(run("deployFaucet.js", ["--env", "test", "--region", "us-east-1", "--artifact-bucket", "b", "--secret-arn", ARN, "--faucet-address", "0x0000000000000000000000000000000000000001"]).stderr, /--admin-secret-arn is required/);
   assert.match(readFileSync(path.join(here, "deployFaucet.js"), "utf8"), /"--amount-wei", "1500000000000000000"/);
 });
 
@@ -169,4 +169,133 @@ test("deploy script: the experiment code must use the same characters as the app
   const withCode = (code) => spawnSync(process.execPath, [path.join(here, "deployFaucet.js"), "--env", "test", "--pid-mode", "prolific", "--max-payouts", "3", "--dry-run"], { encoding: "utf8", env: { ...process.env, AWS_PROFILE: "", FAUCET_EXPERIMENT_CODE: code } });
   assert.equal(withCode("Exp_2026.v1~a-b").status, 0);
   for (const bad of ["has space", "a,b", "x".repeat(65), "q=1&r", "é"]) assert.match(withCode(bad).stderr, /FAUCET_EXPERIMENT_CODE must match/, bad);
+});
+
+// ---- seller bots ----
+const SELLER_ARN = "arn:aws:secretsmanager:us-east-2:123456789012:secret:test-bc-faucet/seller-bots-QwErTy";
+const BOT_A = "0x00000000000000000000000000000000000000a1";
+const BOT_B = "0x00000000000000000000000000000000000000b2";
+const baseline = JSON.parse(readFileSync(path.join(here, "fixtures", "templateBaseline.json"), "utf8"));
+const baselineOptions = JSON.parse(readFileSync(path.join(here, "fixtures", "templateBaselineOptions.json"), "utf8"));
+const withSeller = (extra = {}) => buildTemplate({ ...baselineOptions, sellerSecretArn: SELLER_ARN, sellerBotAddresses: `${BOT_A},${BOT_B}`, sellerCodeDir: "/tmp/s", ...extra });
+
+test("without --seller-secret-arn the template is byte-identical to the one before seller bots existed", () => {
+  const plain = buildTemplate(baselineOptions);
+  assert.equal(JSON.stringify(plain, null, 2), JSON.stringify(baseline, null, 2));
+  // Seller options without the secret ARN change nothing either.
+  const ignored = buildTemplate({ ...baselineOptions, sellerSchedule: "rate(5 minutes)", sellerBotAddresses: BOT_A, sellerLowBalance: 2, sellerFundingMaxWei: "5", sellerCodeDir: "/tmp/s" });
+  assert.equal(JSON.stringify(ignored, null, 2), JSON.stringify(baseline, null, 2));
+  assert.equal(Object.keys(plain.Resources).some((name) => /Seller/.test(name)), false);
+});
+
+test("with a seller secret: own role reads only the seller secret, the faucet and sweep roles cannot", () => {
+  const t = withSeller();
+  const role = t.Resources.SellerJobRole.Properties.Policies[0].PolicyDocument.Statement;
+  const secrets = role.filter((s) => s.Action === "secretsmanager:GetSecretValue");
+  assert.deepEqual(secrets.map((s) => s.Resource), [SELLER_ARN]);
+  const table = role.find((s) => JSON.stringify(s.Resource).includes("FaucetTable"));
+  assert.deepEqual([...table.Action].sort(), ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Scan", "dynamodb:UpdateItem"]);
+  assert.equal(role.length, 2);
+  for (const statement of role) assert.notEqual(statement.Resource, "*");
+  for (const name of ["FaucetRole", "SweepJobRole", "MonitorRole"]) assert.equal(JSON.stringify(t.Resources[name]).includes(SELLER_ARN), false, `${name} cannot read the seller secret`);
+  assert.equal(JSON.stringify(t.Resources.FaucetFunction).includes(SELLER_ARN), false, "the faucet function does not even know the secret id");
+  assert.equal(JSON.stringify(t.Resources.RateTable).includes("Seller"), false);
+});
+
+test("seller function: nodejs20.x, 256 MB, 120 s, one at a time, no retries, minimal env, 30 day logs", () => {
+  const t = withSeller();
+  const fn = t.Resources.SellerJobFunction.Properties;
+  assert.equal(fn.Runtime, "nodejs20.x");
+  assert.equal(fn.MemorySize, 256);
+  assert.equal(fn.Timeout, 120);
+  assert.equal(fn.Handler, "index.sellerJob");
+  assert.equal(fn.ReservedConcurrentExecutions, 1);
+  assert.equal(fn.Code, "/tmp/s");
+  assert.deepEqual(Object.keys(fn.Environment.Variables).sort(), ["CHAIN_ID", "FACTORY_ADDRESS", "FAUCET_TABLE", "RPC_URL", "SELLER_SECRET_ID"]);
+  assert.equal(fn.Environment.Variables.SELLER_SECRET_ID, SELLER_ARN);
+  assert.equal(t.Resources.SellerJobEventInvokeConfig.Properties.MaximumRetryAttempts, 0);
+  assert.deepEqual(t.Resources.SellerJobEventInvokeConfig.Properties.FunctionName, { Ref: "SellerJobFunction" });
+  assert.equal(t.Resources.SellerJobLogGroup.Properties.RetentionInDays, 30);
+  assert.equal(withSeller({ reservedConcurrency: 0 }).Resources.SellerJobFunction.Properties.ReservedConcurrentExecutions, undefined);
+});
+
+test("seller schedule: rate(1 minute) by default, custom, or DISABLED; the permission names the rule", () => {
+  const t = withSeller();
+  assert.equal(t.Resources.SellerSchedule.Properties.ScheduleExpression, "rate(1 minute)");
+  assert.equal(t.Resources.SellerSchedule.Properties.State, "ENABLED");
+  assert.equal(withSeller({ sellerSchedule: "rate(2 minutes)" }).Resources.SellerSchedule.Properties.ScheduleExpression, "rate(2 minutes)");
+  assert.equal(withSeller({ sellerSchedule: "disabled" }).Resources.SellerSchedule.Properties.State, "DISABLED");
+  assert.equal(t.Resources.SellerSchedulePermission.Properties.Principal, "events.amazonaws.com");
+  assert.deepEqual(t.Resources.SellerSchedulePermission.Properties.SourceArn, { "Fn::GetAtt": ["SellerSchedule", "Arn"] });
+});
+
+test("seller monitoring: the monitor gets the public addresses, the alarm uses the existing topic", () => {
+  const t = withSeller();
+  assert.equal(t.Resources.MonitorFunction.Properties.Environment.Variables.SELLER_BOT_ADDRESSES, `${BOT_A},${BOT_B}`);
+  assert.equal(t.Resources.FaucetFunction.Properties.Environment.Variables.SELLER_BOT_ADDRESSES, `${BOT_A},${BOT_B}`);
+  assert.equal(t.Resources.FaucetFunction.Properties.Environment.Variables.SELLER_FUNDING_MAX_WEI, "0", "the fund route is off by default");
+  const alarm = t.Resources.SellerLowBalanceAlarm.Properties;
+  assert.equal(alarm.Namespace, "BcFaucet");
+  assert.equal(alarm.MetricName, "SellerBotMinBalance");
+  assert.equal(alarm.Threshold, 0.5);
+  assert.equal(alarm.ComparisonOperator, "LessThanThreshold");
+  assert.equal(alarm.TreatMissingData, "breaching");
+  assert.deepEqual(alarm.AlarmActions, [{ Ref: "AlertTopic" }]);
+  assert.equal(withSeller({ sellerLowBalance: 1.5 }).Resources.SellerLowBalanceAlarm.Properties.Threshold, 1.5);
+  const noAddresses = withSeller({ sellerBotAddresses: "" });
+  assert.equal(noAddresses.Resources.SellerLowBalanceAlarm.Properties.TreatMissingData, "notBreaching", "no addresses = no metric: do not alarm");
+  assert.equal(JSON.stringify(t).includes("privateKey"), false);
+});
+
+test("seller stack parts inherit the faucet's other settings unchanged", () => {
+  const { Resources, ...rest } = withSeller();
+  const { Resources: baseResources, ...baseRest } = baseline;
+  assert.deepEqual(rest, baseRest);
+  const changed = Object.keys(Resources).filter((name) => JSON.stringify(Resources[name]) !== JSON.stringify(baseResources[name]));
+  assert.deepEqual(changed.sort(), ["FaucetFunction", "MonitorFunction", "SellerJobEventInvokeConfig", "SellerJobFunction", "SellerJobLogGroup", "SellerJobRole", "SellerLowBalanceAlarm", "SellerSchedule", "SellerSchedulePermission"]);
+});
+
+test("deploy script: --region is required for a real deploy, seller flags are validated, warnings are loud", () => {
+  const real = run("deployFaucet.js", ["--env", "test", "--artifact-bucket", "b", "--secret-arn", ARN, "--admin-secret-arn", ARN, "--faucet-address", BOT_A, "--origins", "https://x.example.org"]);
+  assert.match(real.stderr, /--region is required/);
+  assert.match(run("deployFaucet.js", ["--env", "test", "--dry-run", "--seller-secret-arn", "nope"]).stderr, /--seller-secret-arn must be/);
+  assert.match(run("deployFaucet.js", ["--env", "test", "--dry-run", "--seller-schedule", "every day"]).stderr, /--seller-schedule must be/);
+  assert.match(run("deployFaucet.js", ["--env", "test", "--dry-run", "--seller-bot-addresses", "0x1"]).stderr, /--seller-bot-addresses must be/);
+  const plain = run("deployFaucet.js", ["--env", "test", "--dry-run"]);
+  assert.match(plain.stderr, /WARNING: --origins is the localhost default/);
+  assert.match(plain.stderr, /WARNING: --pid-mode was not given/);
+  const explicit = run("deployFaucet.js", ["--env", "test", "--dry-run", "--origins", "https://x.example.org", "--pid-mode", "allowlist"]);
+  assert.equal(/WARNING: --origins|WARNING: --pid-mode was/.test(explicit.stderr), false);
+  assert.doesNotMatch(plain.stdout, /Seller/);
+  const seller = run("deployFaucet.js", ["--env", "test", "--dry-run", "--origins", "https://x.example.org", "--pid-mode", "allowlist", "--seller-secret-arn", SELLER_ARN, "--seller-bot-addresses", `${BOT_A},${BOT_B}`]);
+  assert.equal(seller.status, 0, seller.stderr);
+  assert.match(seller.stdout, /SellerJobFunction/);
+});
+
+test("createSellerBotsSecret: keys are never printed, ids are bot-1..N, test- prefix and region enforced", () => {
+  const out = run("createSellerBotsSecret.js", ["--dry-run", "--count", "3"]);
+  assert.equal(out.status, 0, out.stderr);
+  assert.match(out.stdout, /bot-1: 0x[0-9a-fA-F]{40}/);
+  assert.match(out.stdout, /bot-3: 0x[0-9a-fA-F]{40}/);
+  assert.match(out.stdout, /--seller-bot-addresses 0x/);
+  assert.equal(/0x[0-9a-fA-F]{64}\b/.test(out.stdout + out.stderr), false);
+  assert.match(run("createSellerBotsSecret.js", ["--name", "prod/x", "--dry-run"]).stderr, /start with test-/);
+  assert.match(run("createSellerBotsSecret.js", ["--count", "3"]).stderr, /--region is required/);
+  assert.match(run("createSellerBotsSecret.js", ["--dry-run", "--count", "11"]).stderr, /--count/);
+});
+
+test("printCurrentDeployArgs: flags from the live settings, the experiment code is never printed", () => {
+  const require2 = createRequire(import.meta.url);
+  const { buildFlags } = require2("./printCurrentDeployArgs.js");
+  const env = { FAUCET_PID_MODE: "prolific", FAUCET_MAX_PAYOUTS: "40", RATE_LIMIT_PER_WINDOW: "20", GLOBAL_RATE_LIMIT_PER_WINDOW: "600", FAUCET_SECRET_ID: ARN, FAUCET_EXPERIMENT_CODE: "SUPER-SECRET-CODE", FAUCET_ADDRESS: BOT_A, SWEEP_IDLE_MINUTES: "30" };
+  const out = buildFlags({ env, parameters: { AllowedOrigins: "https://a.example.org,https://b.example.org", FactoryAddress: BOT_B } });
+  assert.ok(out.flags.includes("--origins https://a.example.org,https://b.example.org"));
+  assert.ok(out.flags.includes("--pid-mode prolific"));
+  assert.ok(out.flags.includes("--max-payouts 40"));
+  assert.ok(out.flags.includes(`--secret-arn ${ARN}`));
+  assert.ok(out.flags.includes(`--factory-address ${BOT_B}`));
+  assert.equal(out.experimentSet, true);
+  assert.equal(JSON.stringify(out).includes("SUPER-SECRET-CODE"), false);
+  assert.equal(buildFlags({ env: {} }).experimentSet, false);
+  assert.match(run("printCurrentDeployArgs.js", []).stderr, /--region is required/);
 });

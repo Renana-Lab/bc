@@ -12,13 +12,25 @@ const publishBalance = async ({ balanceWei, putMetric, namespace = "BcFaucet" })
   });
 };
 
+// Lowest native balance across the seller bot addresses (public, from SELLER_BOT_ADDRESSES). null when none are configured.
+const publishSellerBalance = async ({ balancesWei, putMetric, namespace = "BcFaucet" }) => {
+  if (!balancesWei.length) return;
+  const lowest = balancesWei.reduce((min, value) => (value < min ? value : min));
+  await putMetric({ Namespace: namespace, MetricData: [{ MetricName: "SellerBotMinBalance", Unit: "None", Value: Number(formatEther(lowest)) }] });
+};
+
 const handler = async () => {
   const provider = new JsonRpcProvider(process.env.RPC_URL, Number(process.env.CHAIN_ID), { staticNetwork: true, batchMaxCount: 1 });
   const { CloudWatchClient, PutMetricDataCommand } = require("@aws-sdk/client-cloudwatch");
   const cloudwatch = new CloudWatchClient({});
   const balanceWei = await provider.getBalance(process.env.FAUCET_ADDRESS);
   await publishBalance({ balanceWei, putMetric: (input) => cloudwatch.send(new PutMetricDataCommand(input)) });
-  console.log(JSON.stringify({ event: "balance_published" }));
+  const sellerAddresses = String(process.env.SELLER_BOT_ADDRESSES || "").split(",").map((entry) => entry.trim()).filter(Boolean);
+  if (sellerAddresses.length) {
+    const balancesWei = await Promise.all(sellerAddresses.map((address) => provider.getBalance(address)));
+    await publishSellerBalance({ balancesWei, putMetric: (input) => cloudwatch.send(new PutMetricDataCommand(input)) });
+  }
+  console.log(JSON.stringify({ event: "balance_published", sellerBots: sellerAddresses.length }));
 };
 
-module.exports = { handler, publishBalance };
+module.exports = { handler, publishBalance, publishSellerBalance };

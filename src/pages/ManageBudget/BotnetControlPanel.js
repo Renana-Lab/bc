@@ -64,6 +64,7 @@ import {
   getBidDecision as getSharedBidDecision,
 } from "../../botnet/cyclePlanner.mjs";
 import { BOT_SCHEDULER_TICK_EVENT } from "../../botnet/runtimeEvents";
+import { readSellerBotStrategy } from "../../botnet/sellerBotList";
 import { getTargetNetwork } from "../../real_ethereum/sapphireNetworks";
 
 // Block explorer link for the configured Sapphire network; undefined when it has none.
@@ -534,6 +535,7 @@ export const getStrategy = (bot) => {
     enableBidding: toBool(overrides.ENABLE_BIDDING, true),
     enableFinalize: toBool(overrides.ENABLE_FINALIZE, true),
     skipIfWinning: toBool(overrides.SKIP_IF_WINNING, true),
+    ...readSellerBotStrategy(),
   };
 };
 

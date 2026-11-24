@@ -10,6 +10,17 @@ const toBigInt = (value, fallback = 0n) => {
 
 const normalizeAddress = (value) => String(value || "").trim().toLowerCase();
 
+// Auctions created by the server-side seller bots are not for buyer bots, unless the admin allows it
+// (strategy.allowBuyerBotsOnSellerAuctions, default false). The address list comes from the admin panel (sellerBotList.js).
+// Participants never see this list or any "bot" label.
+export const isSellerBotAuction = (auction, strategy = {}) => {
+  if (strategy.allowBuyerBotsOnSellerAuctions === true) return false;
+  const list = strategy.sellerBotAddresses;
+  if (!list || !list.length) return false;
+  const manager = normalizeAddress(auction?.manager);
+  return Boolean(manager) && [...list].some((address) => normalizeAddress(address) === manager);
+};
+
 export const getTargetBid = (auction, strategy) =>
   Number(auction.approversCount || 0) === 0 && toBigInt(auction.highestBid) === 0n
     ? toBigInt(auction.minimumContribution)
@@ -37,6 +48,7 @@ export const getBidDecision = (auction, budget, strategy) => {
   if (!auction) return { bid: false, reason: "No auction candidate" };
   if (!auction.isActive) return { bid: false, reason: "Auction closed" };
   if (auction.isManager) return { bid: false, reason: "Bot is the seller" };
+  if (isSellerBotAuction(auction, strategy)) return { bid: false, reason: "Seller is a bot" };
   if (Number(auction.secondsLeft || 0) < Number(strategy.minTimeRemainingSec || 0)) {
     return { bid: false, reason: "Too little time remaining" };
   }
@@ -84,6 +96,7 @@ const isStaticallyEligible = (auction, bot, nowSec) => {
 
   if (auction.closed || endTimeSec <= nowSec) return false;
   if (wallet && manager === wallet) return false;
+  if (isSellerBotAuction(auction, strategy)) return false;
   if (strategy.skipIfWinning && wallet && highestBidder === wallet) return false;
   if (secondsLeft < Number(strategy.minTimeRemainingSec || 0)) return false;
   if (minimumContribution > toBigInt(strategy.maxMinContributionWei)) return false;

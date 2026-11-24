@@ -5,6 +5,8 @@
 //   node scripts/faucet/deployFaucet.js --dry-run                      builds the bundles and template locally, no AWS calls
 //   node scripts/faucet/deployFaucet.js --region us-east-1 --artifact-bucket my-bucket \
 //        --secret-arn arn:aws:secretsmanager:... --admin-secret-arn arn:aws:secretsmanager:... --faucet-address 0x... --factory-address 0x... --alert-email ops@example.org
+//   Seller bots (optional): --seller-secret-arn <arn> --seller-bot-addresses 0xA,0xB --seller-schedule "rate(1 minute)" --seller-low-balance 0.5
+//   --region is required for a real deploy (no default). Read the live settings first: scripts/faucet/printCurrentDeployArgs.js
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -21,7 +23,9 @@ const environment = read("--env", "");
 if (environment !== "test") throw new Error("--env test is required. Only the test environment is prepared; stacks are prefixed test- and are separate from production.");
 const stackName = read("--stack", "test-bc-faucet");
 if (!stackName.startsWith("test-")) throw new Error("Stack names for the test environment must start with test-");
-const region = read("--region", process.env.AWS_REGION || "us-east-1");
+// No silent default: a stack in the wrong region would be created next to the live one. A dry run makes no AWS calls.
+const region = read("--region");
+if (!region && !dryRun) throw new Error("--region is required (for example --region us-east-2). There is deliberately no default.");
 const profile = read("--profile", process.env.AWS_PROFILE || "");
 const artifactBucket = read("--artifact-bucket");
 const secretArn = read("--secret-arn");
@@ -45,6 +49,12 @@ const adminSecretArn = read("--admin-secret-arn");
 // Static shared experiment string. Read from the environment (not argv) so it stays out of shell history.
 const experimentCode = process.env.FAUCET_EXPERIMENT_CODE || "";
 const reservedConcurrency = Number(read("--reserved-concurrency", "1"));
+// Seller bots (optional): without --seller-secret-arn the stack is exactly what it was before they existed.
+const sellerSecretArn = read("--seller-secret-arn");
+const sellerSchedule = read("--seller-schedule", "rate(1 minute)");
+const sellerBotAddresses = read("--seller-bot-addresses");
+const sellerLowBalance = Number(read("--seller-low-balance", "0.5")); // TEST per bot
+const sellerFundingMaxWei = read("--seller-funding-max-wei", "0"); // 0 = the admin fund route stays off
 
 if (chainId !== 23295 && chainId !== 23293) throw new Error("--chain-id must be 23295 (Sapphire testnet) or 23293 (localnet); mainnet is refused");
 if (!/^\d+$/.test(amountWei) || BigInt(amountWei) <= 0n) throw new Error("--amount-wei must be a positive integer");
@@ -55,6 +65,15 @@ if (pidMode === "open") console.error("WARNING: --pid-mode open does not verify 
 if (requiredStudyId && !/^[A-Za-z0-9_-]{1,64}$/.test(requiredStudyId)) throw new Error("--required-study-id has an unexpected format");
 if (experimentCode && !/^[A-Za-z0-9_.~-]{1,64}$/.test(experimentCode)) throw new Error("FAUCET_EXPERIMENT_CODE must match [A-Za-z0-9_.~-]{1,64} (the same characters the app accepts in ?exp=)");
 if (factoryAddress && !/^0x[0-9a-fA-F]{40}$/.test(factoryAddress)) throw new Error("--factory-address must be a 0x-prefixed 40-hex address");
+if (sellerSecretArn && !/^arn:aws[a-z-]*:secretsmanager:/.test(sellerSecretArn)) throw new Error("--seller-secret-arn must be a Secrets Manager ARN");
+if (sellerSchedule !== "disabled" && !/^(rate\([0-9]+ (minute|minutes|hour|hours)\)|cron\(.+\))$/.test(sellerSchedule)) throw new Error("--seller-schedule must be a rate(...) or cron(...) expression, or disabled");
+if (sellerBotAddresses && !sellerBotAddresses.split(",").every((entry) => /^0x[0-9a-fA-F]{40}$/.test(entry))) throw new Error("--seller-bot-addresses must be comma-separated 0x addresses");
+if (sellerSecretArn && !sellerBotAddresses) console.error("WARNING: no --seller-bot-addresses: the low-balance alarm, the admin panel bot list and the buyer-bot skip list have no addresses until the job derives them.");
+if (!(sellerLowBalance >= 0)) throw new Error("--seller-low-balance must be a number of TEST");
+if (!/^[0-9]{1,30}$/.test(sellerFundingMaxWei)) throw new Error("--seller-funding-max-wei must be a non-negative integer");
+// A redeploy with the defaults would overwrite the live stack's origins and pid mode with these values: say so loudly.
+if (!args.includes("--origins") || origins === "http://localhost:3000") console.error("WARNING: --origins is the localhost default. A redeploy REPLACES the live CORS origins, which breaks the deployed site. Pass the origins printed by printCurrentDeployArgs.js.");
+if (!args.includes("--pid-mode")) console.error("WARNING: --pid-mode was not given, so the default (allowlist) is used. If the live faucet runs prolific or open, a redeploy switches it. Compare with printCurrentDeployArgs.js.");
 if (!dryRun) {
   if (!/^arn:aws[a-z-]*:secretsmanager:/.test(adminSecretArn)) throw new Error("--admin-secret-arn is required (store the output of scripts/faucet/setAdminPassword.js in Secrets Manager first)");
   if (!artifactBucket) throw new Error("--artifact-bucket is required (S3 bucket for the Lambda packages)");
@@ -75,11 +94,13 @@ const bundle = (entry, name) => {
 };
 bundle("handler.js", "faucet");
 bundle("monitor.js", "monitor");
+if (sellerSecretArn) bundle("sellerJob.js", "seller");
 
 const template = buildTemplate({
   origins, alertEmail, secretArn, faucetAddress, factoryAddress, rpcUrl, chainId, amountWei, lowBalance, rateLimit, globalRateLimit, reservedConcurrency,
   pidMode, maxPayouts, requiredStudyId, adminSecretArn, sweepAddress: process.env.SWEEP_ADDRESS || faucetAddress, sweepIdleMinutes: Number(process.env.SWEEP_IDLE_MINUTES || 30),
   faucetCodeDir: path.join(work, "faucet"), monitorCodeDir: path.join(work, "monitor"),
+  sellerSecretArn, sellerSchedule, sellerBotAddresses, sellerLowBalance, sellerFundingMaxWei, sellerCodeDir: path.join(work, "seller"),
 });
 
 const templatePath = path.join(work, "template.json");
